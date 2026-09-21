@@ -93,3 +93,13 @@ Current web pages/features:
 - Responsive desktop/mobile layout
 
 The next web milestone is a dedicated comp page with a hex board, champion/item assets, traits, patch selector, known-vs-theorycrafted labels, and live Riot/CommunityDragon data.
+
+## Deploying on Render
+
+The repo includes a `render.yaml` Blueprint that runs the FastAPI app with:
+
+```
+uvicorn tftlab.webapp:app --host 0.0.0.0 --port $PORT
+```
+
+If no live TFT database is present at `TFT_DB_PATH`, the app automatically falls back to a generated demo dataset, so it boots and serves data even with zero configuration. Set `RIOT_API_KEY` (and optionally `TFT_PLATFORM`/`TFT_REGION`) in the Render dashboard to enable live ingestion later; never commit real keys to `.env` or the repo.

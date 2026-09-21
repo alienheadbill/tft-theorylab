@@ -2,6 +2,7 @@
 __pycache__/
 .pytest_cache/
 *.pyc
+*.egg-info/
 .env
 data/*.sqlite3
 data/*.db

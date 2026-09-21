@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: tft-theory-lab
+    runtime: python
+    plan: free
+    buildCommand: pip install -e .
+    startCommand: uvicorn tftlab.webapp:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: TFT_PLATFORM
+        value: na1
+      - key: TFT_REGION
+        value: americas
+      - key: TFT_DB_PATH
+        value: data/tftlab.sqlite3
+      - key: RIOT_API_KEY
+        sync: false
