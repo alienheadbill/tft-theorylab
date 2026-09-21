@@ -4,12 +4,13 @@ from dataclasses import asdict
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .analytics import carry_commitment_stats, default_patch
+from .analytics import carry_commitment_stats, default_balance_window
 from .demo import generate_demo_matches
 from .storage import Database
 
@@ -82,6 +83,59 @@ def _resolve_database() -> tuple[Database, bool]:
     return _build_demo_db(), True
 
 
+def carry_partners(db: Database, character_id: str, balance_window: str) -> list[tuple[Any, ...]]:
+    """Champions that most often finish on the same board as a committed `character_id`.
+
+    Extracted from the route handler so the Postgres-vs-SQLite `HAVING`
+    behavior (Postgres rejects a SELECT alias there; SQLite allows it) has a
+    unit test independent of the FastAPI/env-based database resolution.
+    """
+    return db.query_all(
+        """
+        SELECT f.unit_name, f.cost, COUNT(*) AS together,
+               AVG(p.placement * 1.0) AS avg_place,
+               AVG(CASE WHEN p.placement <= 4 THEN 1.0 ELSE 0.0 END) AS top4
+        FROM units c
+        JOIN participants p
+          ON p.match_id = c.match_id AND p.participant_index = c.participant_index
+        JOIN units f
+          ON f.match_id = c.match_id AND f.participant_index = c.participant_index
+        JOIN matches m
+          ON m.match_id = c.match_id
+        WHERE c.character_id = ?
+          AND c.completed_item_count >= 2
+          AND f.character_id <> c.character_id
+          AND m.balance_window = ?
+        GROUP BY f.character_id, f.unit_name, f.cost
+        HAVING COUNT(*) >= 3
+        ORDER BY top4 DESC, together DESC
+        LIMIT 8
+        """,
+        (character_id, balance_window),
+    )
+
+
+def carry_item_sets(db: Database, character_id: str, balance_window: str) -> list[tuple[Any, ...]]:
+    return db.query_all(
+        """
+        SELECT items_json, COUNT(*) AS games,
+               AVG(p.placement * 1.0) AS avg_place,
+               AVG(CASE WHEN p.placement <= 4 THEN 1.0 ELSE 0.0 END) AS top4
+        FROM units u
+        JOIN participants p
+          ON p.match_id = u.match_id AND p.participant_index = u.participant_index
+        JOIN matches m
+          ON m.match_id = u.match_id
+        WHERE u.character_id = ? AND u.completed_item_count >= 2
+          AND m.balance_window = ?
+        GROUP BY items_json
+        ORDER BY games DESC, top4 DESC
+        LIMIT 5
+        """,
+        (character_id, balance_window),
+    )
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="TFT Theory Lab", version="0.2.0")
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -96,12 +150,12 @@ def create_app() -> FastAPI:
         with db:
             participants = db.query_one("SELECT COUNT(*) FROM participants")[0]
             matches = db.query_one("SELECT COUNT(*) FROM matches")[0]
-            patch = default_patch(db)
+            balance_window = default_balance_window(db)
         return {
             "ok": True,
             "demo": demo,
             "backend": db.dialect,
-            "patch": patch,
+            "balance_window": balance_window,
             "matches": matches,
             "participants": participants,
         }
@@ -110,14 +164,16 @@ def create_app() -> FastAPI:
     def carries(
         max_cost: int = Query(3, ge=1, le=5),
         min_samples: int = Query(10, ge=1, le=100000),
-        patch: str | None = Query(None, description="Restrict to one balance patch; defaults to the most-played patch in the store."),
+        balance_window: str | None = Query(
+            None, description="Restrict to one balance window; defaults to the latest one in the store."
+        ),
     ) -> dict[str, object]:
         db, demo = _resolve_database()
         with db:
-            resolved_patch = patch or default_patch(db)
+            resolved_window = balance_window or default_balance_window(db)
             stats = carry_commitment_stats(
                 db,
-                patch=resolved_patch,
+                balance_window=resolved_window,
                 min_cost=1,
                 max_cost=max_cost,
                 min_samples=min_samples,
@@ -127,71 +183,31 @@ def create_app() -> FastAPI:
         return {
             "demo": demo,
             "backend": db.dialect,
-            "patch": resolved_patch,
+            "balance_window": resolved_window,
             "matches": matches,
             "participants": participants,
             "carries": [asdict(s) for s in stats],
         }
 
     @app.get("/api/carries/{character_id}")
-    def carry_detail(character_id: str, patch: str | None = Query(None)) -> dict[str, object]:
+    def carry_detail(character_id: str, balance_window: str | None = Query(None)) -> dict[str, object]:
         db, demo = _resolve_database()
         with db:
-            resolved_patch = patch or default_patch(db)
+            resolved_window = balance_window or default_balance_window(db)
             stats = carry_commitment_stats(
-                db, patch=resolved_patch, min_cost=1, max_cost=5, min_samples=1
+                db, balance_window=resolved_window, min_cost=1, max_cost=5, min_samples=1
             )
             selected = next((s for s in stats if s.character_id == character_id), None)
             if selected is None:
                 raise HTTPException(status_code=404, detail="Carry not found")
 
-            rows = db.query_all(
-                """
-                SELECT f.unit_name, f.cost, COUNT(*) AS together,
-                       AVG(p.placement * 1.0) AS avg_place,
-                       AVG(CASE WHEN p.placement <= 4 THEN 1.0 ELSE 0.0 END) AS top4
-                FROM units c
-                JOIN participants p
-                  ON p.match_id = c.match_id AND p.participant_index = c.participant_index
-                JOIN units f
-                  ON f.match_id = c.match_id AND f.participant_index = c.participant_index
-                JOIN matches m
-                  ON m.match_id = c.match_id
-                WHERE c.character_id = ?
-                  AND c.completed_item_count >= 2
-                  AND f.character_id <> c.character_id
-                  AND m.patch = ?
-                GROUP BY f.character_id, f.unit_name, f.cost
-                HAVING together >= 3
-                ORDER BY top4 DESC, together DESC
-                LIMIT 8
-                """,
-                (character_id, resolved_patch),
-            )
-
-            item_rows = db.query_all(
-                """
-                SELECT items_json, COUNT(*) AS games,
-                       AVG(p.placement * 1.0) AS avg_place,
-                       AVG(CASE WHEN p.placement <= 4 THEN 1.0 ELSE 0.0 END) AS top4
-                FROM units u
-                JOIN participants p
-                  ON p.match_id = u.match_id AND p.participant_index = u.participant_index
-                JOIN matches m
-                  ON m.match_id = u.match_id
-                WHERE u.character_id = ? AND u.completed_item_count >= 2
-                  AND m.patch = ?
-                GROUP BY items_json
-                ORDER BY games DESC, top4 DESC
-                LIMIT 5
-                """,
-                (character_id, resolved_patch),
-            )
+            rows = carry_partners(db, character_id, resolved_window)
+            item_rows = carry_item_sets(db, character_id, resolved_window)
 
         return {
             "demo": demo,
             "backend": db.dialect,
-            "patch": resolved_patch,
+            "balance_window": resolved_window,
             "carry": asdict(selected),
             "partners": [
                 {

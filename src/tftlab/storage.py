@@ -5,17 +5,25 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+from .balance_window import resolve_balance_window
 from .normalize import CostLookup, normalize_match
 
 # Written once, uniformly, using SQLite's `?` placeholder style. The Postgres
 # path translates `?` to `%s` before executing (see `Database._translate`),
 # so analytics/ingest code never needs to branch on backend.
-SCHEMA_SQL = """
+#
+# Table and index DDL are kept separate (and run in that order, with column
+# migrations in between -- see `_init_schema`) because on an *existing*
+# database, `CREATE TABLE IF NOT EXISTS` is a no-op: a `CREATE INDEX` on a
+# column added after that table's original release would fail with
+# "column does not exist" if it ran before the migration that adds it.
+TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS matches (
     match_id TEXT PRIMARY KEY,
     game_datetime BIGINT,
     game_version TEXT,
     patch TEXT,
+    balance_window TEXT,
     game_type TEXT,
     queue_id INTEGER,
     set_number INTEGER,
@@ -59,12 +67,23 @@ CREATE TABLE IF NOT EXISTS traits (
     FOREIGN KEY (match_id, participant_index)
         REFERENCES participants(match_id, participant_index)
 );
+"""
 
+INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_units_character ON units(character_id);
 CREATE INDEX IF NOT EXISTS idx_units_cost ON units(cost);
 CREATE INDEX IF NOT EXISTS idx_participants_placement ON participants(placement);
 CREATE INDEX IF NOT EXISTS idx_matches_patch ON matches(patch);
+CREATE INDEX IF NOT EXISTS idx_matches_balance_window ON matches(balance_window);
 """
+
+# Columns added to `matches` after its initial release. A fresh database
+# already has these via SCHEMA_SQL above; this only matters for upgrading an
+# older database in place (see `_run_migrations`).
+_MATCHES_COLUMN_MIGRATIONS: tuple[tuple[str, str], ...] = (
+    ("patch", "TEXT"),
+    ("balance_window", "TEXT"),
+)
 
 _TRAIT_UPSERT_SQL = {
     "sqlite": "INSERT OR REPLACE INTO traits VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -122,32 +141,63 @@ class Database:
         return psycopg.connect(url)
 
     def _init_schema(self) -> None:
+        # Order matters: tables, then column migrations, then indexes -- an
+        # index on a column added by a migration must not run before that
+        # migration, or it fails against a database where the table already
+        # existed pre-migration (see the TABLES_SQL/INDEXES_SQL split above).
+        self._execute_script(TABLES_SQL)
+        self._run_migrations()
+        self._execute_script(INDEXES_SQL)
+
+    def _execute_script(self, sql: str) -> None:
         if self.dialect == "sqlite":
-            self.conn.executescript(SCHEMA_SQL)
+            self.conn.executescript(sql)
         else:
             with self.conn.cursor() as cur:
-                cur.execute(SCHEMA_SQL)
+                cur.execute(sql)
         self.conn.commit()
-        self._run_migrations()
 
     def _run_migrations(self) -> None:
         """Bring an older database up to the current schema.
 
-        A fresh database already has every column via `SCHEMA_SQL` above; this
-        only matters for a `matches` table created before the `patch` column
+        A fresh database already has every column via `TABLES_SQL` above; this
+        only matters for a `matches` table created before a given column
         existed (e.g. a local `data/tftlab.sqlite3` from an earlier build).
         """
-        if self.dialect == "sqlite":
-            try:
-                self.conn.execute("ALTER TABLE matches ADD COLUMN patch TEXT")
+        for column, column_type in _MATCHES_COLUMN_MIGRATIONS:
+            if self.dialect == "sqlite":
+                try:
+                    self.conn.execute(f"ALTER TABLE matches ADD COLUMN {column} {column_type}")
+                    self.conn.commit()
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+            else:
+                with self.conn.cursor() as cur:
+                    cur.execute(f"ALTER TABLE matches ADD COLUMN IF NOT EXISTS {column} {column_type}")
                 self.conn.commit()
-            except sqlite3.OperationalError as exc:
-                if "duplicate column" not in str(exc).lower():
-                    raise
-        else:
-            with self.conn.cursor() as cur:
-                cur.execute("ALTER TABLE matches ADD COLUMN IF NOT EXISTS patch TEXT")
-            self.conn.commit()
+
+        self._backfill_balance_window()
+
+    def _backfill_balance_window(self) -> None:
+        """Populate `balance_window` for rows a column migration left NULL.
+
+        `ALTER TABLE ... ADD COLUMN` doesn't compute values for existing rows,
+        so a database migrated from before this column existed would
+        otherwise have its historical matches permanently unclassifiable by
+        balance window -- exactly the "historical matches must stay
+        classifiable" requirement this feature exists for.
+        """
+        rows = self.query_all(
+            "SELECT match_id, patch, game_datetime FROM matches WHERE balance_window IS NULL AND patch IS NOT NULL"
+        )
+        if not rows:
+            return
+        for match_id, patch, game_datetime in rows:
+            window = resolve_balance_window(patch, game_datetime)
+            if window is not None:
+                self.execute("UPDATE matches SET balance_window = ? WHERE match_id = ?", (window, match_id))
+        self.commit()
 
     def _translate(self, sql: str) -> str:
         return sql.replace("?", "%s") if self.dialect == "postgres" else sql
@@ -192,14 +242,15 @@ class Database:
         try:
             self.execute(
                 """INSERT INTO matches(
-                    match_id, game_datetime, game_version, patch, game_type, queue_id,
-                    set_number, set_core_name, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    match_id, game_datetime, game_version, patch, balance_window, game_type,
+                    queue_id, set_number, set_core_name, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     normalized.match_id,
                     normalized.game_datetime,
                     normalized.game_version,
                     normalized.patch,
+                    normalized.balance_window,
                     normalized.game_type,
                     normalized.queue_id,
                     normalized.set_number,

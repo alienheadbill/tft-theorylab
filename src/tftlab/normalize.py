@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from .balance_window import resolve_balance_window
 from .items import completed_item_count
 from .models import NormalizedMatch, NormalizedParticipant, NormalizedUnit
 from .patch import patch_from_game_version
@@ -35,6 +36,8 @@ def normalize_match(match: dict[str, Any], *, cost_lookup: CostLookup | None = N
     info = match.get("info", {})
     match_id = str(metadata.get("match_id") or info.get("match_id") or "unknown")
     game_version = info.get("game_version")
+    game_datetime = info.get("game_datetime")
+    client_patch = patch_from_game_version(game_version)
 
     participants: list[NormalizedParticipant] = []
     for idx, p in enumerate(info.get("participants", [])):
@@ -67,11 +70,12 @@ def normalize_match(match: dict[str, Any], *, cost_lookup: CostLookup | None = N
     return NormalizedMatch(
         match_id=match_id,
         game_version=game_version,
-        patch=patch_from_game_version(game_version),
+        patch=client_patch,
+        balance_window=resolve_balance_window(client_patch, game_datetime),
         game_type=info.get("tft_game_type"),
         queue_id=info.get("queue_id"),
         set_number=info.get("tft_set_number"),
         set_core_name=info.get("tft_set_core_name"),
-        game_datetime=info.get("game_datetime"),
+        game_datetime=game_datetime,
         participants=tuple(participants),
     )

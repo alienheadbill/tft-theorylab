@@ -130,12 +130,14 @@ def leaderboard(
     db: Path = typer.Option(Path("data/tftlab.sqlite3"), "--db"),
     min_samples: int = typer.Option(20, min=1),
     max_cost: int = typer.Option(3, min=1, max=5),
-    patch: str = typer.Option(None, help="Balance patch to analyze; defaults to the most-played patch"),
+    balance_window: str = typer.Option(
+        None, help="Balance window to analyze; defaults to the chronologically latest one in the store"
+    ),
 ) -> None:
     """Calculate item-commitment carry statistics."""
     with Database(db) as database:
         stats = carry_commitment_stats(
-            database, patch=patch, min_samples=min_samples, max_cost=max_cost
+            database, balance_window=balance_window, min_samples=min_samples, max_cost=max_cost
         )
     _print_stats(stats)
 

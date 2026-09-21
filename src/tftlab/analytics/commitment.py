@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..patch import patch_sort_key
 from ..storage import Database
 
 
@@ -30,44 +31,44 @@ def _posterior_rate(successes: int, attempts: int, *, prior: float, strength: fl
     return (successes + prior * strength) / (attempts + strength)
 
 
-def default_patch(db: Database) -> str | None:
-    """The patch analytics should use when the caller doesn't pin one.
+def available_balance_windows(db: Database) -> list[tuple[str, int, int]]:
+    """All balance windows present in the store, chronologically latest first.
 
-    Picks the patch with the most matches, breaking ties toward the
-    lexicographically greatest value (a reasonable proxy for "most recent"
-    given our `major.minor` patch keys).
+    Returns `(balance_window, match_count, latest_game_datetime)` tuples.
+    Ordering is by each window's most recent match timestamp, with a
+    numeric (not lexicographic) parse of the window string as a tiebreaker
+    -- so e.g. `18.10` sorts after `18.9` even if their matches happen to
+    share a timestamp, and match *count* never decides the order.
     """
-    row = db.query_one(
-        """
-        SELECT patch, COUNT(*) AS n
-        FROM matches
-        WHERE patch IS NOT NULL
-        GROUP BY patch
-        ORDER BY n DESC, patch DESC
-        LIMIT 1
-        """
-    )
-    return row[0] if row else None
-
-
-def available_patches(db: Database) -> list[tuple[str, int]]:
-    """All patches present in the store with their match counts, most-played first."""
     rows = db.query_all(
         """
-        SELECT patch, COUNT(*) AS n
+        SELECT balance_window, COUNT(*) AS n, MAX(game_datetime) AS latest
         FROM matches
-        WHERE patch IS NOT NULL
-        GROUP BY patch
-        ORDER BY n DESC, patch DESC
+        WHERE balance_window IS NOT NULL
+        GROUP BY balance_window
         """
     )
-    return [(str(r[0]), int(r[1])) for r in rows]
+    windows = [(str(r[0]), int(r[1]), int(r[2] or 0)) for r in rows]
+    windows.sort(key=lambda w: (w[2], patch_sort_key(w[0])), reverse=True)
+    return windows
+
+
+def default_balance_window(db: Database) -> str | None:
+    """The balance window analytics should use when the caller doesn't pin one.
+
+    Always the chronologically latest window in the store (by its matches'
+    actual timestamps), never the one with the most samples -- an older
+    window can easily have more matches without being the current balance
+    state.
+    """
+    windows = available_balance_windows(db)
+    return windows[0][0] if windows else None
 
 
 def carry_commitment_stats(
     db: Database,
     *,
-    patch: str | None = None,
+    balance_window: str | None = None,
     min_cost: int = 1,
     max_cost: int = 3,
     commitment_items: int = 2,
@@ -80,13 +81,15 @@ def carry_commitment_stats(
     >= `commitment_items` non-component items. This deliberately includes 2-star
     misses, avoiding the survivorship bias of analyzing only successful 3-stars.
 
-    Results are always scoped to a single balance patch: different patches can
-    rebalance a champion or its items entirely, so mixing them by default would
-    quietly blend unrelated data. When `patch` is omitted, the patch with the
-    most matches in the store is used.
+    Results are always scoped to a single balance window: different windows
+    (client patches, or mid-patch balance updates within the same client
+    patch -- see `tftlab.balance_window`) can rebalance a champion or its
+    items entirely, so mixing them by default would quietly blend unrelated
+    data. When `balance_window` is omitted, the chronologically latest window
+    in the store is used.
     """
-    resolved_patch = patch or default_patch(db)
-    if resolved_patch is None:
+    resolved_window = balance_window or default_balance_window(db)
+    if resolved_window is None:
         return []
 
     total_participants_row = db.query_one(
@@ -94,9 +97,9 @@ def carry_commitment_stats(
         SELECT COUNT(*)
         FROM participants p
         JOIN matches m ON m.match_id = p.match_id
-        WHERE m.patch = ?
+        WHERE m.balance_window = ?
         """,
-        (resolved_patch,),
+        (resolved_window,),
     )
     total_participants = total_participants_row[0] if total_participants_row else 0
     if not total_participants:
@@ -125,7 +128,7 @@ def carry_commitment_stats(
         JOIN matches m
           ON m.match_id = u.match_id
         WHERE u.cost BETWEEN ? AND ?
-          AND m.patch = ?
+          AND m.balance_window = ?
         GROUP BY u.character_id, u.cost
         HAVING SUM(CASE WHEN u.completed_item_count >= ? THEN 1 ELSE 0 END) >= ?
         """,
@@ -145,7 +148,7 @@ def carry_commitment_stats(
             commitment_items,
             min_cost,
             max_cost,
-            resolved_patch,
+            resolved_window,
             commitment_items,
             min_samples,
         ),

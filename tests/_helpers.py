@@ -30,6 +30,7 @@ def make_match(
     match_id: str,
     *,
     game_version: str = "Version 14.6.579.1234 (Sep 10 2024/13:00:00) [PUBLIC] <Releases/14.6>",
+    game_datetime: int = 1_790_000_000_000,
     set_number: int = 14,
     units: list[dict[str, Any]] | None = None,
     placement: int = 4,
@@ -45,7 +46,7 @@ def make_match(
             "queue_id": 1100,
             "tft_set_number": set_number,
             "tft_set_core_name": f"TFTSet{set_number}",
-            "game_datetime": 1_790_000_000_000,
+            "game_datetime": game_datetime,
             "participants": [
                 {
                     "placement": placement,

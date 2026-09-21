@@ -13,9 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from tftlab.analytics import carry_commitment_stats
+from tftlab.analytics import carry_commitment_stats, default_balance_window
 from tftlab.demo import generate_demo_matches
 from tftlab.storage import Database
+from tftlab.webapp import carry_item_sets, carry_partners
 
 POSTGRES_TEST_URL = os.environ.get("TFTLAB_TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
 
@@ -35,6 +36,36 @@ def test_sqlite_uses_qmark_placeholders_directly(tmp_path: Path) -> None:
         db.ingest_many(generate_demo_matches(5, seed=2))
         row = db.query_one("SELECT COUNT(*) FROM participants WHERE placement = ?", (1,))
         assert row is not None
+
+
+def test_migration_backfills_balance_window_for_pre_existing_rows(tmp_path: Path) -> None:
+    """`ALTER TABLE ADD COLUMN` doesn't compute values for existing rows, so a
+    database that had matches before `balance_window` existed must have them
+    backfilled on the next connect, not stuck at NULL forever."""
+    from _helpers import make_match, make_unit
+
+    db_path = tmp_path / "legacy.sqlite3"
+    with Database(db_path) as db:
+        db.ingest_match(
+            make_match(
+                "LEGACY_1",
+                game_version="Version 18.2.100.1 (Sep 1 2026) [PUBLIC] <Releases/18.2>",
+                game_datetime=1_789_000_000_000,  # before the registered 18.2 cutover
+                units=[make_unit("TFT18_Legacy", tier=2, items=["TFT_Item_BlueBuff", "TFT_Item_Deathcap"])],
+            )
+        )
+
+    # Simulate a database migrated from before this column existed: the
+    # column is present, but this row's value was never computed.
+    with Database(db_path) as db:
+        db.execute("UPDATE matches SET balance_window = NULL WHERE match_id = ?", ("LEGACY_1",))
+        db.commit()
+
+    # Simply reconnecting must self-heal it via the migration backfill.
+    with Database(db_path) as db:
+        row = db.query_one("SELECT balance_window FROM matches WHERE match_id = ?", ("LEGACY_1",))
+    assert row is not None
+    assert row[0] == "18.2a"
 
 
 def _clean_postgres_db() -> Database:
@@ -81,6 +112,38 @@ def test_postgres_and_sqlite_agree_on_ingest_and_query(tmp_path: Path) -> None:
         assert sqlite_stat.commitment_games == postgres_stat.commitment_games
         assert sqlite_stat.avg_placement == pytest.approx(postgres_stat.avg_placement)
         assert sqlite_stat.hit_3star_rate == pytest.approx(postgres_stat.hit_3star_rate)
+
+
+@requires_postgres
+def test_postgres_carry_partners_query_has_no_having_alias_bug() -> None:
+    """Regression test: `webapp.carry_partners`'s `HAVING` used to reference a
+    SELECT alias (`together`), which SQLite tolerates but Postgres rejects
+    with `UndefinedColumn`. This must succeed against real Postgres."""
+    from _helpers import make_match, make_unit
+
+    db = _clean_postgres_db()
+    try:
+        for i in range(3):
+            db.ingest_match(
+                make_match(
+                    f"PARTNER_{i}",
+                    units=[
+                        make_unit("TFT14_Main", tier=2, items=["TFT_Item_BlueBuff", "TFT_Item_Deathcap"]),
+                        make_unit("TFT14_Buddy", tier=2, items=[]),
+                    ],
+                )
+            )
+        balance_window = default_balance_window(db)
+        assert balance_window is not None
+
+        partners = carry_partners(db, "TFT14_Main", balance_window)
+        assert [p[0] for p in partners] == ["TFT14_Buddy"]  # unit_name, together >= 3
+
+        item_sets = carry_item_sets(db, "TFT14_Main", balance_window)
+        assert len(item_sets) == 1
+        assert item_sets[0][1] == 3  # games
+    finally:
+        db.close()
 
 
 @requires_postgres

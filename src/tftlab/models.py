@@ -30,6 +30,7 @@ class NormalizedMatch:
     match_id: str
     game_version: str | None
     patch: str | None
+    balance_window: str | None
     game_type: str | None
     queue_id: int | None
     set_number: int | None
