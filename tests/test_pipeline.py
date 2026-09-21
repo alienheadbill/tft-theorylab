@@ -14,7 +14,7 @@ def test_demo_pipeline_builds_commitment_stats(tmp_path: Path):
     db_path = tmp_path / "demo.sqlite3"
     with Database(db_path) as db:
         assert db.ingest_many(generate_demo_matches(30, seed=1)) == 30
-        stats = carry_commitment_stats(db.conn, min_samples=3)
+        stats = carry_commitment_stats(db, min_samples=3)
 
     names = {s.name for s in stats}
     assert "Cassiopeia" in names

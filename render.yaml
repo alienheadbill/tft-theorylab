@@ -3,7 +3,7 @@ services:
     name: tft-theory-lab
     runtime: python
     plan: free
-    buildCommand: pip install -e .
+    buildCommand: pip install -e ".[postgres]"
     startCommand: uvicorn tftlab.webapp:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
@@ -16,4 +16,9 @@ services:
       - key: TFT_DB_PATH
         value: data/tftlab.sqlite3
       - key: RIOT_API_KEY
+        sync: false
+      # Optional: point at a Postgres instance (e.g. a Render Postgres
+      # database's "Internal Connection String") for production storage.
+      # Leave unset to keep using the ephemeral SQLite/demo fallback.
+      - key: DATABASE_URL
         sync: false

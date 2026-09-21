@@ -23,3 +23,16 @@ class NormalizedParticipant:
     augments: tuple[str, ...]
     units: tuple[NormalizedUnit, ...]
     traits: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class NormalizedMatch:
+    match_id: str
+    game_version: str | None
+    patch: str | None
+    game_type: str | None
+    queue_id: int | None
+    set_number: int | None
+    set_core_name: str | None
+    game_datetime: int | None
+    participants: tuple[NormalizedParticipant, ...]

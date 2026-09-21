@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .analytics import carry_commitment_stats
+from .cdragon import CommunityDragonClient
 from .config import Settings
 from .demo import generate_demo_matches
 from .ingest import ingest_ladder
@@ -75,7 +76,7 @@ def demo(
         db.unlink()
     with Database(db) as database:
         inserted = database.ingest_many(generate_demo_matches(matches))
-        stats = carry_commitment_stats(database.conn, min_samples=10)
+        stats = carry_commitment_stats(database, min_samples=10)
     console.print(f"Inserted {inserted} demo matches / {inserted * 8} participants")
     _print_stats(stats)
 
@@ -85,14 +86,29 @@ def ingest_riot(
     players: int = typer.Option(25, min=1, help="High-Elo seed players"),
     matches_per_player: int = typer.Option(10, min=1, max=100),
     include_master: bool = typer.Option(False, help="Include Master + GM seeds"),
+    use_static_costs: bool = typer.Option(
+        True, help="Resolve champion shop costs from CommunityDragon instead of rarity+1"
+    ),
 ) -> None:
-    """Pull recent high-Elo matches from Riot into SQLite."""
+    """Pull recent high-Elo matches from Riot into the configured database."""
     _load_dotenv()
     settings = Settings.from_env()
     if not settings.riot_api_key:
         raise typer.BadParameter("Set RIOT_API_KEY in .env or the environment")
     leagues = ("challenger", "grandmaster", "master") if include_master else ("challenger",)
-    with Database(settings.db_path) as db, RiotClient(
+
+    cost_lookup = None
+    if use_static_costs:
+        try:
+            with CommunityDragonClient() as cdragon:
+                metadata = cdragon.get_set_metadata("latest")
+            cost_lookup = metadata.cost_for_champion
+            console.print(f"Using CommunityDragon costs for set {metadata.set_number}")
+        except Exception as exc:
+            console.print(f"[yellow]CommunityDragon metadata unavailable ({exc}); falling back to rarity+1[/yellow]")
+
+    target = settings.database_url or settings.db_path
+    with Database(target) as db, RiotClient(
         settings.riot_api_key, platform=settings.platform, region=settings.region
     ) as client:
         result = ingest_ladder(
@@ -101,6 +117,7 @@ def ingest_riot(
             player_limit=players,
             matches_per_player=matches_per_player,
             leagues=leagues,
+            cost_lookup=cost_lookup,
         )
     console.print(
         f"Seeds: {result.seed_players} | unique match IDs: {result.match_ids_seen} | "
@@ -113,11 +130,12 @@ def leaderboard(
     db: Path = typer.Option(Path("data/tftlab.sqlite3"), "--db"),
     min_samples: int = typer.Option(20, min=1),
     max_cost: int = typer.Option(3, min=1, max=5),
+    patch: str = typer.Option(None, help="Balance patch to analyze; defaults to the most-played patch"),
 ) -> None:
     """Calculate item-commitment carry statistics."""
     with Database(db) as database:
         stats = carry_commitment_stats(
-            database.conn, min_samples=min_samples, max_cost=max_cost
+            database, patch=patch, min_samples=min_samples, max_cost=max_cost
         )
     _print_stats(stats)
 
