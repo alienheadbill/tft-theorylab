@@ -13,7 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from tftlab.analytics import carry_commitment_stats, default_balance_window
+from tftlab.analytics import (
+    carry_commitment_stats,
+    carry_partner_associations,
+    default_balance_window,
+    discover_candidates,
+    item_package_stats,
+    trait_breakpoint_associations,
+)
 from tftlab.demo import generate_demo_matches
 from tftlab.storage import Database
 from tftlab.webapp import carry_item_sets, carry_partners
@@ -161,5 +168,55 @@ def test_postgres_trait_upsert_is_idempotent() -> None:
         assert db.ingest_match(payload) is False  # already ingested; no duplicate/upsert error
         rows = db.query_all("SELECT trait_name, num_units FROM traits WHERE match_id = ?", ("PG_TRAIT_TEST",))
         assert rows == [("Juggernaut", 2)]
+    finally:
+        db.close()
+
+
+@requires_postgres
+def test_postgres_discovery_and_association_queries() -> None:
+    """The partner/item/trait LEFT JOIN queries (association.py's callers)
+    weren't exercised against Postgres by the parity test above (which only
+    calls carry_commitment_stats); run them for real here."""
+    from _helpers import make_match, make_unit
+
+    db = _clean_postgres_db()
+    try:
+        for i in range(5):
+            db.ingest_match(
+                make_match(
+                    f"HIT_{i}",
+                    placement=1,
+                    units=[
+                        make_unit("TFT14_Carry", tier=3, items=["TFT_Item_BlueBuff", "TFT_Item_Deathcap"]),
+                        make_unit("TFT14_Partner", tier=2, items=[]),
+                    ],
+                    traits=[{"name": "Juggernaut", "num_units": 4, "style": 3, "tier_current": 2, "tier_total": 3}],
+                )
+            )
+        for i in range(5):
+            db.ingest_match(
+                make_match(
+                    f"MISS_{i}",
+                    placement=7,
+                    units=[make_unit("TFT14_Carry", tier=2, items=["TFT_Item_BlueBuff", "TFT_Item_Deathcap"])],
+                )
+            )
+
+        balance_window = default_balance_window(db)
+        assert balance_window is not None
+
+        partners = carry_partner_associations(db, "TFT14_Carry", balance_window, min_games=1)
+        assert [p.key for p in partners] == ["TFT14_Partner"]
+        assert partners[0].top4_rate == 1.0
+        assert partners[0].top4_rate_without == 0.0
+
+        item_stats = item_package_stats(db, "TFT14_Carry", balance_window)
+        assert len(item_stats["items"]) == 2  # BlueBuff, Deathcap
+
+        traits = trait_breakpoint_associations(db, "TFT14_Carry", balance_window, min_games=1)
+        assert [t.key for t in traits] == ["Juggernaut:2"]
+
+        candidates = discover_candidates(db, min_cost=1, max_cost=3, min_samples=1)
+        assert any(c.character_id == "TFT14_Carry" for c in candidates)
     finally:
         db.close()
