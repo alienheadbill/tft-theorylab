@@ -39,7 +39,8 @@ def test_clean_data_reports_no_severe_issues(tmp_path: Path) -> None:
         report = validate_live_data(db, metadata=_fake_metadata())
 
     assert report.total_matches == 5
-    assert report.unit_cost_resolved_pct == 1.0
+    assert report.unit_cost_present_pct == 1.0
+    assert report.metadata_champion_coverage_pct == 1.0
     assert report.unknown_champion_ids == []
     assert report.unknown_item_ids == []
     assert report.unknown_trait_ids == []
@@ -60,6 +61,7 @@ def test_unknown_ids_are_skipped_not_falsely_clean_without_metadata(tmp_path: Pa
     assert report.unknown_champion_ids is None
     assert report.unknown_item_ids is None
     assert report.unknown_trait_ids is None
+    assert report.metadata_champion_coverage_pct is None
     # Not checking IDs is not itself a severe failure.
     assert report.is_severe is False
 
@@ -78,9 +80,38 @@ def test_unknown_champion_and_item_ids_detected_with_metadata(tmp_path: Path) ->
 
     assert report.unknown_champion_ids == ["TFT14_NotInMetadata"]
     assert report.unknown_item_ids == ["TFT_Item_NotInMetadata"]
-    assert report.unit_cost_resolved_pct == 0.0
+    assert report.unit_cost_present_pct == 0.0
+    assert report.metadata_champion_coverage_pct == 0.0
     # Unknown IDs and low cost resolution are data-quality warnings, not
     # structural corruption.
+    assert report.is_severe is False
+
+
+def test_unknown_champion_with_fallback_cost_is_still_unknown(tmp_path: Path) -> None:
+    """Regression test: `normalize.cost_from_unit` falls back to `rarity + 1`
+    whenever `cost_lookup` (CommunityDragon) returns `None` for a champion,
+    so a champion CommunityDragon has never heard of can still end up with a
+    non-null `cost`. `unknown_champion_ids` must be derived from every
+    observed champion, never from `cost IS NULL`, and
+    `metadata_champion_coverage_pct` must not claim 100% just because a
+    fallback cost was present."""
+    metadata = _fake_metadata()
+    with Database(tmp_path / "fallback_cost.sqlite3") as db:
+        db.ingest_match(
+            make_match(
+                "M1",
+                # rarity=1 is in the 0-4 fallback range, so cost_from_unit
+                # falls back to rarity + 1 = 2 even though this champion
+                # isn't in CommunityDragon's metadata at all.
+                units=[make_unit("TFT14_NotInMetadata", rarity=1, tier=1, items=[])],
+            ),
+            cost_lookup=metadata.cost_for_champion,
+        )
+        report = validate_live_data(db, metadata=metadata)
+
+    assert report.unknown_champion_ids == ["TFT14_NotInMetadata"]
+    assert report.unit_cost_present_pct == 1.0
+    assert report.metadata_champion_coverage_pct == 0.0
     assert report.is_severe is False
 
 

@@ -237,6 +237,7 @@ def verify_riot() -> None:
             "unauthorized": "401 Unauthorized -- RIOT_API_KEY is invalid or expired.",
             "forbidden": "403 Forbidden -- RIOT_API_KEY lacks permission for this endpoint/region.",
             "rate_limited": "429 Rate limited -- back off and retry later; Riot enforces per-key rate limits.",
+            "network_error": "Network error contacting Riot API -- check connectivity and try again.",
         }
         console.print(f"[red]Riot API verification failed: {messages.get(category, str(exc))}[/red]")
         raise typer.Exit(code=1)
@@ -275,7 +276,11 @@ def validate_live_data_command(
     console.print(f"Balance window: {report.balance_window}")
     console.print(f"Total matches: {report.total_matches}")
     console.print(f"Total participants: {report.total_participants}")
-    console.print(f"Unit shop-cost resolved: {report.unit_cost_resolved_pct:.1%}")
+    console.print(f"Unit shop-cost present: {report.unit_cost_present_pct:.1%}")
+    if report.metadata_champion_coverage_pct is None:
+        console.print("CommunityDragon champion coverage: skipped (no CommunityDragon metadata)")
+    else:
+        console.print(f"CommunityDragon champion coverage: {report.metadata_champion_coverage_pct:.1%}")
 
     def _report_unknown(label: str, values: list[str] | None) -> None:
         if values is None:

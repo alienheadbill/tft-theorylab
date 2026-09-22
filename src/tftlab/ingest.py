@@ -37,10 +37,11 @@ def ingest_ladder(
     CommunityDragon static metadata); when omitted, ingested units fall back
     to the Match-V1 `rarity + 1` heuristic.
 
-    A single match's fetch failing (rate limit exhaustion, a transient Riot
-    API error) is recorded in `failed_requests` and skipped rather than
-    aborting the whole run -- a batch of otherwise-good matches shouldn't be
-    lost to one bad request.
+    A single match's fetch failing (rate limit exhaustion, a Riot API error,
+    or a network failure -- `RiotClient._get` wraps `httpx.RequestError`
+    into `RiotApiError`, so all three land here the same way) is recorded in
+    `failed_requests` and skipped rather than aborting the whole run -- a
+    batch of otherwise-good matches shouldn't be lost to one bad request.
     """
     puuids = client.ladder_puuids(leagues)[:player_limit]
     ids: list[str] = []

@@ -23,6 +23,8 @@ def classify_riot_error(message: str) -> str:
     """
     if "Repeated rate limiting" in message:
         return "rate_limited"
+    if "Network error contacting Riot API" in message:
+        return "network_error"
     match = _STATUS_RE.search(message)
     if not match:
         return "unknown"
@@ -72,7 +74,16 @@ class RiotClient:
 
     def _get(self, url: str, params: dict[str, Any] | None = None) -> Any:
         for attempt in range(4):
-            response = self._client.get(url, params=params)
+            try:
+                response = self._client.get(url, params=params)
+            except httpx.RequestError as exc:
+                # httpx.RequestError's own message is just the underlying
+                # network failure (DNS, timeout, connection refused, ...);
+                # the API key is sent only via a header and never appears in
+                # it or in `url`, so this is safe to surface as-is.
+                raise RiotApiError(
+                    f"Network error contacting Riot API ({type(exc).__name__}) for {url}"
+                ) from exc
             if response.status_code == 429:
                 wait = float(response.headers.get("Retry-After", "1"))
                 time.sleep(max(wait, 0.25))
