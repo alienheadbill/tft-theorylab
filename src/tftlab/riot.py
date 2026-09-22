@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Iterable
 
@@ -8,6 +9,31 @@ import httpx
 
 class RiotApiError(RuntimeError):
     pass
+
+
+_STATUS_RE = re.compile(r"returned (\d+)")
+
+
+def classify_riot_error(message: str) -> str:
+    """Categorize a `RiotApiError` message into a short, actionable label.
+
+    Pulled out as a pure function (rather than inlined where errors are
+    handled) so callers -- and tests -- can classify a Riot failure without
+    needing a live API key or network access.
+    """
+    if "Repeated rate limiting" in message:
+        return "rate_limited"
+    match = _STATUS_RE.search(message)
+    if not match:
+        return "unknown"
+    status = int(match.group(1))
+    if status == 401:
+        return "unauthorized"
+    if status == 403:
+        return "forbidden"
+    if status == 429:
+        return "rate_limited"
+    return f"http_{status}"
 
 
 class RiotClient:
