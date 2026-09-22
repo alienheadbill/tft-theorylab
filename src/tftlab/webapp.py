@@ -6,8 +6,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .analytics import (
@@ -25,6 +25,17 @@ from .storage import Database
 PACKAGE_DIR = Path(__file__).resolve().parent
 WEB_DIR = PACKAGE_DIR / "web"
 STATIC_DIR = WEB_DIR / "static"
+
+
+class ProductionDatabaseUnavailable(RuntimeError):
+    """`DATABASE_URL` is configured but the database could not be reached.
+
+    Deliberately distinct from "no production database configured, use
+    demo data" -- once an operator has pointed the app at a real database,
+    a connection failure there is a production incident to surface loudly
+    (see the exception handler below), not something to paper over with
+    the synthetic demo dataset.
+    """
 
 
 def _sqlite_db_path() -> Path:
@@ -71,16 +82,30 @@ def _build_demo_db() -> Database:
 def _resolve_database() -> tuple[Database, bool]:
     """Pick the active data source.
 
-    Prefers a populated `DATABASE_URL` (production Postgres), then a
-    populated local SQLite file, and only falls back to the deterministic
-    demo dataset when neither has real match data. Callers must close the
+    When `DATABASE_URL` is set, it is *always* used -- connecting
+    successfully is enough, even with zero matches so far (a fresh
+    production database before first ingest is a normal, honest state, not
+    something to disguise as demo data). If it's configured but unreachable,
+    this raises `ProductionDatabaseUnavailable` rather than silently falling
+    through to demo data; the exception handler registered on the app turns
+    that into an explicit 503, per the same "never quietly pretend
+    everything is fine" rule.
+
+    Only when `DATABASE_URL` is unset at all does this fall back to a
+    populated local SQLite file, and finally the deterministic demo
+    dataset -- both of which are fine for local development, where there
+    was never a production database to fail. Callers must close the
     returned `Database`.
     """
     database_url = os.getenv("DATABASE_URL")
     if database_url:
-        db = _open_if_live(database_url)
-        if db is not None:
-            return db, False
+        try:
+            db = Database(database_url)
+        except Exception as exc:
+            raise ProductionDatabaseUnavailable(
+                f"DATABASE_URL is configured but unreachable ({type(exc).__name__})"
+            ) from exc
+        return db, False
 
     sqlite_path = _sqlite_db_path()
     if sqlite_path.exists():
@@ -147,6 +172,22 @@ def carry_item_sets(db: Database, character_id: str, balance_window: str) -> lis
 def create_app() -> FastAPI:
     app = FastAPI(title="TFT Theory Lab", version="0.2.0")
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.exception_handler(ProductionDatabaseUnavailable)
+    async def _production_database_unavailable(request: Request, exc: ProductionDatabaseUnavailable) -> JSONResponse:
+        # Deliberately no exception detail beyond the exception's own generic
+        # message (which never includes the DATABASE_URL itself, only the
+        # failing exception's type) -- never echo connection strings/credentials.
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "demo": False,
+                "backend": "postgres",
+                "status": "error",
+                "error": "DATABASE_URL is configured but the database is unreachable",
+            },
+        )
 
     @app.get("/", include_in_schema=False)
     def home() -> FileResponse:

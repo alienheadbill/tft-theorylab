@@ -33,14 +33,33 @@ This creates deterministic fake matches and runs the same normalization + analyt
 
 1. Create a Riot development/personal API key.
 2. Copy `.env.example` to `.env` and insert the key.
-3. Run:
+3. Verify the key works before pulling any real data:
 
-```bash
-tftlab ingest-riot --players 25 --matches-per-player 10
-tftlab leaderboard --min-samples 20
-```
+   ```bash
+   tftlab verify-riot
+   ```
 
-Riot development keys expire periodically, so a 403 after the key worked previously usually means the key needs refreshing.
+   This makes one minimal authenticated request (no ingestion) and reports success/failure. It never prints the key itself, and distinguishes 401 (invalid/expired key), 403 (key lacks permission), and 429 (rate limited -- back off and retry) rather than a generic failure.
+
+4. Run a small, safe first ingest:
+
+   ```bash
+   tftlab ingest-riot --players 10 --matches-per-player 5
+   ```
+
+   Challenger-only by default (pass `--include-master` to widen the seed pool). Prints a report: seed players, unique match IDs discovered, matches fetched/inserted/skipped-as-duplicate, failed requests, balance windows found, and total participants now stored. A single match's fetch failing doesn't abort the batch -- it's counted in "failed requests" and the run continues.
+
+5. Check the result:
+
+   ```bash
+   tftlab validate-live-data
+   tftlab discovery-smoke
+   tftlab leaderboard --min-samples 20
+   ```
+
+Riot development keys expire periodically, so a 401/403 after the key worked previously usually means the key needs refreshing -- `tftlab verify-riot` will say so directly.
+
+By default, `ingest-riot` resolves champion shop costs from CommunityDragon and **aborts** (not silently falls back to `rarity + 1`) if that fetch fails, printing exactly why. Pass `--allow-degraded-costs` to proceed anyway; the run and its printed report are then clearly marked `DEGRADED INGEST`.
 
 ## Current scoring
 
@@ -122,6 +141,25 @@ Weights sum to 1.0 (enforced by a test). `carry_rarity`/`champion_rarity` split 
 
 `compute_item_flexibility` counts completed items that are both well-evidenced (>= 3 games and >= 0.15 confidence) and at-least-neutral (`top4_delta >= 0`, or no "without" comparison at all -- an item present in every commitment game has no evidence against it). The viable count is capped at 3 alternatives for full credit and mapped linearly to 0..1. This replaces an earlier `positive-associations / all-observed-items` formula that could hand a carry with exactly one lightly-sampled positive item a "perfect" 1.0; `tests/test_discovery.py` asserts a carry with one viable item scores below a carry with several independently-supported ones.
 
+## Production safety
+
+`webapp._resolve_database` (used by every API endpoint) recognizes three states, and never silently blurs them together:
+
+1. **`DATABASE_URL` unset** -- local/dev only. Falls back to a populated local SQLite file, then the deterministic demo dataset. This is the *only* case where demo data is ever served.
+2. **`DATABASE_URL` set and reachable** -- always treated as live (`"demo": false`), even with zero matches so far (a fresh production database before first ingest). It is never swapped for demo data just because it's empty.
+3. **`DATABASE_URL` set but unreachable** -- every endpoint returns **HTTP 503** with `{"ok": false, "demo": false, "status": "error", "error": "..."}` instead of falling through to demo data. The error message never includes the DSN or credentials. This is intentional: if you've pointed the app at a real database, a connection failure is a production incident to see immediately (including via Render's own health check, since `render.yaml` points `healthCheckPath` at `/api/health`), not something to paper over.
+
+`/api/health` (and every other endpoint) also reports `backend` (`"sqlite"`/`"postgres"`), the active `balance_window`, and `matches`/`participants` counts, so "is this real data, and how much of it" is always answerable from one request.
+
+## Operational CLI commands
+
+- `tftlab verify-riot` -- one minimal authenticated Riot request to confirm `RIOT_API_KEY` works, without ingesting anything.
+- `tftlab ingest-riot [--players N] [--matches-per-player N] [--allow-degraded-costs]` -- see "Run on live Riot data" above.
+- `tftlab validate-live-data [--db ...] [--balance-window ...] [--no-check-metadata]` -- data-integrity checks against ingested data for one balance window: total matches/participants, % of units with a resolved shop cost, unknown champion/item/trait IDs (cross-checked against a live CommunityDragon fetch unless `--no-check-metadata`; reported as "skipped" rather than a possibly-wrong empty list when metadata isn't available), matches missing a `balance_window`, malformed placements, duplicate match IDs, and participants with no units at all. **Exits non-zero** on the structural checks (missing balance window, malformed placement, duplicate ID, unit-less participant); unknown IDs and a low cost-resolution rate are printed as warnings, not failures, since those can legitimately happen right after a patch before CommunityDragon updates.
+- `tftlab discovery-smoke [--db ...] [--max-cost N] [--limit N]` -- runs the discovery engine against the latest balance window and prints the top candidates (carry, cost, commitment games, appearance/commitment/conversion rates, avg placement, Top4, win rate, 3-star hit rate, opportunity score, and the single best-evidenced partner/item-package/trait-breakpoint). Candidates under 30 commitment games are labeled `LOW SAMPLE`.
+
+`validate-live-data`/`discovery-smoke`'s `--db` accepts either a SQLite path or a `postgres://` URL (defaulting to `DATABASE_URL`, then `TFT_DB_PATH`), and is deliberately typed as a plain string rather than a filesystem path -- `pathlib.Path` collapses a URL's `//` after the scheme, which would otherwise silently break it.
+
 ## API endpoints
 
 All of these are balance-window scoped (`?balance_window=`, defaulting to the latest window) and cost-neutral to call (frontend changes are a separate milestone):
@@ -154,7 +192,7 @@ tftlab web
 
 Then open `http://127.0.0.1:8000`.
 
-The website automatically uses `DATABASE_URL` (Postgres) or `TFT_DB_PATH` (SQLite) when that database contains matches. If neither is available, it creates a deterministic synthetic demo dataset and clearly labels the UI as **Demo dataset**. Use demo data only to test the product flow; it is not live TFT performance data.
+The website automatically uses `DATABASE_URL` (Postgres) when configured -- reachable is enough, even with zero matches so far -- or `TFT_DB_PATH` (SQLite) when that file contains matches. Only when neither is configured/populated does it create a deterministic synthetic demo dataset and clearly label the UI as **Demo dataset**. See "Production safety" above for exactly what happens if a configured `DATABASE_URL` is unreachable (a loud 503, not a quiet fallback to demo). Use demo data only to test the product flow; it is not live TFT performance data.
 
 Current web pages/features:
 - TFT Theory Lab landing/discovery page
@@ -177,6 +215,6 @@ The repo includes a `render.yaml` Blueprint that runs the FastAPI app with:
 uvicorn tftlab.webapp:app --host 0.0.0.0 --port $PORT
 ```
 
-If no live database is reachable, the app automatically falls back to a generated demo dataset, so it boots and serves data even with zero configuration. `/api/health` and `/api/carries` report `"demo"` (true/false) and `"backend"` (`"sqlite"`/`"postgres"`) so it's always clear which one is live.
+With no `DATABASE_URL` configured, the app automatically falls back to a generated demo dataset, so it boots and serves data even with zero configuration. `/api/health` and `/api/carries` report `"demo"` (true/false) and `"backend"` (`"sqlite"`/`"postgres"`) so it's always clear which one is live. Once `DATABASE_URL` **is** set, that changes: see "Production safety" above -- an unreachable configured database now fails loudly (HTTP 503 from every endpoint, including `/api/health`) instead of quietly serving demo data. Since `render.yaml`'s `healthCheckPath` points at `/api/health`, this means Render will correctly flag the service as unhealthy if the configured database goes down -- that's the intended behavior, not a bug to work around.
 
-To move off ephemeral SQLite in production: create a Postgres database (a Render Postgres instance's "Internal Connection String" works well) and set `DATABASE_URL` in the Render dashboard — `render.yaml` already declares it (and `RIOT_API_KEY`) as `sync: false`, meaning Render will prompt for a value but never store one in the repo.
+To move off ephemeral SQLite in production: create a Postgres database (a Render Postgres instance's "Internal Connection String" works well) and set `DATABASE_URL` in the Render dashboard — `render.yaml` already declares it (and `RIOT_API_KEY`) as `sync: false`, meaning Render will prompt for a value but never store one in the repo. After setting it, confirm `/api/health` reports `"backend": "postgres"` and `"demo": false` before relying on it.
