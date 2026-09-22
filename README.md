@@ -18,7 +18,7 @@ This avoids a major survivorship-bias trap: a reroll is not evaluated only in ga
 ```bash
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\\Scripts\\activate
-pip install -e ".[dev]"
+pip install -e ".[dev]"          # add ",postgres" too if you're testing against Postgres locally
 ```
 
 ### Run without a Riot API key
@@ -53,10 +53,30 @@ The initial Opportunity Score combines:
 
 It deliberately does **not** reward 3-star hit rate. Instead we display hit and miss performance separately so a powerful-but-fragile reroll is not confused with a reliable line.
 
+## Storage backends
+
+`Database` (in `tftlab/storage.py`) is backend-agnostic: pass it a filesystem path for SQLite, or a `postgres://`/`postgresql://` URL (typically from a `DATABASE_URL` environment variable) for Postgres. Every query in the codebase is written once with `?`-style placeholders; the Postgres path translates them internally, so analytics/ingest code never branches on which database it's talking to.
+
+- **Local/demo/tests**: SQLite, as before. No setup needed.
+- **Production**: set `DATABASE_URL` to a Postgres connection string. Install the `postgres` extra (`pip install -e ".[postgres]"`, already done for you by `render.yaml`) so `psycopg` is available.
+- **Schema/migrations**: the schema is created automatically on first connect (`CREATE TABLE IF NOT EXISTS ...`), for either backend — no manual migration step for a fresh database. The one schema change so far (adding `matches.patch`) is applied automatically to older databases too (`ALTER TABLE ... ADD COLUMN`), so upgrading in place is also automatic.
+- Never commit a real `DATABASE_URL` (or any credential) — set it in your host's environment/secret manager. `.env` is gitignored and `.env.example` only has placeholders.
+
+## Patch-aware analytics
+
+TFT champions and items get rebalanced every patch, so mixing patches in one query would blend unrelated data. `carry_commitment_stats` always scopes to a single patch:
+
+- Pass `patch="14.6"` explicitly, or
+- Omit it and the store's most-played patch is used automatically (`tftlab.analytics.default_patch`).
+
+The web API exposes this as an optional `?patch=` query param on `/api/carries` and `/api/carries/{id}`; the current frontend doesn't send it, so behavior is unchanged there, but a patch selector can be added later without any backend work.
+
+## Static metadata (CommunityDragon)
+
+`tftlab.cdragon.CommunityDragonClient` fetches and disk-caches TFT static metadata (champion shop costs, champion/item/trait names and art) from CommunityDragon. `tftlab ingest-riot` uses it by default to resolve authoritative champion costs instead of the `rarity + 1` heuristic (pass `--no-use-static-costs` to disable). If CommunityDragon is unreachable, ingestion logs a warning and falls back to `rarity + 1` rather than failing.
+
 ## Next milestones
 
-- Join CommunityDragon static metadata instead of relying on `rarity + 1` for shop cost.
-- Patch/set filters and patch-window weighting.
 - Unit-pair / support-shell association statistics.
 - Item-package analysis.
 - Trait-breakpoint analysis.
@@ -79,7 +99,7 @@ tftlab web
 
 Then open `http://127.0.0.1:8000`.
 
-The website automatically uses `TFT_DB_PATH` when that database contains matches. If no live database is available, it creates a deterministic synthetic demo dataset and clearly labels the UI as **Demo dataset**. Use demo data only to test the product flow; it is not live TFT performance data.
+The website automatically uses `DATABASE_URL` (Postgres) or `TFT_DB_PATH` (SQLite) when that database contains matches. If neither is available, it creates a deterministic synthetic demo dataset and clearly labels the UI as **Demo dataset**. Use demo data only to test the product flow; it is not live TFT performance data.
 
 Current web pages/features:
 - TFT Theory Lab landing/discovery page
@@ -102,4 +122,6 @@ The repo includes a `render.yaml` Blueprint that runs the FastAPI app with:
 uvicorn tftlab.webapp:app --host 0.0.0.0 --port $PORT
 ```
 
-If no live TFT database is present at `TFT_DB_PATH`, the app automatically falls back to a generated demo dataset, so it boots and serves data even with zero configuration. Set `RIOT_API_KEY` (and optionally `TFT_PLATFORM`/`TFT_REGION`) in the Render dashboard to enable live ingestion later; never commit real keys to `.env` or the repo.
+If no live database is reachable, the app automatically falls back to a generated demo dataset, so it boots and serves data even with zero configuration. `/api/health` and `/api/carries` report `"demo"` (true/false) and `"backend"` (`"sqlite"`/`"postgres"`) so it's always clear which one is live.
+
+To move off ephemeral SQLite in production: create a Postgres database (a Render Postgres instance's "Internal Connection String" works well) and set `DATABASE_URL` in the Render dashboard — `render.yaml` already declares it (and `RIOT_API_KEY`) as `sync: false`, meaning Render will prompt for a value but never store one in the repo.

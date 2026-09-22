@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9"]
+postgres = ["psycopg[binary]>=3.1,<4"]
 
 [project.scripts]
 tftlab = "tftlab.cli:app"

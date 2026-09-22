@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .normalize import CostLookup
 from .riot import RiotClient
 from .storage import Database
 
@@ -20,8 +21,14 @@ def ingest_ladder(
     player_limit: int = 50,
     matches_per_player: int = 10,
     leagues: tuple[str, ...] = ("challenger",),
+    cost_lookup: CostLookup | None = None,
 ) -> IngestResult:
-    """Seed from high-Elo TFT ladder PUUIDs and deduplicate overlapping matches."""
+    """Seed from high-Elo TFT ladder PUUIDs and deduplicate overlapping matches.
+
+    `cost_lookup` should resolve authoritative shop costs (e.g. from
+    CommunityDragon static metadata); when omitted, ingested units fall back
+    to the Match-V1 `rarity + 1` heuristic.
+    """
     puuids = client.ladder_puuids(leagues)[:player_limit]
     ids: list[str] = []
     seen: set[str] = set()
@@ -35,7 +42,7 @@ def ingest_ladder(
     for match_id in ids:
         if db.has_match(match_id):
             continue
-        inserted += int(db.ingest_match(client.match(match_id)))
+        inserted += int(db.ingest_match(client.match(match_id), cost_lookup=cost_lookup))
 
     return IngestResult(
         seed_players=len(puuids),

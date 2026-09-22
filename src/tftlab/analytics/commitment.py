@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
-import sqlite3
+
+from ..patch import patch_sort_key
+from ..storage import Database
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,8 @@ class CarryStat:
     hit_3star_rate: float
     hit_top4_rate: float | None
     miss_top4_rate: float | None
+    avg_placement_hit: float | None
+    avg_placement_miss: float | None
     posterior_top4: float
     confidence: float
     opportunity_score: float
@@ -28,9 +31,44 @@ def _posterior_rate(successes: int, attempts: int, *, prior: float, strength: fl
     return (successes + prior * strength) / (attempts + strength)
 
 
+def available_balance_windows(db: Database) -> list[tuple[str, int, int]]:
+    """All balance windows present in the store, chronologically latest first.
+
+    Returns `(balance_window, match_count, latest_game_datetime)` tuples.
+    Ordering is by each window's most recent match timestamp, with a
+    numeric (not lexicographic) parse of the window string as a tiebreaker
+    -- so e.g. `18.10` sorts after `18.9` even if their matches happen to
+    share a timestamp, and match *count* never decides the order.
+    """
+    rows = db.query_all(
+        """
+        SELECT balance_window, COUNT(*) AS n, MAX(game_datetime) AS latest
+        FROM matches
+        WHERE balance_window IS NOT NULL
+        GROUP BY balance_window
+        """
+    )
+    windows = [(str(r[0]), int(r[1]), int(r[2] or 0)) for r in rows]
+    windows.sort(key=lambda w: (w[2], patch_sort_key(w[0])), reverse=True)
+    return windows
+
+
+def default_balance_window(db: Database) -> str | None:
+    """The balance window analytics should use when the caller doesn't pin one.
+
+    Always the chronologically latest window in the store (by its matches'
+    actual timestamps), never the one with the most samples -- an older
+    window can easily have more matches without being the current balance
+    state.
+    """
+    windows = available_balance_windows(db)
+    return windows[0][0] if windows else None
+
+
 def carry_commitment_stats(
-    conn: sqlite3.Connection,
+    db: Database,
     *,
+    balance_window: str | None = None,
     min_cost: int = 1,
     max_cost: int = 3,
     commitment_items: int = 2,
@@ -42,12 +80,32 @@ def carry_commitment_stats(
     A participant is a commitment game for a unit when that unit finishes with
     >= `commitment_items` non-component items. This deliberately includes 2-star
     misses, avoiding the survivorship bias of analyzing only successful 3-stars.
+
+    Results are always scoped to a single balance window: different windows
+    (client patches, or mid-patch balance updates within the same client
+    patch -- see `tftlab.balance_window`) can rebalance a champion or its
+    items entirely, so mixing them by default would quietly blend unrelated
+    data. When `balance_window` is omitted, the chronologically latest window
+    in the store is used.
     """
-    total_participants = conn.execute("SELECT COUNT(*) FROM participants").fetchone()[0]
-    if total_participants == 0:
+    resolved_window = balance_window or default_balance_window(db)
+    if resolved_window is None:
         return []
 
-    rows = conn.execute(
+    total_participants_row = db.query_one(
+        """
+        SELECT COUNT(*)
+        FROM participants p
+        JOIN matches m ON m.match_id = p.match_id
+        WHERE m.balance_window = ?
+        """,
+        (resolved_window,),
+    )
+    total_participants = total_participants_row[0] if total_participants_row else 0
+    if not total_participants:
+        return []
+
+    rows = db.query_all(
         """
         SELECT
             u.character_id,
@@ -60,16 +118,26 @@ def carry_commitment_stats(
             SUM(CASE WHEN u.completed_item_count >= ? AND p.placement = 1 THEN 1 ELSE 0 END) AS wins,
             SUM(CASE WHEN u.completed_item_count >= ? AND u.tier >= 3 THEN 1 ELSE 0 END) AS hits,
             SUM(CASE WHEN u.completed_item_count >= ? AND u.tier >= 3 AND p.placement <= 4 THEN 1 ELSE 0 END) AS hit_top4s,
+            AVG(CASE WHEN u.completed_item_count >= ? AND u.tier >= 3 THEN p.placement * 1.0 END) AS avg_place_hit,
             SUM(CASE WHEN u.completed_item_count >= ? AND u.tier < 3 THEN 1 ELSE 0 END) AS misses,
-            SUM(CASE WHEN u.completed_item_count >= ? AND u.tier < 3 AND p.placement <= 4 THEN 1 ELSE 0 END) AS miss_top4s
+            SUM(CASE WHEN u.completed_item_count >= ? AND u.tier < 3 AND p.placement <= 4 THEN 1 ELSE 0 END) AS miss_top4s,
+            AVG(CASE WHEN u.completed_item_count >= ? AND u.tier < 3 THEN p.placement * 1.0 END) AS avg_place_miss
         FROM units u
         JOIN participants p
           ON p.match_id = u.match_id AND p.participant_index = u.participant_index
+        JOIN matches m
+          ON m.match_id = u.match_id
         WHERE u.cost BETWEEN ? AND ?
+          AND m.balance_window = ?
         GROUP BY u.character_id, u.cost
-        HAVING commitment_games >= ?
+        HAVING SUM(CASE WHEN u.completed_item_count >= ? THEN 1 ELSE 0 END) >= ?
         """,
         (
+            # Postgres (unlike SQLite) doesn't allow a SELECT alias in HAVING,
+            # so `commitment_games` is repeated as a literal expression there
+            # too, with its own pair of params.
+            commitment_items,
+            commitment_items,
             commitment_items,
             commitment_items,
             commitment_items,
@@ -80,9 +148,11 @@ def carry_commitment_stats(
             commitment_items,
             min_cost,
             max_cost,
+            resolved_window,
+            commitment_items,
             min_samples,
         ),
-    ).fetchall()
+    )
 
     stats: list[CarryStat] = []
     for r in rows:
@@ -91,8 +161,10 @@ def carry_commitment_stats(
         wins = int(r[7] or 0)
         hits = int(r[8] or 0)
         hit_top4s = int(r[9] or 0)
-        misses = int(r[10] or 0)
-        miss_top4s = int(r[11] or 0)
+        avg_place_hit = r[10]
+        misses = int(r[11] or 0)
+        miss_top4s = int(r[12] or 0)
+        avg_place_miss = r[13]
         usage = n / total_participants
         top4 = top4s / n
         win = wins / n
@@ -133,6 +205,8 @@ def carry_commitment_stats(
                 hit_3star_rate=hit_rate,
                 hit_top4_rate=(hit_top4s / hits) if hits else None,
                 miss_top4_rate=(miss_top4s / misses) if misses else None,
+                avg_placement_hit=(float(avg_place_hit) if avg_place_hit is not None else None),
+                avg_placement_miss=(float(avg_place_miss) if avg_place_miss is not None else None),
                 posterior_top4=posterior_top4,
                 confidence=confidence,
                 opportunity_score=score,
