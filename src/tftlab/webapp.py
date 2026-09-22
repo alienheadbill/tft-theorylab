@@ -10,7 +10,15 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .analytics import carry_commitment_stats, default_balance_window
+from .analytics import (
+    carry_commitment_stats,
+    carry_partner_associations,
+    default_balance_window,
+    discover_candidates,
+    discovery_candidate_for,
+    item_package_stats,
+    trait_breakpoint_associations,
+)
 from .demo import generate_demo_matches
 from .storage import Database
 
@@ -228,6 +236,134 @@ def create_app() -> FastAPI:
                 }
                 for r in item_rows
             ],
+        }
+
+    def _require_carry(db: Database, character_id: str, balance_window: str) -> None:
+        stats = carry_commitment_stats(db, balance_window=balance_window, min_cost=1, max_cost=5, min_samples=1)
+        if not any(s.character_id == character_id for s in stats):
+            raise HTTPException(status_code=404, detail="Carry not found")
+
+    @app.get("/api/carries/{character_id}/partners")
+    def carry_partners_endpoint(
+        character_id: str,
+        balance_window: str | None = Query(None),
+        min_games: int = Query(1, ge=1),
+    ) -> dict[str, object]:
+        db, demo = _resolve_database()
+        with db:
+            resolved_window = balance_window or default_balance_window(db)
+            if resolved_window is None:
+                raise HTTPException(status_code=404, detail="No data available")
+            _require_carry(db, character_id, resolved_window)
+            associations = carry_partner_associations(db, character_id, resolved_window, min_games=min_games)
+        return {
+            "demo": demo,
+            "backend": db.dialect,
+            "balance_window": resolved_window,
+            "character_id": character_id,
+            "partners": [asdict(a) for a in associations],
+        }
+
+    @app.get("/api/carries/{character_id}/items")
+    def carry_items_endpoint(
+        character_id: str,
+        balance_window: str | None = Query(None),
+        min_pair_games: int = Query(2, ge=1),
+        min_package_games: int = Query(2, ge=1),
+    ) -> dict[str, object]:
+        db, demo = _resolve_database()
+        with db:
+            resolved_window = balance_window or default_balance_window(db)
+            if resolved_window is None:
+                raise HTTPException(status_code=404, detail="No data available")
+            _require_carry(db, character_id, resolved_window)
+            stats = item_package_stats(
+                db,
+                character_id,
+                resolved_window,
+                min_pair_games=min_pair_games,
+                min_package_games=min_package_games,
+            )
+        return {
+            "demo": demo,
+            "backend": db.dialect,
+            "balance_window": resolved_window,
+            "character_id": character_id,
+            "items": [asdict(a) for a in stats["items"]],
+            "pairs": [asdict(a) for a in stats["pairs"]],
+            "packages": [asdict(a) for a in stats["packages"]],
+        }
+
+    @app.get("/api/carries/{character_id}/traits")
+    def carry_traits_endpoint(
+        character_id: str,
+        balance_window: str | None = Query(None),
+        min_games: int = Query(2, ge=1),
+    ) -> dict[str, object]:
+        db, demo = _resolve_database()
+        with db:
+            resolved_window = balance_window or default_balance_window(db)
+            if resolved_window is None:
+                raise HTTPException(status_code=404, detail="No data available")
+            _require_carry(db, character_id, resolved_window)
+            associations = trait_breakpoint_associations(
+                db, character_id, resolved_window, min_games=min_games
+            )
+        return {
+            "demo": demo,
+            "backend": db.dialect,
+            "balance_window": resolved_window,
+            "character_id": character_id,
+            "traits": [asdict(a) for a in associations],
+        }
+
+    @app.get("/api/discovery")
+    def discovery(
+        max_cost: int = Query(3, ge=1, le=5),
+        min_samples: int = Query(10, ge=1, le=100000),
+        balance_window: str | None = Query(None),
+        top_n: int = Query(5, ge=1, le=20, description="Best partners/items/traits kept per candidate"),
+        limit: int = Query(20, ge=1, le=200),
+    ) -> dict[str, object]:
+        db, demo = _resolve_database()
+        with db:
+            resolved_window = balance_window or default_balance_window(db)
+            candidates = discover_candidates(
+                db,
+                balance_window=resolved_window,
+                min_cost=1,
+                max_cost=max_cost,
+                min_samples=min_samples,
+                top_n=top_n,
+            )[:limit]
+        return {
+            "demo": demo,
+            "backend": db.dialect,
+            "balance_window": resolved_window,
+            "candidates": [asdict(c) for c in candidates],
+        }
+
+    @app.get("/api/discovery/{character_id}")
+    def discovery_detail(
+        character_id: str,
+        balance_window: str | None = Query(None),
+        top_n: int = Query(8, ge=1, le=20),
+    ) -> dict[str, object]:
+        db, demo = _resolve_database()
+        with db:
+            resolved_window = balance_window or default_balance_window(db)
+            candidate = None
+            if resolved_window is not None:
+                candidate = discovery_candidate_for(
+                    db, character_id, balance_window=resolved_window, top_n=top_n
+                )
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="Carry not found")
+        return {
+            "demo": demo,
+            "backend": db.dialect,
+            "balance_window": resolved_window,
+            "candidate": asdict(candidate),
         }
 
     return app

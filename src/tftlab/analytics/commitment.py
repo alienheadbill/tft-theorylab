@@ -13,13 +13,37 @@ class CarryStat:
     cost: int
     appearances: int
     commitment_games: int
+    #: Deprecated alias for `commitment_rate`, kept for backward
+    #: compatibility with existing API/CLI consumers. New code should read
+    #: `appearance_rate`/`commitment_rate`/`carry_conversion_rate` instead of
+    #: treating this single number as "the" rarity measure -- see those
+    #: fields' docstrings below for why they're not interchangeable.
     usage_rate: float
+    #: Champion pick/presence rate: appearances / total participants. How
+    #: often this champion shows up on a board at all, regardless of build.
+    appearance_rate: float
+    #: Carry-commitment rate: commitment_games / total participants. How
+    #: often a board features THIS unit built as a >=2-item carry. This is
+    #: what `usage_rate` has always actually measured.
+    commitment_rate: float
+    #: Of the games this champion appeared in at all, how often it was
+    #: built as a committed carry: commitment_games / appearances. Distinct
+    #: from the two rates above: a champion can be common (high
+    #: appearance_rate) yet almost always committed when picked (high
+    #: carry_conversion_rate), or rare (low appearance_rate) yet rarely
+    #: converted into a real carry even then (low carry_conversion_rate).
+    carry_conversion_rate: float
     avg_placement: float
     top4_rate: float
     win_rate: float
     hit_3star_rate: float
     hit_top4_rate: float | None
     miss_top4_rate: float | None
+    #: Raw commitment-game counts behind hit_top4_rate/miss_top4_rate,
+    #: exposed so callers can apply their own shrinkage to these (typically
+    #: small) subgroups instead of treating the raw rates as fully reliable.
+    hit_games: int
+    miss_games: int
     avg_placement_hit: float | None
     avg_placement_miss: float | None
     posterior_top4: float
@@ -156,6 +180,7 @@ def carry_commitment_stats(
 
     stats: list[CarryStat] = []
     for r in rows:
+        appearances = int(r[3])
         n = int(r[4])
         top4s = int(r[6] or 0)
         wins = int(r[7] or 0)
@@ -166,6 +191,8 @@ def carry_commitment_stats(
         miss_top4s = int(r[12] or 0)
         avg_place_miss = r[13]
         usage = n / total_participants
+        appearance_rate = appearances / total_participants
+        carry_conversion_rate = (n / appearances) if appearances else 0.0
         top4 = top4s / n
         win = wins / n
         hit_rate = hits / n
@@ -196,15 +223,20 @@ def carry_commitment_stats(
                 character_id=str(r[0]),
                 name=str(r[1]),
                 cost=int(r[2]),
-                appearances=int(r[3]),
+                appearances=appearances,
                 commitment_games=n,
                 usage_rate=usage,
+                appearance_rate=appearance_rate,
+                commitment_rate=usage,
+                carry_conversion_rate=carry_conversion_rate,
                 avg_placement=float(r[5]),
                 top4_rate=top4,
                 win_rate=win,
                 hit_3star_rate=hit_rate,
                 hit_top4_rate=(hit_top4s / hits) if hits else None,
                 miss_top4_rate=(miss_top4s / misses) if misses else None,
+                hit_games=hits,
+                miss_games=misses,
                 avg_placement_hit=(float(avg_place_hit) if avg_place_hit is not None else None),
                 avg_placement_miss=(float(avg_place_miss) if avg_place_miss is not None else None),
                 posterior_top4=posterior_top4,
