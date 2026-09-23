@@ -8,9 +8,13 @@ some matches. `tftlab.unreal_patch` resolves the real client patch from
 (that one splits an already-known client patch; this one determines the
 client patch in the first place).
 
-All timestamps used here are fabricated, clearly-labeled test fixtures --
-NOT real Riot patch deployment dates. The production `UNREAL_PATCH_REGISTRY`
-is intentionally empty pending external verification (see that module).
+Most timestamps used here are fabricated, clearly-labeled test fixtures --
+NOT real Riot patch deployment dates -- injected via an explicit `registry=`
+argument so they never depend on (or affect) the real, populated
+`UNREAL_PATCH_REGISTRY`. A separate section further down tests that real
+registry directly, using the actual conservative 18.2/18.3 classification
+windows and the actual production timestamp range reported by
+`tftlab patch-diagnostics`.
 """
 
 from pathlib import Path
@@ -19,6 +23,7 @@ from tftlab.balance_window import resolve_balance_window
 from tftlab.patch import patch_from_game_version
 from tftlab.storage import Database
 from tftlab.unreal_patch import (
+    UNREAL_PATCH_REGISTRY,
     UNRESOLVED_UNREAL_PATCH,
     UnrealPatchWindow,
     is_masked_unreal_version,
@@ -183,11 +188,64 @@ def test_unverified_window_is_ignored_even_alongside_a_usable_one() -> None:
     assert resolve_unreal_patch(2_500_000, registry=mixed) == "18.3"
 
 
-def test_production_registry_currently_has_no_usable_entries() -> None:
-    """Locks in the documented, intentional current state: the shipped
-    UNREAL_PATCH_REGISTRY must not silently classify production matches
-    until real, verified entries are added."""
-    assert resolve_unreal_patch(1_790_000_000_000) == UNRESOLVED_UNREAL_PATCH
+# --- The real, populated production registry (18.2/18.3 conservative
+# classification windows, added once real production diagnostics were
+# available). These are the ACTUAL values in UNREAL_PATCH_REGISTRY -- not
+# fabricated -- sourced from Riot's official TFT patch schedule
+# (https://support.riotgames.com/en-us/tft/events/patch-schedule-teamfight-tactics/),
+# deliberately conservative to exclude the reported early-NA-18.3 rollout
+# ambiguity around 2026-09-22/23. See unreal_patch.py's module comment for
+# the full reasoning.
+REAL_18_2_STARTS = 1_789_084_800_000  # 2026-09-11T00:00:00Z
+REAL_18_2_ENDS = 1_790_035_200_000  # 2026-09-22T00:00:00Z (exclusive)
+REAL_18_3_STARTS = 1_790_233_200_000  # 2026-09-24T07:00:00Z
+REAL_18_3_ENDS = 1_791_244_800_000  # 2026-10-06T00:00:00Z (exclusive)
+
+# The actual production timestamp range reported by `tftlab
+# patch-diagnostics` at the time this registry was populated: 47 matches,
+# all masked-Unreal, spanning this range.
+PRODUCTION_EARLIEST_GAME_DATETIME = 1_789_681_679_589  # 2026-09-17T21:47:59.589Z
+PRODUCTION_LATEST_GAME_DATETIME = 1_790_134_351_471  # 2026-09-23T03:32:31.471Z
+
+
+def test_production_registry_has_exactly_two_usable_windows() -> None:
+    assert len(UNREAL_PATCH_REGISTRY) == 2
+    assert all(window.is_usable for window in UNREAL_PATCH_REGISTRY)
+    assert {window.client_patch for window in UNREAL_PATCH_REGISTRY} == {"18.2", "18.3"}
+
+
+def test_real_18_2_window_resolves() -> None:
+    assert resolve_unreal_patch(REAL_18_2_STARTS) == "18.2"
+    assert resolve_unreal_patch(REAL_18_2_ENDS - 1) == "18.2"
+    # Production's earliest known masked-Unreal match falls inside this
+    # conservative window and must resolve to 18.2.
+    assert resolve_unreal_patch(PRODUCTION_EARLIEST_GAME_DATETIME) == "18.2"
+
+
+def test_real_18_3_window_resolves() -> None:
+    assert resolve_unreal_patch(REAL_18_3_STARTS) == "18.3"
+    assert resolve_unreal_patch(REAL_18_3_ENDS - 1) == "18.3"
+
+
+def test_real_gap_between_18_2_and_18_3_remains_unresolved() -> None:
+    """The reported early-NA-18.3 rollout period (roughly 2026-09-22
+    through the conservative 18.3 window start) is a deliberate gap: it
+    must never be guessed as either patch."""
+    assert resolve_unreal_patch(REAL_18_2_ENDS) == UNRESOLVED_UNREAL_PATCH  # exactly 2026-09-22T00:00:00Z
+    assert resolve_unreal_patch(REAL_18_3_STARTS - 1) == UNRESOLVED_UNREAL_PATCH
+    # Production's LATEST known masked-Unreal match (2026-09-23T03:32:31Z)
+    # falls inside this gap -- the exact ambiguous transition period -- and
+    # must stay unresolved rather than being guessed as 18.2 or 18.3.
+    assert resolve_unreal_patch(PRODUCTION_LATEST_GAME_DATETIME) == UNRESOLVED_UNREAL_PATCH
+
+
+def test_real_18_2_window_composes_with_mid_patch_balance_window() -> None:
+    """The two registries still compose for the real 18.2 window, exactly
+    as they do for fabricated ones elsewhere in this file."""
+    resolved_patch = resolve_unreal_patch(PRODUCTION_EARLIEST_GAME_DATETIME)
+    assert resolved_patch == "18.2"
+    balance_window = resolve_balance_window(resolved_patch, PRODUCTION_EARLIEST_GAME_DATETIME)
+    assert balance_window in ("18.2a", "18.2b")
 
 
 # --- Composition with the (separate) mid-patch balance-window registry ----
@@ -210,22 +268,42 @@ def test_mid_patch_balance_split_still_works_after_client_patch_resolution(tmp_p
 # --- End-to-end ingest behavior --------------------------------------------
 
 
-def test_ingest_of_masked_unreal_match_with_unresolved_registry(tmp_path: Path) -> None:
-    """End-to-end: ingesting a masked-Unreal match against the real
-    (currently empty) production registry must land it in the explicit
-    unresolved state, never a fake shared patch/balance-window bucket."""
+def test_ingest_of_masked_unreal_match_in_the_real_gap_stays_unresolved(tmp_path: Path) -> None:
+    """End-to-end: ingesting a masked-Unreal match whose timestamp falls in
+    the real registry's deliberate 18.2/18.3 gap must land it in the
+    explicit unresolved state, never a fake shared patch/balance-window
+    bucket."""
     with Database(tmp_path / "unreal.sqlite3") as db:
         db.ingest_match(
             make_match(
                 "UNREAL_1",
                 game_version=MASKED_VERSION,
-                game_datetime=1_790_000_000_000,
+                game_datetime=PRODUCTION_LATEST_GAME_DATETIME,
                 units=[make_unit("TFT18_Foo", tier=2, items=[])],
             )
         )
         row = db.query_one("SELECT patch, balance_window FROM matches WHERE match_id = ?", ("UNREAL_1",))
 
     assert row == (UNRESOLVED_UNREAL_PATCH, None)
+
+
+def test_ingest_of_masked_unreal_match_in_the_real_18_2_window_resolves(tmp_path: Path) -> None:
+    """End-to-end counterpart: a masked-Unreal match whose timestamp falls
+    inside the real, conservative 18.2 window must resolve to a real
+    patch/balance_window, not stay unresolved."""
+    with Database(tmp_path / "unreal_resolved.sqlite3") as db:
+        db.ingest_match(
+            make_match(
+                "UNREAL_RESOLVED",
+                game_version=MASKED_VERSION,
+                game_datetime=PRODUCTION_EARLIEST_GAME_DATETIME,
+                units=[make_unit("TFT18_Foo", tier=2, items=[])],
+            )
+        )
+        row = db.query_one("SELECT patch, balance_window FROM matches WHERE match_id = ?", ("UNREAL_RESOLVED",))
+
+    assert row[0] == "18.2"
+    assert row[1] in ("18.2a", "18.2b")
 
 
 def test_two_unresolved_unreal_matches_do_not_share_a_fake_bucket(tmp_path: Path) -> None:
