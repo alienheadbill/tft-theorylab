@@ -630,8 +630,12 @@ def validate_source_url(url: str | None) -> str | None:
 
 
 def _parse_noted_at(value: str | None) -> str:
-    """ISO date or datetime -> canonical UTC timestamp. Defaults to now;
-    rejects dates more than a day in the future."""
+    """ISO date or datetime -> canonical UTC timestamp. Defaults to now.
+
+    A note records research that already happened, so it can't be dated
+    later than the current UTC time. No clock-skew allowance: the date is
+    checked against the clock of the same machine that parses it. A bare
+    date means midnight UTC, so today's date is always accepted."""
     if value is None:
         return _now()
     text = _clean_text(value, "noted_at") or ""
@@ -642,8 +646,8 @@ def _parse_noted_at(value: str | None) -> str:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     parsed = parsed.astimezone(timezone.utc)
-    if (parsed - datetime.now(timezone.utc)).days >= 1:
-        raise ExperimentError("noted_at can't be in the future")
+    if parsed > datetime.now(timezone.utc):
+        raise ExperimentError("noted_at can't be in the future (research that hasn't happened yet)")
     return parsed.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 

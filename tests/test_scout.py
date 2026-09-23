@@ -242,6 +242,49 @@ def test_good_source_urls_are_kept(db: Database) -> None:
         assert ex.add_field_note(db, e.slug, kind="scout_report", body="x", source_url=url)["source_url"] == url
 
 
+def _iso(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@pytest.mark.parametrize(
+    "noted_at",
+    [
+        pytest.param(lambda now: _iso(now + timedelta(hours=3)), id="hours-ahead-utc"),
+        pytest.param(lambda now: (now + timedelta(hours=3)).astimezone(timezone(timedelta(hours=2))).isoformat(),
+                     id="hours-ahead-with-offset"),
+        pytest.param(lambda now: (now + timedelta(hours=3)).replace(tzinfo=None).isoformat(timespec="seconds"),
+                     id="hours-ahead-naive-is-utc"),
+        pytest.param(lambda now: _iso(now + timedelta(minutes=5)), id="minutes-ahead"),
+        pytest.param(lambda now: (now + timedelta(days=4)).date().isoformat(), id="days-ahead-date"),
+    ],
+)
+def test_future_noted_at_is_rejected(db: Database, noted_at) -> None:
+    e = ex.create_experiment(db, {"title": "k"})
+    with pytest.raises(ex.ExperimentError, match="future"):
+        ex.add_field_note(db, e.slug, kind="my_note", body="x", noted_at=noted_at(datetime.now(timezone.utc)))
+    assert ex.get_experiment(db, e.slug).field_notes == []
+
+
+def test_past_and_current_noted_at_are_accepted_and_stored_as_utc(db: Database) -> None:
+    e = ex.create_experiment(db, {"title": "k"})
+    now = datetime.now(timezone.utc)
+
+    past = ex.add_field_note(db, e.slug, kind="my_note", body="past", noted_at="2026-09-20T10:30:00+02:00")
+    assert past["noted_at"] == "2026-09-20T08:30:00Z"  # canonical UTC
+
+    recent_dt = now - timedelta(seconds=5)
+    recent = ex.add_field_note(db, e.slug, kind="my_note", body="recent", noted_at=recent_dt.isoformat())
+    assert recent["noted_at"] == _iso(recent_dt)
+
+    today = ex.add_field_note(db, e.slug, kind="my_note", body="today", noted_at=now.date().isoformat())
+    assert today["noted_at"] == f"{now.date().isoformat()}T00:00:00Z"  # a bare date is midnight UTC
+
+    default = ex.add_field_note(db, e.slug, kind="my_note", body="default")
+    after = datetime.now(timezone.utc)
+    stamped = datetime.strptime(default["noted_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    assert now - timedelta(seconds=1) <= stamped <= after
+
+
 def test_field_notes_are_chronological(db: Database) -> None:
     e = ex.create_experiment(db, {"title": "k"})
     for when, body in (("2026-09-22", "second"), ("2026-09-20", "first"), ("2026-09-22", "third"), ("2026-09-23T08:00:00Z", "fourth")):

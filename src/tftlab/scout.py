@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .analytics import default_balance_window, discovery_candidate_for
-from .analytics.partners import _carry_commitment_games_with_partners
+from .analytics import carry_commitment_games_with_partners, default_balance_window, discovery_candidate_for
 from .experiments import Experiment, add_field_note, list_field_notes
 from .roster import Roster, id_key, load_roster, name_key
 from .sources import scout_checklist
@@ -207,7 +206,7 @@ def riot_evidence(
     })
 
     # How often the idea's own pieces showed up with the committed carry.
-    partner_games, _, _ = _carry_commitment_games_with_partners(db, best.character_id, window)
+    partner_games, _, _ = carry_commitment_games_with_partners(db, best.character_id, window)
     others = [u for u in fp["core_units"] if u["key"] != carry["key"]]
     unit_ids = {u["key"]: set(_ids_in_data(db, u, window, roster)) for u in others}
     result["core_units"] = [

@@ -6,7 +6,7 @@ from ..storage import Database
 from .association import Association, compute_associations
 
 
-def _carry_commitment_games_with_partners(
+def carry_commitment_games_with_partners(
     db: Database,
     character_id: str,
     balance_window: str,
@@ -15,6 +15,12 @@ def _carry_commitment_games_with_partners(
 ) -> tuple[list[tuple[int, frozenset[str]]], dict[str, str], dict[str, int]]:
     """The carry's commitment games, each paired with the set of other
     champions on that same board, plus name/cost lookups for those partners.
+
+    Returns `(games, names, costs)`: `games` is one `(placement,
+    frozenset(partner character_ids))` per committed board in the window,
+    the same universe `carry_partner_associations` scores. Public so other
+    features (e.g. Comp Scout's co-occurrence counts) can reuse the exact
+    commitment-game definition instead of re-querying it.
     """
     rows = db.query_all(
         """
@@ -70,7 +76,7 @@ def carry_partner_associations(
     shrinkage-adjusted delta and confidence will correctly keep it from
     outranking a partner with a large, consistently-good sample.
     """
-    games, names, costs = _carry_commitment_games_with_partners(
+    games, names, costs = carry_commitment_games_with_partners(
         db, character_id, balance_window, commitment_items=commitment_items
     )
     return compute_associations(
