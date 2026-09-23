@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -249,6 +250,23 @@ def verify_riot() -> None:
     )
 
 
+def _format_epoch_ms(ms: int | None) -> str:
+    if ms is None:
+        return "n/a"
+    return f"{ms} ({datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()})"
+
+
+def _print_distribution(label: str, distribution: dict) -> None:
+    """Diagnostic-only value -> count table, capped so a store with many
+    distinct raw game_version strings doesn't flood the terminal."""
+    console.print(f"  {label}:")
+    top = sorted(distribution.items(), key=lambda kv: kv[1], reverse=True)[:10]
+    for value, count in top:
+        console.print(f"    {value!r}: {count}")
+    if len(distribution) > len(top):
+        console.print(f"    ... and {len(distribution) - len(top)} more distinct value(s)")
+
+
 @app.command("validate-live-data")
 def validate_live_data_command(
     db: str = typer.Option(
@@ -301,10 +319,89 @@ def validate_live_data_command(
     console.print(f"Duplicate match IDs: {report.duplicate_match_ids}")
     console.print(f"Participants without units: {report.participants_without_units}")
 
+    console.print(f"Unresolved Unreal-era matches: {report.unresolved_unreal_matches}")
+    if report.unresolved_unreal_matches:
+        console.print(
+            "[bold yellow]  These have a masked Unreal-era game_version with no usable (verified + sourced) "
+            "window in tftlab.unreal_patch.UNREAL_PATCH_REGISTRY. Their balance_window is intentionally left "
+            "unset (never a fake shared bucket), so they're excluded from every balance-window-scoped "
+            "analytics query until a real cutover window is added -- see the diagnostics below.[/bold yellow]"
+        )
+        console.print(
+            f"  Earliest: {_format_epoch_ms(report.unresolved_unreal_earliest_game_datetime)}"
+        )
+        console.print(
+            f"  Latest: {_format_epoch_ms(report.unresolved_unreal_latest_game_datetime)}"
+        )
+
+    console.print(
+        f"Unreal patch registry: {report.unreal_registry_usable_windows}/{report.unreal_registry_total_windows} "
+        "window(s) usable (verified + sourced)"
+    )
+    if report.unreal_registry_total_windows > report.unreal_registry_usable_windows:
+        console.print(
+            "[bold yellow]  One or more registered windows are unverified or missing a source -- they are "
+            "NOT being used to classify any match. Confirm the timestamp against Riot's patch notes and set "
+            "verified=True with a source, or the window has no effect.[/bold yellow]"
+        )
+
+    console.print("\n[bold]Diagnostics[/bold] (store-wide, not scoped to the balance window above)")
+    console.print(f"  Earliest game_datetime: {_format_epoch_ms(report.earliest_game_datetime)}")
+    console.print(f"  Latest game_datetime: {_format_epoch_ms(report.latest_game_datetime)}")
+    _print_distribution("Raw game_version distribution", report.game_version_distribution)
+    _print_distribution("Resolved client patch distribution", report.client_patch_distribution)
+    _print_distribution("Balance-window distribution", report.balance_window_distribution)
+
     if report.is_severe:
         console.print("\n[bold red]SEVERE integrity issues detected.[/bold red]")
         raise typer.Exit(code=1)
     console.print("\n[green]No severe integrity issues detected.[/green]")
+
+
+@app.command("patch-diagnostics")
+def patch_diagnostics_command(
+    db: str = typer.Option(
+        None, "--db", help="SQLite path or postgres:// URL; defaults to DATABASE_URL or TFT_DB_PATH"
+    ),
+) -> None:
+    """Store-wide, read-only game_version/patch/balance_window diagnostics.
+
+    Makes no Riot API or CommunityDragon calls, runs no discovery/analytics
+    queries, and deletes nothing -- it only reads the `matches` table as
+    already ingested. Purpose-built to read off the real game_datetime
+    range for masked Unreal-era matches (see `tftlab.unreal_patch`) before
+    filling in `UNREAL_PATCH_REGISTRY`, without running another Riot
+    ingest just to see it.
+
+    Connecting to the database still runs the normal, safe, idempotent
+    Unreal-patch backfill migration (`Database._backfill_unreal_patches`),
+    same as every other command -- a row still using the pre-fix masked
+    fallback value may move to the explicit unresolved state (never
+    deleted, never combined into a fake bucket); that's expected and is
+    exactly the self-healing behavior the migration is designed to do.
+    """
+    with Database(_resolve_db_target(db)) as database:
+        report = validate_live_data(database, metadata=None)
+
+    total_matches = sum(report.game_version_distribution.values())
+    console.print(f"Total matches (store-wide): {total_matches}")
+    console.print(f"Earliest game_datetime: {_format_epoch_ms(report.earliest_game_datetime)}")
+    console.print(f"Latest game_datetime: {_format_epoch_ms(report.latest_game_datetime)}")
+    _print_distribution("Raw game_version distribution", report.game_version_distribution)
+    _print_distribution("Current patch distribution", report.client_patch_distribution)
+    _print_distribution("Balance-window distribution", report.balance_window_distribution)
+
+    console.print(f"Masked-Unreal (unresolved) matches: {report.unresolved_unreal_matches}")
+    console.print(
+        f"  Earliest: {_format_epoch_ms(report.unresolved_unreal_earliest_game_datetime)}"
+    )
+    console.print(
+        f"  Latest: {_format_epoch_ms(report.unresolved_unreal_latest_game_datetime)}"
+    )
+    console.print(
+        f"Unreal patch registry: {report.unreal_registry_usable_windows}/{report.unreal_registry_total_windows} "
+        "window(s) usable (verified + sourced)"
+    )
 
 
 _LOW_SAMPLE_COMMITMENT_GAMES = 30

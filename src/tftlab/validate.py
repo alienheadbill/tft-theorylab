@@ -7,6 +7,7 @@ from .analytics import default_balance_window
 from .cdragon import SetMetadata
 from .riot import RANKED_TFT_QUEUE_ID
 from .storage import Database
+from .unreal_patch import UNREAL_PATCH_REGISTRY, UNRESOLVED_UNREAL_PATCH
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,40 @@ class IntegrityReport:
     malformed_placements: int
     duplicate_match_ids: int
     participants_without_units: int
+    #: How many matches, store-wide, have a masked-Unreal `game_version`
+    #: that `resolve_unreal_patch` couldn't place in any registered cutover
+    #: (`patch == UNRESOLVED_UNREAL_PATCH`). Always <= `matches_missing_
+    #: balance_window` (an unresolved match's `balance_window` is always
+    #: `None`, by design -- see `normalize.normalize_match`); broken out
+    #: separately so "the ingest pipeline is broken" and "we just haven't
+    #: registered this Unreal-era patch cutover yet" aren't conflated.
+    unresolved_unreal_matches: int
+    #: The `game_datetime` range specifically among unresolved-Unreal
+    #: matches (`None` if there are none) -- exactly what's needed to
+    #: derive a real `UnrealPatchWindow` for `UNREAL_PATCH_REGISTRY`
+    #: without running another ingest just to see it.
+    unresolved_unreal_earliest_game_datetime: int | None
+    unresolved_unreal_latest_game_datetime: int | None
+    #: How many `UNREAL_PATCH_REGISTRY` entries exist vs. how many are
+    #: actually usable for resolution (`UnrealPatchWindow.is_usable`:
+    #: verified and sourced). A gap between these two numbers means someone
+    #: added a provisional/unsourced window that is silently NOT being used
+    #: to classify any match -- surfaced here so that never goes unnoticed.
+    unreal_registry_total_windows: int
+    unreal_registry_usable_windows: int
+    #: Diagnostic-only, store-wide (not scoped to `balance_window` like the
+    #: fields above -- their whole point is to be useful even when nothing
+    #: has resolved into a balance window at all): distinct raw
+    #: `game_version` strings, resolved `patch` values, and resolved
+    #: `balance_window` values, each mapped to how many matches have them,
+    #: plus the earliest/latest `game_datetime` seen. `None` is a valid key
+    #: in the patch/balance_window distributions (an unparseable/missing
+    #: value). Never includes full match payloads.
+    game_version_distribution: dict[str, int]
+    client_patch_distribution: dict[str | None, int]
+    balance_window_distribution: dict[str | None, int]
+    earliest_game_datetime: int | None
+    latest_game_datetime: int | None
 
     @property
     def is_severe(self) -> bool:
@@ -60,7 +95,10 @@ class IntegrityReport:
         can legitimately happen right after a patch before CommunityDragon
         updates, or for rare special units. A missing balance window, an
         out-of-range placement, a duplicate primary key, or a participant
-        with no board at all indicate the ingest pipeline itself is broken.
+        with no board at all indicate the ingest pipeline itself is broken
+        (or, for a missing balance window specifically, that some matches
+        are waiting on an Unreal-era patch registry entry -- still worth
+        failing loudly on rather than silently analyzing a partial dataset).
         """
         return bool(
             self.matches_missing_balance_window
@@ -185,6 +223,26 @@ def validate_live_data(
     matches_missing_balance_window = db.query_one(
         "SELECT COUNT(*) FROM matches WHERE balance_window IS NULL"
     )[0]
+    unresolved_unreal_matches = db.query_one(
+        "SELECT COUNT(*) FROM matches WHERE patch = ?", (UNRESOLVED_UNREAL_PATCH,)
+    )[0]
+    unresolved_unreal_earliest_game_datetime, unresolved_unreal_latest_game_datetime = db.query_one(
+        "SELECT MIN(game_datetime), MAX(game_datetime) FROM matches WHERE patch = ?", (UNRESOLVED_UNREAL_PATCH,)
+    ) or (None, None)
+    unreal_registry_total_windows = len(UNREAL_PATCH_REGISTRY)
+    unreal_registry_usable_windows = sum(1 for w in UNREAL_PATCH_REGISTRY if w.is_usable)
+    game_version_distribution = {
+        str(v): int(n) for v, n in db.query_all("SELECT game_version, COUNT(*) FROM matches GROUP BY game_version")
+    }
+    client_patch_distribution = {
+        v: int(n) for v, n in db.query_all("SELECT patch, COUNT(*) FROM matches GROUP BY patch")
+    }
+    balance_window_distribution = {
+        v: int(n) for v, n in db.query_all("SELECT balance_window, COUNT(*) FROM matches GROUP BY balance_window")
+    }
+    earliest_game_datetime, latest_game_datetime = db.query_one(
+        "SELECT MIN(game_datetime), MAX(game_datetime) FROM matches"
+    ) or (None, None)
     malformed_placements = db.query_one(
         "SELECT COUNT(*) FROM participants WHERE placement < 1 OR placement > 8"
     )[0]
@@ -216,4 +274,14 @@ def validate_live_data(
         malformed_placements=malformed_placements,
         duplicate_match_ids=duplicate_match_ids,
         participants_without_units=participants_without_units,
+        unresolved_unreal_matches=unresolved_unreal_matches,
+        unresolved_unreal_earliest_game_datetime=unresolved_unreal_earliest_game_datetime,
+        unresolved_unreal_latest_game_datetime=unresolved_unreal_latest_game_datetime,
+        unreal_registry_total_windows=unreal_registry_total_windows,
+        unreal_registry_usable_windows=unreal_registry_usable_windows,
+        game_version_distribution=game_version_distribution,
+        client_patch_distribution=client_patch_distribution,
+        balance_window_distribution=balance_window_distribution,
+        earliest_game_datetime=earliest_game_datetime,
+        latest_game_datetime=latest_game_datetime,
     )

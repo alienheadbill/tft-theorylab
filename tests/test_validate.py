@@ -182,3 +182,57 @@ def test_queue_distribution_reports_non_target_matches_without_deleting_them(tmp
     assert report.target_queue_matches == 3
     assert report.non_target_queue_matches == 2
     assert stored_matches == 5
+
+
+def test_unresolved_unreal_matches_reported_and_marked_severe(tmp_path: Path) -> None:
+    """A masked-Unreal match with no matching UNREAL_PATCH_REGISTRY entry
+    must be surfaced prominently (severe, via the existing missing-
+    balance-window check) and counted separately so it reads as "needs a
+    registry entry", not "the ingest pipeline is broken"."""
+    with Database(tmp_path / "unreal.sqlite3") as db:
+        db.ingest_match(
+            make_match(
+                "UNREAL_1",
+                game_version="TFT Unreal Version ?.?.?.?",
+                game_datetime=1_790_000_000_000,
+                units=[make_unit("TFT18_Foo", tier=2, items=[])],
+            )
+        )
+        report = validate_live_data(db)
+
+    assert report.unresolved_unreal_matches == 1
+    assert report.matches_missing_balance_window == 1
+    assert report.is_severe is True
+
+
+def test_diagnostic_distributions_are_store_wide_not_window_scoped(tmp_path: Path) -> None:
+    """The game_version/patch/balance_window distributions and timestamp
+    range must stay useful even when nothing resolves into a balance
+    window at all -- that's exactly the situation an unresolved Unreal-era
+    dataset is in, and the whole reason these diagnostics exist."""
+    with Database(tmp_path / "diagnostics.sqlite3") as db:
+        db.ingest_match(
+            make_match(
+                "UNREAL_1",
+                game_version="TFT Unreal Version ?.?.?.?",
+                game_datetime=1_000,
+                units=[make_unit("TFT18_Foo", tier=2, items=[])],
+            )
+        )
+        db.ingest_match(
+            make_match(
+                "UNREAL_2",
+                game_version="TFT Unreal Version ?.?.?.?",
+                game_datetime=5_000,
+                units=[make_unit("TFT18_Foo", tier=2, items=[])],
+            )
+        )
+        report = validate_live_data(db)
+
+    # No balance window resolves at all, yet the diagnostics still work.
+    assert report.balance_window is None
+    assert report.game_version_distribution == {"TFT Unreal Version ?.?.?.?": 2}
+    assert report.client_patch_distribution == {"unreal-unresolved": 2}
+    assert report.balance_window_distribution == {None: 2}
+    assert report.earliest_game_datetime == 1_000
+    assert report.latest_game_datetime == 5_000

@@ -6,6 +6,7 @@ from .balance_window import resolve_balance_window
 from .items import completed_item_count
 from .models import NormalizedMatch, NormalizedParticipant, NormalizedUnit
 from .patch import patch_from_game_version
+from .unreal_patch import UNRESOLVED_UNREAL_PATCH
 
 CostLookup = Callable[[str], "int | None"]
 
@@ -37,7 +38,17 @@ def normalize_match(match: dict[str, Any], *, cost_lookup: CostLookup | None = N
     match_id = str(metadata.get("match_id") or info.get("match_id") or "unknown")
     game_version = info.get("game_version")
     game_datetime = info.get("game_datetime")
-    client_patch = patch_from_game_version(game_version)
+    client_patch = patch_from_game_version(game_version, game_datetime)
+    # An unresolved masked-Unreal match must never get a balance window: it
+    # would either be `None` already (resolve_balance_window's normal
+    # behavior for an unregistered "patch") or -- worse -- collapse every
+    # such match into one shared fake window if `UNRESOLVED_UNREAL_PATCH`
+    # ever coincidentally matched a registered balance-window patch. Neither
+    # is correct, so this is short-circuited explicitly rather than relying
+    # on resolve_balance_window to happen to do the right thing.
+    balance_window = (
+        None if client_patch == UNRESOLVED_UNREAL_PATCH else resolve_balance_window(client_patch, game_datetime)
+    )
 
     participants: list[NormalizedParticipant] = []
     for idx, p in enumerate(info.get("participants", [])):
@@ -72,7 +83,7 @@ def normalize_match(match: dict[str, Any], *, cost_lookup: CostLookup | None = N
         match_id=match_id,
         game_version=game_version,
         patch=client_patch,
-        balance_window=resolve_balance_window(client_patch, game_datetime),
+        balance_window=balance_window,
         game_type=info.get("tft_game_type"),
         queue_id=info.get("queue_id"),
         set_number=info.get("tft_set_number"),
