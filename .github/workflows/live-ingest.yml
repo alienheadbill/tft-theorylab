@@ -1,0 +1,100 @@
+name: Live ingest
+
+# Manually-triggered only, on purpose: this hits the real Riot API and
+# CommunityDragon and writes to the production database (via its external
+# Postgres URL), so it must never run on push/pull_request, and has no
+# schedule yet -- that's a deliberate follow-up milestone, not this one.
+on:
+  workflow_dispatch: {}
+
+# The workflow can be started against any branch from the Actions UI, but
+# it must only ever run against production config from `main` -- enforced
+# in "Validate production configuration" below, not just by convention.
+permissions:
+  contents: read
+
+# A single fixed group serializes runs (queued, never cancelled) so two
+# manually-triggered live ingests can never write to production at once.
+concurrency:
+  group: live-ingest-production
+  cancel-in-progress: false
+
+jobs:
+  live-ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Runs before checkout/install and before any Riot or database access:
+      # cheap fail-fast so a bad branch selection or missing/malformed
+      # secret never gets as far as a real network call. Static messages
+      # only -- never echoes RIOT_API_KEY or DATABASE_URL.
+      - name: Validate production configuration
+        env:
+          RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This workflow must be run with 'main' explicitly selected as the branch (got ${GITHUB_REF})." >&2
+            exit 1
+          fi
+          if [ -z "${RIOT_API_KEY}" ]; then
+            echo "::error::RIOT_API_KEY repository secret is not set." >&2
+            exit 1
+          fi
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "::error::DATABASE_URL repository secret is not set. Refusing to proceed: the CLI's local-SQLite fallback must never be used for production ingestion." >&2
+            exit 1
+          fi
+          case "${DATABASE_URL}" in
+            postgres://*|postgresql://*) ;;
+            *)
+              echo "::error::DATABASE_URL must start with postgres:// or postgresql://." >&2
+              exit 1
+              ;;
+          esac
+          echo "Production configuration looks valid."
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package with Postgres support
+        run: pip install -e ".[dev,postgres]"
+
+      # Each CLI command below already exits non-zero on the failure it
+      # owns (invalid/expired key, CommunityDragon unreachable, unopenable
+      # database, severe integrity issues), and a failed step stops the
+      # job here -- no extra continue-on-error/if-guards needed. A handful
+      # of individual Riot match-fetch failures during ingestion do NOT
+      # fail this step: `ingest_ladder` counts those in `failed_requests`
+      # and keeps going, which is existing, unchanged behavior.
+      - name: Verify Riot API
+        env:
+          RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
+          TFT_PLATFORM: na1
+          TFT_REGION: americas
+        run: tftlab verify-riot
+
+      - name: Ingest first live sample
+        env:
+          RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TFT_PLATFORM: na1
+          TFT_REGION: americas
+        # Challenger only, 10 seed players, 5 matches/player -- intentionally
+        # tiny for this first controlled run. No --allow-degraded-costs: if
+        # CommunityDragon can't be reached, this must fail rather than
+        # silently ingesting rarity+1 fallback costs as if authoritative.
+        run: tftlab ingest-riot --players 10 --matches-per-player 5
+
+      - name: Validate ingested data
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: tftlab validate-live-data
+
+      - name: Run discovery smoke test
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: tftlab discovery-smoke
