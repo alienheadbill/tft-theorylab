@@ -13,7 +13,7 @@ import pytest
 
 from tftlab.analytics import carry_commitment_stats, carry_partner_associations
 from tftlab.analytics.item_packages import _carry_commitment_item_games
-from tftlab.analytics.partners import _carry_commitment_games_with_partners
+from tftlab.analytics import carry_commitment_games_with_partners
 from tftlab.analytics.traits import _carry_commitment_trait_games
 from tftlab.storage import Database
 
@@ -129,7 +129,7 @@ def test_3star_hit_uses_a_relevant_committed_instance(tmp_path: Path) -> None:
 def test_partner_association_does_not_duplicate_the_game(tmp_path: Path) -> None:
     with Database(tmp_path / "dup_partners.sqlite3") as db:
         _seed_duplicate_champion_scenario(db)
-        games, _, _ = _carry_commitment_games_with_partners(db, CARRY, BALANCE_WINDOW)
+        games, _, _ = carry_commitment_games_with_partners(db, CARRY, BALANCE_WINDOW)
         associations = carry_partner_associations(db, CARRY, BALANCE_WINDOW, min_games=1)
 
     # Exactly 4 commitment games total, not 5 (DUP_GAME's two independently

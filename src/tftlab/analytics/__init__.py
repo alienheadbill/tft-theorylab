@@ -8,7 +8,7 @@ from .discovery import (
     discovery_candidate_for,
 )
 from .item_packages import CANONICAL_UNIT_TIEBREAK_SQL, item_package_stats
-from .partners import carry_partner_associations
+from .partners import carry_commitment_games_with_partners, carry_partner_associations
 from .traits import trait_breakpoint_associations
 
 __all__ = [
@@ -19,6 +19,7 @@ __all__ = [
     "Association",
     "compute_associations",
     "carry_partner_associations",
+    "carry_commitment_games_with_partners",
     "item_package_stats",
     "CANONICAL_UNIT_TIEBREAK_SQL",
     "trait_breakpoint_associations",

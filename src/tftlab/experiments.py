@@ -13,10 +13,10 @@ Storage layout (see `EXPERIMENT_TABLES_SQL`):
   one validated JSON document. It is always read and written whole and never
   queried field by field, so a JSON column keeps the schema stable while the
   comp format grows, and behaves identically on both backends.
-- `experiment_field_notes`: the dated research log future scouting will
-  append to (sightings, source URLs, similarity, Riot evidence, status
-  transitions). Nothing writes to it yet; it exists so that work attaches
-  without reshaping `experiments`.
+- `experiment_field_notes`: the dated research log (Riot evidence snapshots,
+  scout reports, mechanic notes, sightings, status changes). Written only
+  through `add_field_note` (the owner's CLI); see `FIELD_NOTE_KINDS` and
+  `tftlab.sources` for the vocabulary.
 
 Evidence status and notebook lifecycle are separate on purpose: evidence
 says what we can prove about the idea, lifecycle says what the owner is
@@ -32,6 +32,9 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
+
+from .sources import RESEARCH_LABELS, SOURCES_BY_KEY, resolve_source
 
 if TYPE_CHECKING:  # storage imports this module's DDL, so no runtime import back
     from .storage import Database
@@ -84,9 +87,18 @@ CREATE TABLE IF NOT EXISTS experiment_field_notes (
     source_name TEXT,
     source_url TEXT,
     data_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    source_key TEXT,
+    research_label TEXT
 );
 """
+
+# Columns added to experiment_field_notes after its first release (PR #12
+# created the table without them). Applied by storage on connect.
+FIELD_NOTE_COLUMN_MIGRATIONS: tuple[tuple[str, str], ...] = (
+    ("source_key", "TEXT"),
+    ("research_label", "TEXT"),
+)
 
 EXPERIMENT_INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_experiments_carry ON experiments(carry_character_id);
@@ -383,17 +395,7 @@ def _row_to_experiment(db: Database, row: tuple[Any, ...], *, with_field_notes: 
     tags = [r[0] for r in db.query_all(
         "SELECT tag FROM experiment_tags WHERE experiment_id = ? ORDER BY tag", (experiment_id,)
     )]
-    field_notes: list[dict[str, Any]] = []
-    if with_field_notes:
-        for n in db.query_all(
-            """SELECT noted_at, kind, evidence_status, body, source_name, source_url, data_json
-               FROM experiment_field_notes WHERE experiment_id = ? ORDER BY noted_at, created_at""",
-            (experiment_id,),
-        ):
-            field_notes.append({
-                "noted_at": n[0], "kind": n[1], "evidence_status": n[2], "body": n[3],
-                "source_name": n[4], "source_url": n[5], "data": json.loads(n[6] or "{}"),
-            })
+    field_notes = list_field_notes(db, experiment_id) if with_field_notes else []
     return Experiment(
         experiment_id=experiment_id, slug=slug, title=title, carry_character_id=carry_id,
         carry_name=carry_name, evidence_status=evidence, lifecycle=lifecycle, summary=summary,
@@ -534,6 +536,14 @@ def update_experiment(
         )
         if tags_changed:
             _replace_tags(db, current.experiment_id, tags)
+        if "evidence_status" in sets:
+            # Every evidence-status transition is logged, so the research
+            # log shows when (and from what) an idea's standing changed.
+            _insert_field_note(
+                db, current.experiment_id, kind="status_change",
+                body=f"Evidence status {current.evidence_status} \u2192 {sets['evidence_status']}",
+                evidence_status=sets["evidence_status"], noted_at=sets["updated_at"],
+            )
     except Exception:
         db.conn.rollback()
         raise
@@ -576,6 +586,194 @@ def list_experiments(
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     rows = db.query_all(f"{_SELECT}{where} ORDER BY updated_at DESC, created_at DESC, slug", params)
     return [_row_to_experiment(db, row) for row in rows]
+
+
+# ---------------------------------------------------------------- field notes
+
+FIELD_NOTE_KINDS: dict[str, str] = {
+    "riot_evidence": "Our data",
+    "scout_report": "Scout report",
+    "mechanic_note": "Mechanic note",
+    "community_sighting": "Community sighting",
+    "tournament_sighting": "Tournament sighting",
+    "my_note": "My note",
+    "status_change": "Status change",
+}
+# Labels a person may attach when recording what they found. NO_PUBLIC_MATCH_FOUND
+# is a claim about specific sources, so it must name the source it came from.
+# Kinds only Theory Lab writes, so nobody can hand-type "our data".
+_SYSTEM_KINDS = {
+    "riot_evidence": "run `tftlab experiment-scout <slug> --save`",
+    "status_change": "logged automatically when evidence status changes",
+}
+_LABELLED_KINDS = {"scout_report", "community_sighting", "tournament_sighting", "my_note"}
+_MAX_URL_LENGTH = 2000
+
+
+def _precise_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def validate_source_url(url: str | None) -> str | None:
+    """http(s) URLs only, with a real host and no embedded credentials."""
+    url = _clean_text(url, "url")
+    if url is None:
+        return None
+    if len(url) > _MAX_URL_LENGTH or any(ch.isspace() for ch in url):
+        raise ExperimentError("url must be a single http(s) link without spaces")
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname or "." not in parts.hostname:
+        raise ExperimentError(f"url must be an http(s) link to a real host (got {url!r})")
+    if parts.username or parts.password:
+        raise ExperimentError("url must not contain a username or password")
+    return url
+
+
+def _parse_noted_at(value: str | None) -> str:
+    """ISO date or datetime -> canonical UTC timestamp. Defaults to now.
+
+    A note records research that already happened, so it can't be dated
+    later than the current UTC time. No clock-skew allowance: the date is
+    checked against the clock of the same machine that parses it. A bare
+    date means midnight UTC, so today's date is always accepted."""
+    if value is None:
+        return _now()
+    text = _clean_text(value, "noted_at") or ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ExperimentError(f"noted_at must be a date like 2026-09-24 (got {value!r})") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    parsed = parsed.astimezone(timezone.utc)
+    if parsed > datetime.now(timezone.utc):
+        raise ExperimentError("noted_at can't be in the future (research that hasn't happened yet)")
+    return parsed.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _insert_field_note(
+    db: Database,
+    experiment_id: str,
+    *,
+    kind: str,
+    body: str,
+    noted_at: str,
+    source_key: str | None = None,
+    source_name: str | None = None,
+    source_url: str | None = None,
+    evidence_status: str | None = None,
+    research_label: str | None = None,
+    data: dict[str, Any] | None = None,
+) -> str:
+    note_id = f"note_{uuid.uuid4().hex[:12]}"
+    db.execute(
+        """INSERT INTO experiment_field_notes (
+               note_id, experiment_id, noted_at, kind, evidence_status, body, source_name,
+               source_url, data_json, created_at, source_key, research_label
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            note_id, experiment_id, noted_at, kind, evidence_status, body, source_name, source_url,
+            json.dumps(data or {}, separators=(",", ":"), sort_keys=True), _precise_now(),
+            source_key, research_label,
+        ),
+    )
+    return note_id
+
+
+def add_field_note(
+    db: Database,
+    key: str,
+    *,
+    kind: str,
+    body: str | None,
+    source: str | None = None,
+    source_url: str | None = None,
+    evidence_status: str | None = None,
+    research_label: str | None = None,
+    noted_at: str | None = None,
+    data: dict[str, Any] | None = None,
+    system: bool = False,
+) -> dict[str, Any]:
+    """Append one dated entry to an experiment's research log.
+
+    `source` may be a known source ("TFT Academy", "metatft", ...; see
+    `tftlab.sources.SOURCES`) or any other name, which is kept as written.
+    Adding a note never changes the experiment's evidence status.
+    """
+    experiment = get_experiment(db, key)
+    kind = (kind or "").strip().lower()
+    if kind not in FIELD_NOTE_KINDS:
+        raise ExperimentError(f"kind must be one of: {', '.join(FIELD_NOTE_KINDS)} (got {kind!r})")
+    if kind in _SYSTEM_KINDS and not system:
+        raise ExperimentError(f"{kind} notes are written by Theory Lab itself ({_SYSTEM_KINDS[kind]})")
+    body = _clean_text(body, "body")
+    if not body:
+        raise ExperimentError("a field note needs a body")
+
+    source_name = _clean_text(source, "source")
+    known = resolve_source(source_name)
+    source_key = known.key if known else ("other" if source_name else None)
+    if known:
+        source_name = known.label
+    if kind == "my_note" and source_key is None:
+        source_key, source_name = "user", SOURCES_BY_KEY["user"].label
+    url = validate_source_url(source_url)
+
+    status = None
+    if evidence_status:
+        status = _check_manual_evidence(evidence_status)
+
+    label = None
+    if research_label:
+        label = research_label.strip().upper().replace(" ", "_")
+        if label not in RESEARCH_LABELS:
+            raise ExperimentError(f"research label must be one of: {', '.join(RESEARCH_LABELS)}")
+        if kind not in _LABELLED_KINDS:
+            raise ExperimentError(f"a research label can't go on a {kind} note")
+        if label == "NO_PUBLIC_MATCH_FOUND" and not (source_name or url):
+            raise ExperimentError("NO_PUBLIC_MATCH_FOUND must name the source that was checked (--source/--url)")
+
+    if data is not None:
+        if not isinstance(data, dict):
+            raise ExperimentError("data must be a JSON object")
+        try:
+            json.dumps(data)
+        except (TypeError, ValueError) as exc:
+            raise ExperimentError(f"data must be plain JSON ({exc})") from exc
+
+    when = _parse_noted_at(noted_at)
+    try:
+        note_id = _insert_field_note(
+            db, experiment.experiment_id, kind=kind, body=body, noted_at=when, source_key=source_key,
+            source_name=source_name, source_url=url, evidence_status=status, research_label=label, data=data,
+        )
+        db.execute("UPDATE experiments SET updated_at = ? WHERE experiment_id = ?", (_now(), experiment.experiment_id))
+    except Exception:
+        db.conn.rollback()
+        raise
+    db.commit()
+    return next(n for n in list_field_notes(db, experiment.experiment_id) if n["id"] == note_id)
+
+
+def list_field_notes(db: Database, experiment_id: str) -> list[dict[str, Any]]:
+    """An experiment's research log, oldest first (ties keep insertion order)."""
+    rows = db.query_all(
+        """SELECT note_id, noted_at, kind, evidence_status, body, source_key, source_name, source_url,
+                  research_label, data_json
+           FROM experiment_field_notes WHERE experiment_id = ?
+           ORDER BY noted_at, created_at, note_id""",
+        (experiment_id,),
+    )
+    return [
+        {
+            "id": r[0], "noted_at": r[1], "kind": r[2], "kind_label": FIELD_NOTE_KINDS.get(r[2], r[2]),
+            "evidence_status": r[3], "body": r[4], "source_key": r[5], "source_name": r[6],
+            "source_url": r[7], "research_label": r[8],
+            "research_label_text": RESEARCH_LABELS[r[8]][0] if r[8] in RESEARCH_LABELS else None,
+            "data": json.loads(r[9] or "{}"),
+        }
+        for r in rows
+    ]
 
 
 # ---------------------------------------------------------------- examples

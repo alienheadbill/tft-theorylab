@@ -119,3 +119,31 @@ def test_experiment_pages_are_served(tmp_path: Path, monkeypatch: pytest.MonkeyP
         assert "/static/experiments.js" in response.text
     assert client.get("/static/experiments.js").status_code == 200
     assert 'href="/experiments"' in client.get("/").text
+
+
+def test_detail_serves_field_notes_fingerprint_and_checklist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tftlab.experiments import add_field_note
+
+    client, path = _live_client(tmp_path, monkeypatch)
+    with Database(path) as db:
+        e = create_experiment(db, {"title": "6 Ravager Kha'Zix", "carry_name": "Kha'Zix",
+                                   "comp": {"target_traits": ["6 Ravager"]}})
+        add_field_note(db, e.slug, kind="scout_report", source="TFT Academy", source_url="https://tftacademy.com/x",
+                       body="No sufficiently similar listed comp.", research_label="NO_PUBLIC_MATCH_FOUND",
+                       noted_at="2026-09-21")
+        add_field_note(db, e.slug, kind="my_note", body="hunch", noted_at="2026-09-20")
+
+    body = client.get(f"/api/experiments/{e.slug}").json()["experiment"]
+    assert body["fingerprint"]["signature"] == "carry=khazix;traits=ravager@6"
+    assert [n["kind"] for n in body["field_notes"]] == ["my_note", "scout_report"]  # oldest first
+    note = body["field_notes"][1]
+    assert {k: note[k] for k in ("kind_label", "source_key", "source_name", "source_url", "research_label_text")} == {
+        "kind_label": "Scout report", "source_key": "tft_academy", "source_name": "TFT Academy",
+        "source_url": "https://tftacademy.com/x", "research_label_text": "No public match found",
+    }
+    checked = {c["key"]: c["checked"] for c in body["scout_checklist"]}
+    assert checked == {"riot": False, "tft_academy": True, "metatft": False, "tactics_tools": False,
+                       "mechanics": False, "community": False, "tournament": False}
+    # The list view stays light: no notes or checklist there.
+    listed = client.get("/api/experiments").json()["experiments"][0]
+    assert "field_notes" not in listed and "scout_checklist" not in listed

@@ -180,23 +180,80 @@ function levelsBlock(c) {
 
 const safeUrl = url => (/^https?:\/\//i.test(url || '') ? url : null);
 
+const pct = v => (v == null ? '—' : `${(v * 100).toFixed(1)}%`);
+const readable = label =>
+  String(label)
+    .split('+')
+    .map(p => p.replace(/^(TFT\d*_Item_|TFT\d*_|DA_\d*_?)/, '').replace(/([a-z])([A-Z])/g, '$1 $2'))
+    .join(' + ');
+
+const researchStamp = n =>
+  n.research_label ? `<span class="stamp stamp-research">${esc(n.research_label_text || n.research_label)}</span>` : '';
+
+// The "our data" note, laid out as a small stats slip clipped into the log.
+function riotSlip(d) {
+  if (!d || d.status !== 'ok') return '';
+  const extras = [
+    ...(d.core_units || []).map(u => `with ${esc(u.name)}: ${u.games} of ${d.commitment_games} games`),
+    ...(d.trait_targets || []).map(t => `${t.breakpoint ? `${t.breakpoint} ` : ''}${esc(t.name)} active: ${t.games} of ${d.commitment_games} games`),
+  ];
+  const best = d.best_partners && d.best_partners.length ? `strongest partner: ${esc(readable(d.best_partners[0].label))} (${d.best_partners[0].games} g)` : '';
+  return `
+    <div class="stat-slip">
+      <p class="slip-head">window ${esc(d.balance_window)} · n = <b>${d.commitment_games}</b> committed games
+        ${d.low_sample ? '<span class="stamp stamp-low">Low sample</span>' : ''}</p>
+      <dl class="slip-stats">
+        <div><dt>avg</dt><dd>${d.avg_placement.toFixed(2)}</dd></div>
+        <div><dt>top 4</dt><dd>${pct(d.top4_rate)}</dd></div>
+        <div><dt>win</dt><dd>${pct(d.win_rate)}</dd></div>
+        <div><dt>3★</dt><dd>${pct(d.hit_3star_rate)}</dd></div>
+      </dl>
+      ${best || extras.length ? `<p class="slip-extra">${[best, ...extras].filter(Boolean).join(' · ')}</p>` : ''}
+    </div>`;
+}
+
 function fieldNotesBlock(notes) {
   if (!notes.length) {
     return `<p class="field-empty">No field notes yet. This theory hasn't been scouted.</p>`;
   }
   return `<ol class="field-log">${notes
-    .map(n => {
+    .map((n, i) => {
       const url = safeUrl(n.source_url);
-      const source = n.source_name || url;
-      return `<li>
-        <span class="log-date">${fmtDate(n.noted_at)}</span>
-        ${n.evidence_status ? stamp(n.evidence_status) : ''}
-        <span class="log-body">${esc(n.body || n.kind)}${
-          source ? ` <span class="aside">(${url ? `<a href="${esc(url)}" rel="noopener noreferrer">${esc(source)}</a>` : esc(source)})</span>` : ''
-        }</span>
+      const source = n.source_name
+        ? url
+          ? `<a href="${esc(url)}" rel="noopener noreferrer" target="_blank">${esc(n.source_name)}</a>`
+          : esc(n.source_name)
+        : url
+          ? `<a href="${esc(url)}" rel="noopener noreferrer" target="_blank">link</a>`
+          : '';
+      return `<li class="log-entry log-${esc(n.kind)} log-v${i % 3}">
+        <p class="log-date">${fmtDate(n.noted_at)}</p>
+        <div class="log-main">
+          <p class="log-head">
+            <span class="log-kind">${esc(n.kind_label || n.kind)}</span>
+            ${source ? `<span class="log-source">${source}</span>` : ''}
+            ${n.evidence_status ? stamp(n.evidence_status) : ''}${researchStamp(n)}
+          </p>
+          ${n.kind === 'riot_evidence' && riotSlip(n.data) ? riotSlip(n.data) : `<p class="log-body">${esc(n.body)}</p>`}
+          ${url && n.source_name ? `<p class="log-url">${esc(url)}</p>` : ''}
+        </div>
       </li>`;
     })
     .join('')}</ol>`;
+}
+
+// Research bookkeeping: a line is ticked only when a field note came from it.
+function checklistBlock(items) {
+  return `<ul class="scout-checklist">${items
+    .map(
+      item => `<li class="${item.checked ? 'is-checked' : ''}">
+        <span class="box" aria-hidden="true"></span>
+        <span class="check-label">${esc(item.label)}</span>
+        <span class="check-meta">${item.checked ? `noted ${fmtDate(item.last_noted_at)}` : 'not recorded yet'}</span>
+        <span class="visually-hidden">${item.checked ? '(has a field note)' : '(no field note yet)'}</span>
+      </li>`
+    )
+    .join('')}</ul>`;
 }
 
 async function renderDetail(key) {
@@ -248,7 +305,15 @@ async function renderDetail(key) {
 
     <section class="field-notes" aria-labelledby="field-notes-title">
       <div class="notes-row">
-        <p class="margin-note quiet">dated sightings, match evidence and status changes get logged here</p>
+        <p class="margin-note">research still needed<br><span class="quiet-inline">ticked only once a note from that source exists</span></p>
+        <div>
+          <h3 id="scout-title">Scout checklist</h3>
+          ${checklistBlock(e.scout_checklist || [])}
+          ${e.fingerprint && e.fingerprint.signature ? `<p class="fingerprint">fingerprint · ${esc(e.fingerprint.signature)}</p>` : ''}
+        </div>
+      </div>
+      <div class="notes-row">
+        <p class="margin-note quiet">dated research, oldest first: our data, scout reports, mechanics, sightings, status changes</p>
         <div>
           <h3 id="field-notes-title"><span class="underlined">Field Notes</span></h3>
           ${fieldNotesBlock(e.field_notes || [])}

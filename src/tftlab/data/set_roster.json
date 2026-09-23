@@ -1,5 +1,5 @@
 {
- "_about": "Current TFT set roster from CommunityDragon (latest cdragon/tft/en_us.json, parsed by tftlab.cdragon.parse_set_metadata). Offline reference for tests/test_demo_roster.py. tests/test_cdragon_live.py::test_committed_roster_fixture_matches_live_set compares it with the live feed nightly and prints the new roster when a set changes; paste that output here to refresh.",
+ "_about": "Current TFT set roster from CommunityDragon (latest cdragon/tft/en_us.json, parsed by tftlab.cdragon.parse_set_metadata). Shipped with the package as offline game metadata: tftlab.roster uses it to match champion/trait names to Riot ids, and tests/test_demo_roster.py checks demo data against it. tests/test_cdragon_live.py::test_committed_roster_fixture_matches_live_set compares it with the live feed nightly and prints the new roster when a set changes; paste that here to refresh.",
  "_fetched": "2026-09-23 via the cdragon-live GitHub Actions workflow",
  "set_number": 18,
  "champions": {

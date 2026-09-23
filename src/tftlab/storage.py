@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from .balance_window import resolve_balance_window
-from .experiments import EXPERIMENT_INDEXES_SQL, EXPERIMENT_TABLES_SQL
+from .experiments import EXPERIMENT_INDEXES_SQL, EXPERIMENT_TABLES_SQL, FIELD_NOTE_COLUMN_MIGRATIONS
 from .normalize import CostLookup, normalize_match
 from .patch import patch_from_game_version
 from .unreal_patch import UNRESOLVED_UNREAL_PATCH, is_masked_unreal_version
@@ -179,18 +179,12 @@ class Database:
         only matters for a `matches` table created before a given column
         existed (e.g. a local `data/tftlab.sqlite3` from an earlier build).
         """
-        for column, column_type in _MATCHES_COLUMN_MIGRATIONS:
-            if self.dialect == "sqlite":
-                try:
-                    self.conn.execute(f"ALTER TABLE matches ADD COLUMN {column} {column_type}")
-                    self.conn.commit()
-                except sqlite3.OperationalError as exc:
-                    if "duplicate column" not in str(exc).lower():
-                        raise
-            else:
-                with self.conn.cursor() as cur:
-                    cur.execute(f"ALTER TABLE matches ADD COLUMN IF NOT EXISTS {column} {column_type}")
-                self.conn.commit()
+        for table, columns in (
+            ("matches", _MATCHES_COLUMN_MIGRATIONS),
+            ("experiment_field_notes", FIELD_NOTE_COLUMN_MIGRATIONS),
+        ):
+            for column, column_type in columns:
+                self._add_column_if_missing(table, column, column_type)
 
         # Must run before _backfill_balance_window: it corrects `patch` for
         # rows still holding the pre-fix masked-Unreal fallback value, so
@@ -199,6 +193,19 @@ class Database:
         self._backfill_unreal_patches()
         self._backfill_balance_window()
         self._migrate_units_unit_index()
+
+    def _add_column_if_missing(self, table: str, column: str, column_type: str) -> None:
+        if self.dialect == "sqlite":
+            try:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+                self.conn.commit()
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+        else:
+            with self.conn.cursor() as cur:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {column_type}")
+            self.conn.commit()
 
     def _units_needs_unit_index_migration(self) -> bool:
         if self.dialect == "sqlite":

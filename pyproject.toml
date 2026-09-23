@@ -27,7 +27,7 @@ tftlab = "tftlab.cli:app"
 where = ["src"]
 
 [tool.setuptools.package-data]
-tftlab = ["web/*.html", "web/static/*"]
+tftlab = ["web/*.html", "web/static/*", "data/*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
