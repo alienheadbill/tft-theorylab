@@ -232,7 +232,7 @@ A place to keep personal comp ideas ("6 Ravager Kha'Zix", "Cassiopeia/Fiddlestic
 ```bash
 tftlab experiment-add --title "Kha'Zix + 6 Ravager. Try rerolling him."
 tftlab experiment-add --title "6 Ravager Kha'Zix" --carry "Kha'Zix" --core "Kha'Zix" \
-  --trait "6 Ravager" --carry-item "Infinity Edge" --reroll-level 6 --tag reroll
+  --trait "6 Ravager" --carry-item "Infinity Edge" --reroll-level 7 --tag reroll
 tftlab experiment-add --from-json idea.json          # richer entries; flags override the file
 tftlab experiment-list [--status ...] [--lifecycle ...] [--carry ...] [--tag ...] [--json]
 tftlab experiment-show 6-ravager-khazix [--json]
