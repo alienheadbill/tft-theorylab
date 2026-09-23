@@ -7,6 +7,8 @@ from typing import Any, Iterable, Sequence
 
 from .balance_window import resolve_balance_window
 from .normalize import CostLookup, normalize_match
+from .patch import patch_from_game_version
+from .unreal_patch import UNRESOLVED_UNREAL_PATCH, is_masked_unreal_version
 
 # Written once, uniformly, using SQLite's `?` placeholder style. The Postgres
 # path translates `?` to `%s` before executing (see `Database._translate`),
@@ -184,6 +186,11 @@ class Database:
                     cur.execute(f"ALTER TABLE matches ADD COLUMN IF NOT EXISTS {column} {column_type}")
                 self.conn.commit()
 
+        # Must run before _backfill_balance_window: it corrects `patch` for
+        # rows still holding the pre-fix masked-Unreal fallback value, so
+        # that routine sees an up-to-date `patch` (and, for still-unresolved
+        # rows, an already-NULL `balance_window` it must leave alone).
+        self._backfill_unreal_patches()
         self._backfill_balance_window()
         self._migrate_units_unit_index()
 
@@ -300,9 +307,55 @@ class Database:
         if not rows:
             return
         for match_id, patch, game_datetime in rows:
+            if patch == UNRESOLVED_UNREAL_PATCH:
+                # Intentionally left unresolved by _backfill_unreal_patches
+                # (see resolve_unreal_patch) -- never silently combined into
+                # a fake shared balance window just because this generic
+                # backfill doesn't recognize the sentinel as "no patch".
+                continue
             window = resolve_balance_window(patch, game_datetime)
             if window is not None:
                 self.execute("UPDATE matches SET balance_window = ? WHERE match_id = ?", (window, match_id))
+        self.commit()
+
+    def _backfill_unreal_patches(self) -> None:
+        """Recompute `patch`/`balance_window` for rows whose `patch` column
+        still holds the pre-fix masked-Unreal fallback value.
+
+        Before `tftlab.unreal_patch` existed, `patch_from_game_version`
+        stored the raw, unparseable `game_version` string itself (e.g.
+        `"TFT Unreal Version ?.?.?.?"`) as the "patch" for any match it
+        couldn't parse a version out of -- collapsing every such match,
+        regardless of its real client patch, into one shared fake balance
+        window. Only rows whose CURRENT `patch` value still looks
+        Unreal-masked are touched here; a row that already has a genuinely
+        parsed patch (e.g. `"14.6"`) is left completely alone, per the
+        production-safety requirement that this backfill never touch
+        historical rows that were already correct.
+
+        Idempotent and self-healing: a row that resolves to
+        `UNRESOLVED_UNREAL_PATCH` (see `resolve_unreal_patch`) still
+        "looks Unreal-masked" (the sentinel itself contains "unreal"), so
+        it's re-examined -- and re-resolved with the *current*
+        `UNREAL_PATCH_REGISTRY` -- on every connect. That's deliberate: once
+        real cutover timestamps are added to the registry, previously
+        unresolved production rows correctly pick up their real patch on
+        the very next connect, with no separate one-off re-migration step
+        needed. A row already holding a real resolved patch is never
+        revisited (a real patch string never contains "unreal").
+        """
+        rows = self.query_all("SELECT match_id, patch, game_version, game_datetime FROM matches WHERE patch IS NOT NULL")
+        for match_id, patch, game_version, game_datetime in rows:
+            if not is_masked_unreal_version(patch):
+                continue
+            new_patch = patch_from_game_version(game_version, game_datetime)
+            new_window = (
+                None if new_patch == UNRESOLVED_UNREAL_PATCH else resolve_balance_window(new_patch, game_datetime)
+            )
+            self.execute(
+                "UPDATE matches SET patch = ?, balance_window = ? WHERE match_id = ?",
+                (new_patch, new_window, match_id),
+            )
         self.commit()
 
     def _translate(self, sql: str) -> str:

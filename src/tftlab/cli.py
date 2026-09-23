@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -249,6 +250,23 @@ def verify_riot() -> None:
     )
 
 
+def _format_epoch_ms(ms: int | None) -> str:
+    if ms is None:
+        return "n/a"
+    return f"{ms} ({datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()})"
+
+
+def _print_distribution(label: str, distribution: dict) -> None:
+    """Diagnostic-only value -> count table, capped so a store with many
+    distinct raw game_version strings doesn't flood the terminal."""
+    console.print(f"  {label}:")
+    top = sorted(distribution.items(), key=lambda kv: kv[1], reverse=True)[:10]
+    for value, count in top:
+        console.print(f"    {value!r}: {count}")
+    if len(distribution) > len(top):
+        console.print(f"    ... and {len(distribution) - len(top)} more distinct value(s)")
+
+
 @app.command("validate-live-data")
 def validate_live_data_command(
     db: str = typer.Option(
@@ -300,6 +318,22 @@ def validate_live_data_command(
     console.print(f"Malformed placements: {report.malformed_placements}")
     console.print(f"Duplicate match IDs: {report.duplicate_match_ids}")
     console.print(f"Participants without units: {report.participants_without_units}")
+
+    console.print(f"Unresolved Unreal-era matches: {report.unresolved_unreal_matches}")
+    if report.unresolved_unreal_matches:
+        console.print(
+            "[bold yellow]  These have a masked Unreal-era game_version with no matching entry in "
+            "tftlab.unreal_patch.UNREAL_PATCH_REGISTRY. Their balance_window is intentionally left "
+            "unset (never a fake shared bucket), so they're excluded from every balance-window-scoped "
+            "analytics query until a real cutover timestamp is added -- see the diagnostics below.[/bold yellow]"
+        )
+
+    console.print("\n[bold]Diagnostics[/bold] (store-wide, not scoped to the balance window above)")
+    console.print(f"  Earliest game_datetime: {_format_epoch_ms(report.earliest_game_datetime)}")
+    console.print(f"  Latest game_datetime: {_format_epoch_ms(report.latest_game_datetime)}")
+    _print_distribution("Raw game_version distribution", report.game_version_distribution)
+    _print_distribution("Resolved client patch distribution", report.client_patch_distribution)
+    _print_distribution("Balance-window distribution", report.balance_window_distribution)
 
     if report.is_severe:
         console.print("\n[bold red]SEVERE integrity issues detected.[/bold red]")

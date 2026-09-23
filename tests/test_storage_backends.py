@@ -157,6 +157,81 @@ def test_sqlite_migrates_units_table_from_old_schema_preserving_data(tmp_path: P
         assert db.query_one("SELECT COUNT(*) FROM units")[0] == 3
 
 
+_UNREAL_FALLBACK_VERSION = "TFT Unreal Version ?.?.?.?"
+
+
+def _seed_pre_fix_unreal_row(db_path: Path, match_id: str, game_datetime: int) -> None:
+    """A row shaped exactly like what the OLD (buggy) `patch_from_game_version`
+    produced: `patch` and `balance_window` both set to the raw masked
+    `game_version` string verbatim, since that fallback treated any
+    unparseable string (Unreal-masked or not) as its own single-value patch."""
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO matches VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (
+            match_id,
+            game_datetime,
+            _UNREAL_FALLBACK_VERSION,
+            _UNREAL_FALLBACK_VERSION,
+            _UNREAL_FALLBACK_VERSION,
+            "standard",
+            1100,
+            18,
+            "TFTSet18",
+            "{}",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_backfill_only_touches_rows_from_the_masked_unreal_fallback(tmp_path: Path) -> None:
+    """Requirement: only rows whose existing `patch` came from the masked
+    Unreal fallback are touched; a row with an already-valid parsed patch
+    (even an unusual-looking one) must never be modified."""
+    from _helpers import make_match, make_unit
+
+    db_path = tmp_path / "unreal_backfill.sqlite3"
+    with Database(db_path) as db:
+        db.ingest_match(
+            make_match(
+                "NORMAL_1",
+                game_version="Version 14.6.1 (Sep 10 2024) [PUBLIC] <Releases/14.6>",
+                units=[make_unit("TFT14_Foo", tier=2, items=[])],
+            )
+        )
+    _seed_pre_fix_unreal_row(db_path, "UNREAL_OLD", game_datetime=1_790_000_000_000)
+
+    with Database(db_path) as db:
+        normal_row = db.query_one("SELECT patch, balance_window FROM matches WHERE match_id = ?", ("NORMAL_1",))
+        unreal_row = db.query_one("SELECT patch, balance_window FROM matches WHERE match_id = ?", ("UNREAL_OLD",))
+
+    # Untouched: already had a genuinely parsed patch.
+    assert normal_row == ("14.6", "14.6")
+    # Corrected: was the masked-Unreal fallback string; now the explicit
+    # unresolved sentinel with balance_window left unset (production's
+    # UNREAL_PATCH_REGISTRY is empty, so this can't resolve further yet).
+    assert unreal_row == ("unreal-unresolved", None)
+
+
+def test_unreal_backfill_is_idempotent(tmp_path: Path) -> None:
+    db_path = tmp_path / "unreal_idempotent.sqlite3"
+    # Create the schema first (a fresh DB already has unit_index etc.), then
+    # seed a raw pre-fix row directly, bypassing normalize/ingest entirely.
+    with Database(db_path):
+        pass
+    _seed_pre_fix_unreal_row(db_path, "UNREAL_1", game_datetime=1_790_000_000_000)
+
+    with Database(db_path) as db:
+        first = db.query_one("SELECT patch, balance_window FROM matches WHERE match_id = ?", ("UNREAL_1",))
+    with Database(db_path) as db:
+        second = db.query_one("SELECT patch, balance_window FROM matches WHERE match_id = ?", ("UNREAL_1",))
+
+    assert first == second == ("unreal-unresolved", None)
+
+
 def _clean_postgres_db() -> Database:
     # Only called from tests already guarded by @requires_postgres.
     db = Database(POSTGRES_TEST_URL)
@@ -415,3 +490,45 @@ def test_postgres_and_sqlite_agree_on_duplicate_champion_stats(tmp_path: Path) -
     assert sqlite_stat.commitment_games == postgres_stat.commitment_games == 4
     assert sqlite_stat.avg_placement == pytest.approx(postgres_stat.avg_placement)
     assert sqlite_stat.top4_rate == pytest.approx(postgres_stat.top4_rate)
+
+
+@requires_postgres
+def test_postgres_unreal_backfill_matches_sqlite_and_is_idempotent() -> None:
+    """Postgres counterpart of the SQLite masked-Unreal backfill tests
+    above: only rows from the pre-fix fallback are touched, and
+    reconnecting repeatedly produces the same (idempotent) result."""
+    db = _clean_postgres_db()
+    try:
+        db.execute(
+            "INSERT INTO matches VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                "UNREAL_PG_1",
+                1_790_000_000_000,
+                _UNREAL_FALLBACK_VERSION,
+                _UNREAL_FALLBACK_VERSION,
+                _UNREAL_FALLBACK_VERSION,
+                "standard",
+                1100,
+                18,
+                "TFTSet18",
+                "{}",
+            ),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    # Reconnecting runs _backfill_unreal_patches.
+    db = Database(POSTGRES_TEST_URL)
+    try:
+        first = db.query_one("SELECT patch, balance_window FROM matches WHERE match_id = ?", ("UNREAL_PG_1",))
+    finally:
+        db.close()
+
+    db = Database(POSTGRES_TEST_URL)
+    try:
+        second = db.query_one("SELECT patch, balance_window FROM matches WHERE match_id = ?", ("UNREAL_PG_1",))
+    finally:
+        db.close()
+
+    assert first == second == ("unreal-unresolved", None)
