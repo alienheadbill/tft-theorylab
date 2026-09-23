@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .analytics import (
     CANONICAL_UNIT_TIEBREAK_SQL,
+    available_balance_windows,
     carry_commitment_stats,
     carry_partner_associations,
     default_balance_window,
@@ -22,6 +23,7 @@ from .analytics import (
 )
 from .demo import generate_demo_matches
 from .storage import Database
+from .unreal_patch import UNRESOLVED_UNREAL_PATCH
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 WEB_DIR = PACKAGE_DIR / "web"
@@ -233,6 +235,36 @@ def create_app() -> FastAPI:
             "balance_window": balance_window,
             "matches": matches,
             "participants": participants,
+        }
+
+    @app.get("/api/balance-windows")
+    def balance_windows() -> dict[str, object]:
+        """Every balance window actually present in the store, so the
+        frontend's window selector only ever offers real, resolvable
+        windows -- never the Unreal-unresolved sentinel, which always has a
+        `NULL` balance_window and is therefore already excluded by
+        `available_balance_windows`'s own `WHERE balance_window IS NOT NULL`.
+
+        `unresolved_unreal_matches` is exposed separately, purely so the UI
+        can show a small, honest note when intentionally-unresolved
+        transition-period matches exist -- it must never be offered as a
+        selectable window itself.
+        """
+        db, demo = _resolve_database()
+        with db:
+            windows = available_balance_windows(db)
+            unresolved_unreal_matches = db.query_one(
+                "SELECT COUNT(*) FROM matches WHERE patch = ?", (UNRESOLVED_UNREAL_PATCH,)
+            )[0]
+        return {
+            "demo": demo,
+            "backend": db.dialect,
+            "default_balance_window": windows[0][0] if windows else None,
+            "windows": [
+                {"balance_window": w, "matches": n, "latest_game_datetime": latest}
+                for w, n, latest in windows
+            ],
+            "unresolved_unreal_matches": unresolved_unreal_matches,
         }
 
     @app.get("/api/carries")

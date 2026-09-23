@@ -4,80 +4,90 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>TFT Theory Lab</title>
-  <meta name="description" content="Data-backed TFT reroll and off-meta comp discovery." />
+  <meta name="description" content="Find statistically interesting, underplayed TFT carry lines before they become meta." />
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="#"><span class="brand-mark">TL</span><span>TFT THEORY LAB</span></a>
+    <a class="brand" href="#top"><span class="brand-mark">TL</span><span>TFT THEORY LAB</span></a>
     <nav>
       <a class="active" href="#discover">Discover</a>
-      <a href="#leaderboard">Rerolls</a>
-      <a href="#lab">Theory Lab</a>
+      <a href="#evidence">Evidence</a>
       <a href="#about">Method</a>
     </nav>
-    <div class="patch-pill"><span class="status-dot"></span><span id="data-mode">Loading data</span></div>
+    <div class="header-right">
+      <label class="window-select-wrap">
+        <span>Balance window</span>
+        <select id="window-filter"><option value="">Loading…</option></select>
+      </label>
+      <div class="patch-pill"><span class="status-dot" id="status-dot"></span><span id="data-mode">Loading data</span></div>
+    </div>
   </header>
 
-  <main>
+  <div id="gap-note" class="gap-note" hidden></div>
+
+  <main id="top">
     <section class="hero" id="discover">
-      <div class="eyebrow">PATCH-AWARE · DATA-BACKED · OFF-META</div>
-      <h1>Find the comp<br/><span>before it becomes meta.</span></h1>
-      <p>Search low-usage carries, reroll lines, and statistically unusual boards. Built around commitment data—not just the games where players high-roll.</p>
-      <div class="hero-actions">
-        <a class="primary-btn" href="#leaderboard">Explore rerolls</a>
-        <a class="secondary-btn" href="#about">How scoring works</a>
-      </div>
+      <div class="eyebrow">PATCH-AWARE · DATA-BACKED · REROLL DISCOVERY</div>
+      <h1>Find the carry<br/><span>before it becomes meta.</span></h1>
+      <p>Statistically interesting, underplayed TFT carry lines — ranked by an evidence-adjusted Opportunity Score, not raw popularity. Built around low-cost reroll discovery: commitment data, hit/miss outcomes, and the misses count too.</p>
       <div class="hero-stats">
         <div><strong id="match-count">—</strong><span>matches indexed</span></div>
         <div><strong id="participant-count">—</strong><span>player boards</span></div>
-        <div><strong>2+</strong><span>items = commitment</span></div>
+        <div><strong id="candidate-count">—</strong><span>candidates found</span></div>
       </div>
     </section>
 
-    <section class="section" id="leaderboard">
+    <section class="section" id="discovery-feed">
       <div class="section-heading">
         <div>
           <div class="eyebrow">DISCOVERY FEED</div>
           <h2>Hidden reroll candidates</h2>
-          <p>Strong results, low usage, and enough evidence to be interesting.</p>
-        </div>
-        <div class="controls">
-          <label>Max cost
-            <select id="cost-filter">
-              <option value="1">1-cost</option>
-              <option value="2">2-cost</option>
-              <option value="3" selected>3-cost</option>
-              <option value="4">4-cost</option>
-              <option value="5">5-cost</option>
-            </select>
-          </label>
-          <label>Min samples
-            <select id="sample-filter">
-              <option value="5">5</option>
-              <option value="10" selected>10</option>
-              <option value="20">20</option>
-              <option value="50">50</option>
-            </select>
-          </label>
+          <p>Strong results, low usage, and enough evidence to be interesting. Defaults to 1–3 cost, sorted by Opportunity Score.</p>
         </div>
       </div>
 
-      <div id="cards" class="cards"><div class="loading-card">Analyzing carry lines…</div></div>
+      <div class="controls" id="controls">
+        <div class="control-group">
+          <span class="control-label">Cost</span>
+          <div class="pill-group" id="cost-pills">
+            <button type="button" class="pill active" data-cost="1">1</button>
+            <button type="button" class="pill active" data-cost="2">2</button>
+            <button type="button" class="pill active" data-cost="3">3</button>
+            <button type="button" class="pill" data-cost="4">4</button>
+            <button type="button" class="pill" data-cost="5">5</button>
+          </div>
+        </div>
+        <label class="control-group">
+          <span class="control-label">Min commitment games</span>
+          <input type="number" id="min-games" min="1" max="1000" value="10" />
+        </label>
+        <label class="control-group">
+          <span class="control-label">Sort by</span>
+          <select id="sort-by">
+            <option value="opportunity_score" selected>Opportunity Score</option>
+            <option value="top4_rate">Top 4 rate</option>
+            <option value="avg_placement">Average placement</option>
+            <option value="commitment_rate">Rarity (commitment rate)</option>
+          </select>
+        </label>
+      </div>
+
+      <div id="cards" class="cards"><div class="state-card">Analyzing carry lines…</div></div>
     </section>
 
-    <section class="section lab-section" id="lab">
+    <section class="section evidence-section" id="evidence">
       <div class="section-heading">
         <div>
-          <div class="eyebrow">THEORY LAB</div>
+          <div class="eyebrow">EVIDENCE PANEL</div>
           <h2>Turn a signal into a board.</h2>
-          <p>Select a carry above to inspect hit/miss performance, recurring partners, and common item packages.</p>
+          <p>Select a candidate above to inspect hit/miss performance, recurring partners, item packages, and trait breakpoints.</p>
         </div>
       </div>
       <div id="detail" class="detail empty-detail">
         <div class="empty-orb">?</div>
-        <h3>Choose a carry</h3>
-        <p>The lab will build a first-pass evidence panel from the indexed matches.</p>
+        <h3>Choose a candidate</h3>
+        <p>The evidence panel builds from the same statistically-adjusted data behind the discovery feed above.</p>
       </div>
     </section>
 
@@ -85,17 +95,25 @@
       <div>
         <div class="eyebrow">WHY THIS IS DIFFERENT</div>
         <h2>We count the misses.</h2>
+        <p class="evidence-legend">
+          Evidence in this dashboard is currently always
+          <span class="evidence-badge evidence-observed">OBSERVED</span> — a real statistical result from indexed
+          matches. Two more tiers are reserved for later: <span class="evidence-badge evidence-variant">VARIANT</span>
+          for a related line the system hasn't independently measured yet, and
+          <span class="evidence-badge evidence-theorycrafted">THEORYCRAFTED</span> for a board the system actually
+          synthesizes rather than observes. Nothing on this page is theorycrafted today.
+        </p>
       </div>
       <div class="method-grid">
         <article><span>01</span><h3>Commitment first</h3><p>A carry enters the sample when it holds at least two completed items, even if the reroll never reaches 3★.</p></article>
         <article><span>02</span><h3>Hit vs. miss</h3><p>We separate games that actually hit 3★ from committed games that miss, exposing both ceiling and failure risk.</p></article>
-        <article><span>03</span><h3>Sample shrinkage</h3><p>Small samples are pulled toward baseline performance so ten lucky games cannot outrank a reliable line.</p></article>
-        <article><span>04</span><h3>Rarity matters</h3><p>The discovery score rewards strong low-usage lines instead of simply reproducing the most-played meta boards.</p></article>
+        <article><span>03</span><h3>Sample shrinkage</h3><p>Small samples are pulled toward baseline performance so a handful of lucky games cannot outrank a reliable line.</p></article>
+        <article><span>04</span><h3>Rarity matters</h3><p>The Opportunity Score rewards strong low-usage lines instead of simply reproducing the most-played meta boards.</p></article>
       </div>
     </section>
   </main>
 
-  <footer>Prototype · TFT Theory Lab · Stats shown in demo mode are synthetic until a live Riot dataset is connected.</footer>
+  <footer>TFT Theory Lab · <span id="footer-mode">—</span> · Stats shown in demo mode are synthetic until a live Riot dataset is connected.</footer>
   <script src="/static/app.js"></script>
 </body>
 </html>
