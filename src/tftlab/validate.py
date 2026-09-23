@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from .analytics import default_balance_window
 from .cdragon import SetMetadata
+from .riot import RANKED_TFT_QUEUE_ID
 from .storage import Database
 
 
@@ -33,6 +34,13 @@ class IntegrityReport:
     balance_window: str | None
     total_matches: int
     total_participants: int
+    #: How many of `total_matches` are `RANKED_TFT_QUEUE_ID` vs. anything
+    #: else (Normal/Hyper Roll/Double Up/unrecorded). Visibility only -- a
+    #: partially-completed live run (e.g. one that failed partway through
+    #: ingestion) may already have committed non-target-queue matches to
+    #: production; this reports that, it does not delete or filter them.
+    target_queue_matches: int
+    non_target_queue_matches: int
     unit_cost_present_pct: float
     metadata_champion_coverage_pct: float | None
     unknown_champion_ids: list[str] | None
@@ -87,6 +95,11 @@ def validate_live_data(
         total_matches = db.query_one(
             "SELECT COUNT(*) FROM matches WHERE balance_window = ?", (resolved_window,)
         )[0]
+        target_queue_matches = db.query_one(
+            "SELECT COUNT(*) FROM matches WHERE balance_window = ? AND queue_id = ?",
+            (resolved_window, RANKED_TFT_QUEUE_ID),
+        )[0]
+        non_target_queue_matches = total_matches - target_queue_matches
         total_participants = db.query_one(
             """
             SELECT COUNT(*) FROM participants p
@@ -149,6 +162,8 @@ def validate_live_data(
         }
     else:
         total_matches = 0
+        target_queue_matches = 0
+        non_target_queue_matches = 0
         total_participants = 0
         unit_cost_present_pct = 0.0
 
@@ -189,6 +204,8 @@ def validate_live_data(
     return IntegrityReport(
         balance_window=resolved_window,
         total_matches=total_matches,
+        target_queue_matches=target_queue_matches,
+        non_target_queue_matches=non_target_queue_matches,
         total_participants=total_participants,
         unit_cost_present_pct=unit_cost_present_pct,
         metadata_champion_coverage_pct=metadata_champion_coverage_pct,

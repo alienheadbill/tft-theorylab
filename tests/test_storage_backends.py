@@ -75,6 +75,88 @@ def test_migration_backfills_balance_window_for_pre_existing_rows(tmp_path: Path
     assert row[0] == "18.2a"
 
 
+_OLD_UNITS_SCHEMA_SQL = """
+CREATE TABLE matches (
+    match_id TEXT PRIMARY KEY, game_datetime BIGINT, game_version TEXT, patch TEXT,
+    balance_window TEXT, game_type TEXT, queue_id INTEGER, set_number INTEGER,
+    set_core_name TEXT, payload_json TEXT NOT NULL
+);
+CREATE TABLE participants (
+    match_id TEXT NOT NULL, participant_index INTEGER NOT NULL, placement INTEGER NOT NULL,
+    level INTEGER NOT NULL, augments_json TEXT NOT NULL,
+    PRIMARY KEY (match_id, participant_index)
+);
+CREATE TABLE units (
+    match_id TEXT NOT NULL, participant_index INTEGER NOT NULL, character_id TEXT NOT NULL,
+    unit_name TEXT NOT NULL, cost INTEGER, tier INTEGER NOT NULL, items_json TEXT NOT NULL,
+    completed_item_count INTEGER NOT NULL,
+    PRIMARY KEY (match_id, participant_index, character_id)
+);
+CREATE TABLE traits (
+    match_id TEXT NOT NULL, participant_index INTEGER NOT NULL, trait_name TEXT NOT NULL,
+    num_units INTEGER NOT NULL, style INTEGER, tier_current INTEGER, tier_total INTEGER,
+    PRIMARY KEY (match_id, participant_index, trait_name)
+);
+"""
+
+
+def test_sqlite_migrates_units_table_from_old_schema_preserving_data(tmp_path: Path) -> None:
+    """Regression test for the live-ingest failure this milestone fixes: a
+    database created before `unit_index` existed used
+    `(match_id, participant_index, character_id)` as the `units` primary
+    key, which rejects a genuine duplicate-champion board outright
+    (`UniqueViolation`/`IntegrityError`). Reconnecting via `Database` must
+    upgrade the table in place -- preserving existing matches/participants/
+    units, never wiping/recreating the database -- and then accept exactly
+    the kind of board that used to fail."""
+    import sqlite3
+
+    from _helpers import make_match, make_unit
+
+    db_path = tmp_path / "old_units_schema.sqlite3"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(_OLD_UNITS_SCHEMA_SQL)
+    conn.execute(
+        "INSERT INTO matches VALUES (?,?,?,?,?,?,?,?,?,?)",
+        ("OLD_1", 1_790_000_000_000, "Version 14.6.1", "14.6", "14.6", "standard", 1100, 14, "TFTSet14", "{}"),
+    )
+    conn.execute("INSERT INTO participants VALUES (?,?,?,?,?)", ("OLD_1", 0, 3, 8, "[]"))
+    conn.execute(
+        "INSERT INTO units VALUES (?,?,?,?,?,?,?,?)",
+        ("OLD_1", 0, "TFT14_Legacy", "Legacy", 4, 2, "[]", 0),
+    )
+    conn.commit()
+    conn.close()
+
+    with Database(db_path) as db:
+        # Existing data survived the migration untouched.
+        assert db.query_one("SELECT match_id FROM matches WHERE match_id = ?", ("OLD_1",)) is not None
+        rows = db.query_all(
+            "SELECT unit_index, character_id FROM units WHERE match_id = ? ORDER BY unit_index", ("OLD_1",)
+        )
+        assert rows == [(0, "TFT14_Legacy")]
+
+        # The actual point: a genuine duplicate-champion board, which the
+        # old key raised UniqueViolation on, must now succeed.
+        assert db.ingest_match(
+            make_match(
+                "NEW_DUP",
+                units=[
+                    make_unit("TFT14_Legacy", tier=3, items=["TFT_Item_BlueBuff", "TFT_Item_Deathcap"]),
+                    make_unit("TFT14_Legacy", tier=1, items=[]),
+                ],
+            )
+        )
+        dup_rows = db.query_all(
+            "SELECT unit_index, character_id FROM units WHERE match_id = ? ORDER BY unit_index", ("NEW_DUP",)
+        )
+        assert dup_rows == [(0, "TFT14_Legacy"), (1, "TFT14_Legacy")]
+
+    # Reconnecting again must be a no-op (idempotent), not an error.
+    with Database(db_path) as db:
+        assert db.query_one("SELECT COUNT(*) FROM units")[0] == 3
+
+
 def _clean_postgres_db() -> Database:
     # Only called from tests already guarded by @requires_postgres.
     db = Database(POSTGRES_TEST_URL)
@@ -220,3 +302,116 @@ def test_postgres_discovery_and_association_queries() -> None:
         assert any(c.character_id == "TFT14_Carry" for c in candidates)
     finally:
         db.close()
+
+
+@requires_postgres
+def test_postgres_migrates_units_table_from_old_schema_preserving_data() -> None:
+    """Postgres counterpart of the SQLite migration test above: production
+    may already contain real match data under the OLD `units` primary key.
+    Reconnecting via `Database` must upgrade it in place -- preserving
+    existing rows -- and then accept a genuine duplicate-champion board the
+    old key would have raised `UniqueViolation` on. Also a regression test
+    for a real bug this migration introduced and then fixed: Postgres's
+    `ALTER TABLE ADD COLUMN` always appends `unit_index` as the table's
+    LAST physical column, so `ingest_match`'s `INSERT INTO units` must use
+    an explicit column list, not positional `VALUES`, or it silently
+    inserts into the wrong columns on a migrated (but not freshly created)
+    table."""
+    import psycopg
+
+    from _helpers import make_match, make_unit
+
+    setup_conn = psycopg.connect(POSTGRES_TEST_URL)
+    setup_conn.execute("DROP TABLE IF EXISTS traits, units, participants, matches CASCADE")
+    for statement in _OLD_UNITS_SCHEMA_SQL.strip().split(";"):
+        if statement.strip():
+            setup_conn.execute(statement)
+    setup_conn.execute(
+        "INSERT INTO matches VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        ("OLD_PG_1", 1_790_000_000_000, "Version 14.6.1", "14.6", "14.6", "standard", 1100, 14, "TFTSet14", "{}"),
+    )
+    setup_conn.execute("INSERT INTO participants VALUES (%s,%s,%s,%s,%s)", ("OLD_PG_1", 0, 3, 8, "[]"))
+    setup_conn.execute(
+        "INSERT INTO units VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+        ("OLD_PG_1", 0, "TFT14_Legacy", "Legacy", 4, 2, "[]", 0),
+    )
+    setup_conn.commit()
+    setup_conn.close()
+
+    db = Database(POSTGRES_TEST_URL)
+    try:
+        assert db.query_one("SELECT match_id FROM matches WHERE match_id = ?", ("OLD_PG_1",)) is not None
+        rows = db.query_all(
+            "SELECT unit_index, character_id FROM units WHERE match_id = ? ORDER BY unit_index", ("OLD_PG_1",)
+        )
+        assert rows == [(0, "TFT14_Legacy")]
+
+        assert db.ingest_match(
+            make_match(
+                "NEW_PG_DUP",
+                units=[
+                    make_unit("TFT14_Legacy", tier=3, items=["TFT_Item_BlueBuff", "TFT_Item_Deathcap"]),
+                    make_unit("TFT14_Legacy", tier=1, items=[]),
+                ],
+            )
+        )
+        dup_rows = db.query_all(
+            "SELECT unit_index, character_id, tier FROM units WHERE match_id = ? ORDER BY unit_index",
+            ("NEW_PG_DUP",),
+        )
+        assert dup_rows == [(0, "TFT14_Legacy", 3), (1, "TFT14_Legacy", 1)]
+    finally:
+        db.close()
+
+
+@requires_postgres
+def test_postgres_and_sqlite_agree_on_duplicate_champion_stats(tmp_path: Path) -> None:
+    """SQLite-vs-Postgres parity for a board fielding two instances of the
+    same champion -- the exact real-world shape that broke the second live
+    ingest run (see tests/test_duplicate_units.py for the full single-
+    backend regression coverage)."""
+    from _helpers import make_match, make_unit
+
+    def _seed(db: Database) -> None:
+        db.ingest_match(
+            make_match(
+                "DUP",
+                placement=2,
+                units=[
+                    make_unit("TFT14_Dup", tier=3, items=["TFT_Item_BlueBuff", "TFT_Item_Deathcap"]),
+                    make_unit("TFT14_Dup", tier=1, items=[]),
+                ],
+            )
+        )
+        for i, placement in enumerate([5, 6, 7]):
+            db.ingest_match(
+                make_match(
+                    f"SOLO_{i}",
+                    placement=placement,
+                    units=[make_unit("TFT14_Dup", tier=2, items=["TFT_Item_BlueBuff", "TFT_Item_Deathcap"])],
+                )
+            )
+
+    with Database(tmp_path / "dup_parity.sqlite3") as sqlite_db:
+        _seed(sqlite_db)
+        sqlite_stat = next(
+            s
+            for s in carry_commitment_stats(sqlite_db, min_cost=1, max_cost=5, min_samples=1)
+            if s.character_id == "TFT14_Dup"
+        )
+
+    postgres_db = _clean_postgres_db()
+    try:
+        _seed(postgres_db)
+        postgres_stat = next(
+            s
+            for s in carry_commitment_stats(postgres_db, min_cost=1, max_cost=5, min_samples=1)
+            if s.character_id == "TFT14_Dup"
+        )
+    finally:
+        postgres_db.close()
+
+    assert sqlite_stat.appearances == postgres_stat.appearances == 4
+    assert sqlite_stat.commitment_games == postgres_stat.commitment_games == 4
+    assert sqlite_stat.avg_placement == pytest.approx(postgres_stat.avg_placement)
+    assert sqlite_stat.top4_rate == pytest.approx(postgres_stat.top4_rate)

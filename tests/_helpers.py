@@ -36,14 +36,19 @@ def make_match(
     placement: int = 4,
     level: int = 8,
     traits: list[dict[str, Any]] | None = None,
+    queue_id: int = 1100,
 ) -> dict[str, Any]:
-    """A single-participant match payload (participant_index 0 only)."""
+    """A single-participant match payload (participant_index 0 only).
+
+    `queue_id` defaults to 1100 (`tftlab.riot.RANKED_TFT_QUEUE_ID`, standard
+    Ranked TFT); pass e.g. 1090 (Normal) to build a non-target-queue fixture.
+    """
     return {
         "metadata": {"match_id": match_id},
         "info": {
             "game_version": game_version,
             "tft_game_type": "standard",
-            "queue_id": 1100,
+            "queue_id": queue_id,
             "tft_set_number": set_number,
             "tft_set_core_name": f"TFTSet{set_number}",
             "game_datetime": game_datetime,

@@ -131,49 +131,58 @@ def carry_commitment_stats(
 
     rows = db.query_all(
         """
+        WITH per_champion AS (
+            -- Collapse a participant's (possibly multiple) instances of one
+            -- champion into a single row *before* aggregating across
+            -- participants: a real board can field more than one instance of
+            -- the same character_id (see `units.unit_index`), and without
+            -- this step each duplicate copy would inflate appearances,
+            -- commitment games, top4/win counts, etc. by counting the same
+            -- participant/game more than once. `committed`/`hit_3star` are
+            -- true if *any* instance of the champion in this game qualifies
+            -- -- matching the "commit/hit if at least one instance does"
+            -- semantics used throughout this module.
+            SELECT
+                u.match_id,
+                u.participant_index,
+                u.character_id,
+                MAX(u.unit_name) AS unit_name,
+                MAX(u.cost) AS cost,
+                MAX(CASE WHEN u.completed_item_count >= ? THEN 1 ELSE 0 END) AS committed,
+                MAX(CASE WHEN u.completed_item_count >= ? AND u.tier >= 3 THEN 1 ELSE 0 END) AS hit_3star
+            FROM units u
+            JOIN matches m ON m.match_id = u.match_id
+            WHERE m.balance_window = ?
+            GROUP BY u.match_id, u.participant_index, u.character_id
+        )
         SELECT
-            u.character_id,
-            MAX(u.unit_name) AS unit_name,
-            u.cost,
+            pc.character_id,
+            MAX(pc.unit_name) AS unit_name,
+            pc.cost,
             COUNT(*) AS appearances,
-            SUM(CASE WHEN u.completed_item_count >= ? THEN 1 ELSE 0 END) AS commitment_games,
-            AVG(CASE WHEN u.completed_item_count >= ? THEN p.placement * 1.0 END) AS avg_place,
-            SUM(CASE WHEN u.completed_item_count >= ? AND p.placement <= 4 THEN 1 ELSE 0 END) AS top4s,
-            SUM(CASE WHEN u.completed_item_count >= ? AND p.placement = 1 THEN 1 ELSE 0 END) AS wins,
-            SUM(CASE WHEN u.completed_item_count >= ? AND u.tier >= 3 THEN 1 ELSE 0 END) AS hits,
-            SUM(CASE WHEN u.completed_item_count >= ? AND u.tier >= 3 AND p.placement <= 4 THEN 1 ELSE 0 END) AS hit_top4s,
-            AVG(CASE WHEN u.completed_item_count >= ? AND u.tier >= 3 THEN p.placement * 1.0 END) AS avg_place_hit,
-            SUM(CASE WHEN u.completed_item_count >= ? AND u.tier < 3 THEN 1 ELSE 0 END) AS misses,
-            SUM(CASE WHEN u.completed_item_count >= ? AND u.tier < 3 AND p.placement <= 4 THEN 1 ELSE 0 END) AS miss_top4s,
-            AVG(CASE WHEN u.completed_item_count >= ? AND u.tier < 3 THEN p.placement * 1.0 END) AS avg_place_miss
-        FROM units u
+            SUM(pc.committed) AS commitment_games,
+            AVG(CASE WHEN pc.committed = 1 THEN p.placement * 1.0 END) AS avg_place,
+            SUM(CASE WHEN pc.committed = 1 AND p.placement <= 4 THEN 1 ELSE 0 END) AS top4s,
+            SUM(CASE WHEN pc.committed = 1 AND p.placement = 1 THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN pc.committed = 1 AND pc.hit_3star = 1 THEN 1 ELSE 0 END) AS hits,
+            SUM(CASE WHEN pc.committed = 1 AND pc.hit_3star = 1 AND p.placement <= 4 THEN 1 ELSE 0 END) AS hit_top4s,
+            AVG(CASE WHEN pc.committed = 1 AND pc.hit_3star = 1 THEN p.placement * 1.0 END) AS avg_place_hit,
+            SUM(CASE WHEN pc.committed = 1 AND pc.hit_3star = 0 THEN 1 ELSE 0 END) AS misses,
+            SUM(CASE WHEN pc.committed = 1 AND pc.hit_3star = 0 AND p.placement <= 4 THEN 1 ELSE 0 END) AS miss_top4s,
+            AVG(CASE WHEN pc.committed = 1 AND pc.hit_3star = 0 THEN p.placement * 1.0 END) AS avg_place_miss
+        FROM per_champion pc
         JOIN participants p
-          ON p.match_id = u.match_id AND p.participant_index = u.participant_index
-        JOIN matches m
-          ON m.match_id = u.match_id
-        WHERE u.cost BETWEEN ? AND ?
-          AND m.balance_window = ?
-        GROUP BY u.character_id, u.cost
-        HAVING SUM(CASE WHEN u.completed_item_count >= ? THEN 1 ELSE 0 END) >= ?
+          ON p.match_id = pc.match_id AND p.participant_index = pc.participant_index
+        WHERE pc.cost BETWEEN ? AND ?
+        GROUP BY pc.character_id, pc.cost
+        HAVING SUM(pc.committed) >= ?
         """,
         (
-            # Postgres (unlike SQLite) doesn't allow a SELECT alias in HAVING,
-            # so `commitment_games` is repeated as a literal expression there
-            # too, with its own pair of params.
             commitment_items,
             commitment_items,
-            commitment_items,
-            commitment_items,
-            commitment_items,
-            commitment_items,
-            commitment_items,
-            commitment_items,
-            commitment_items,
-            commitment_items,
+            resolved_window,
             min_cost,
             max_cost,
-            resolved_window,
-            commitment_items,
             min_samples,
         ),
     )

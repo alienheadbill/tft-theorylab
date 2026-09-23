@@ -208,6 +208,7 @@ def ingest_riot(
     console.print(f"  Matches inserted: {result.matches_inserted}")
     console.print(f"  Matches skipped as duplicates: {result.duplicates_skipped}")
     console.print(f"  Failed requests: {result.failed_requests}")
+    console.print(f"  Non-ranked-queue matches skipped: {result.non_target_matches_skipped}")
     console.print(f"  Balance windows found: {', '.join(w for w, _, _ in windows) or 'none'}")
     console.print(f"  Total participants now stored: {total_participants}")
     if degraded:
@@ -275,6 +276,8 @@ def validate_live_data_command(
 
     console.print(f"Balance window: {report.balance_window}")
     console.print(f"Total matches: {report.total_matches}")
+    console.print(f"  Ranked TFT (target queue): {report.target_queue_matches}")
+    console.print(f"  Non-target queue (Normal/Hyper Roll/Double Up/other): {report.non_target_queue_matches}")
     console.print(f"Total participants: {report.total_participants}")
     console.print(f"Unit shop-cost present: {report.unit_cost_present_pct:.1%}")
     if report.metadata_champion_coverage_pct is None:

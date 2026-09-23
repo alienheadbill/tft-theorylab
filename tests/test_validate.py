@@ -39,6 +39,8 @@ def test_clean_data_reports_no_severe_issues(tmp_path: Path) -> None:
         report = validate_live_data(db, metadata=_fake_metadata())
 
     assert report.total_matches == 5
+    assert report.target_queue_matches == 5
+    assert report.non_target_queue_matches == 0
     assert report.unit_cost_present_pct == 1.0
     assert report.metadata_champion_coverage_pct == 1.0
     assert report.unknown_champion_ids == []
@@ -154,5 +156,29 @@ def test_reports_none_data_when_no_balance_window_resolvable(tmp_path: Path) -> 
 
     assert report.balance_window is None
     assert report.total_matches == 0
+    assert report.target_queue_matches == 0
+    assert report.non_target_queue_matches == 0
     assert report.total_participants == 0
     assert report.is_severe is False
+
+
+def test_queue_distribution_reports_non_target_matches_without_deleting_them(tmp_path: Path) -> None:
+    """A partially-completed live run can leave non-ranked matches already
+    committed to production (e.g. a Challenger PUUID's Hyper Roll game
+    fetched before queue filtering existed). validate-live-data must make
+    that visible, not silently fold it into "total matches" or delete it."""
+    with Database(tmp_path / "queues.sqlite3") as db:
+        for i in range(3):
+            db.ingest_match(make_match(f"RANKED_{i}", units=[make_unit("TFT14_Foo", tier=2, items=[])]))
+        for i in range(2):
+            db.ingest_match(
+                make_match(f"NORMAL_{i}", queue_id=1090, units=[make_unit("TFT14_Foo", tier=2, items=[])])
+            )
+        report = validate_live_data(db)
+        # Visibility only -- validate-live-data must never delete rows itself.
+        stored_matches = db.query_one("SELECT COUNT(*) FROM matches")[0]
+
+    assert report.total_matches == 5
+    assert report.target_queue_matches == 3
+    assert report.non_target_queue_matches == 2
+    assert stored_matches == 5

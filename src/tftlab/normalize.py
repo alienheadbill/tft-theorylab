@@ -42,10 +42,11 @@ def normalize_match(match: dict[str, Any], *, cost_lookup: CostLookup | None = N
     participants: list[NormalizedParticipant] = []
     for idx, p in enumerate(info.get("participants", [])):
         units: list[NormalizedUnit] = []
-        for unit in p.get("units", []):
+        for unit_index, unit in enumerate(p.get("units", [])):
             item_ids = tuple(unit.get("itemNames") or unit.get("item_names") or [])
             units.append(
                 NormalizedUnit(
+                    unit_index=unit_index,
                     character_id=str(unit.get("character_id") or ""),
                     name=str(unit.get("name") or unit.get("character_id") or ""),
                     cost=cost_from_unit(unit, cost_lookup=cost_lookup),

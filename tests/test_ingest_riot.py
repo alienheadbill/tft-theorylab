@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 
 from tftlab.cli import CommunityDragonUnavailable, _resolve_cost_lookup, app
 from tftlab.ingest import ingest_ladder
-from tftlab.riot import RiotApiError, RiotClient, classify_riot_error
+from tftlab.riot import RANKED_TFT_QUEUE_ID, RiotApiError, RiotClient, classify_riot_error
 from tftlab.storage import Database
 
 from _helpers import make_match, make_unit
@@ -204,6 +204,33 @@ def test_ingest_ladder_counts_failed_requests_without_aborting_the_batch(tmp_pat
     assert result.matches_fetched == 1
     assert result.matches_inserted == 1
     assert result.failed_requests == 1
+
+
+def test_ingest_ladder_skips_non_ranked_queue_matches(tmp_path: Path) -> None:
+    """A Challenger PUUID's recent match history isn't exclusively standard
+    ranked TFT -- Normal/Hyper Roll/Double Up games show up too. A fetched
+    match from one of those queues must be skipped (never inserted) and
+    counted in `non_target_matches_skipped`, not `failed_requests` -- Riot
+    answered fine, the match is just out of this project's scope."""
+    ranked = make_match("RANKED_1", units=[make_unit("TFT14_Foo", tier=2, items=[])])
+    assert ranked["info"]["queue_id"] == RANKED_TFT_QUEUE_ID
+    normal = make_match("NORMAL_1", queue_id=1090, units=[make_unit("TFT14_Foo", tier=2, items=[])])
+    client = _StubRiotClient(
+        puuids=["p1"],
+        match_ids_by_puuid={"p1": ["RANKED_1", "NORMAL_1"]},
+        matches={"RANKED_1": ranked, "NORMAL_1": normal},
+    )
+
+    with Database(tmp_path / "queue_filter.sqlite3") as db:
+        result = ingest_ladder(client, db, player_limit=10, matches_per_player=10)
+        stored = db.has_match("RANKED_1"), db.has_match("NORMAL_1")
+
+    assert result.match_ids_seen == 2
+    assert result.matches_fetched == 2
+    assert result.matches_inserted == 1
+    assert result.failed_requests == 0
+    assert result.non_target_matches_skipped == 1
+    assert stored == (True, False)
 
 
 def test_ingest_ladder_counts_network_failure_without_aborting_the_batch(

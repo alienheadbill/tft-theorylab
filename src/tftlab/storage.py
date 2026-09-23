@@ -44,13 +44,20 @@ CREATE TABLE IF NOT EXISTS participants (
 CREATE TABLE IF NOT EXISTS units (
     match_id TEXT NOT NULL,
     participant_index INTEGER NOT NULL,
+    -- This unit's position on its participant's board (0-based, in Match-V1
+    -- payload order) -- NOT `character_id` -- is what makes a unit row
+    -- unique: a real board can field more than one instance of the same
+    -- champion (e.g. via clone/duplication effects), which the old
+    -- (match_id, participant_index, character_id) key rejected outright.
+    -- `character_id` remains a normal, indexed column below.
+    unit_index INTEGER NOT NULL,
     character_id TEXT NOT NULL,
     unit_name TEXT NOT NULL,
     cost INTEGER,
     tier INTEGER NOT NULL,
     items_json TEXT NOT NULL,
     completed_item_count INTEGER NOT NULL,
-    PRIMARY KEY (match_id, participant_index, character_id),
+    PRIMARY KEY (match_id, participant_index, unit_index),
     FOREIGN KEY (match_id, participant_index)
         REFERENCES participants(match_id, participant_index)
 );
@@ -178,6 +185,105 @@ class Database:
                 self.conn.commit()
 
         self._backfill_balance_window()
+        self._migrate_units_unit_index()
+
+    def _units_needs_unit_index_migration(self) -> bool:
+        if self.dialect == "sqlite":
+            columns = [row[1] for row in self.conn.execute("PRAGMA table_info(units)").fetchall()]
+            return "unit_index" not in columns
+        row = self.query_one(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'units' AND column_name = 'unit_index'"
+        )
+        return row is None
+
+    def _migrate_units_unit_index(self) -> None:
+        """Upgrade an older `units` table from the
+        `(match_id, participant_index, character_id)` primary key to
+        `(match_id, participant_index, unit_index)`.
+
+        Real TFT boards can field more than one instance of the same
+        champion in one game; the old key rejected the second instance
+        outright with a unique-constraint violation on ingest.
+        `unit_index` is backfilled deterministically from each row's
+        physical insertion order (SQLite `rowid` / Postgres `ctid`), which
+        matches the order units were originally enumerated from the
+        Match-V1 payload during ingest (see `normalize.normalize_match`) --
+        `ingest_match` has always inserted a participant's units in that
+        same order and never updates a units row afterward, so that
+        physical order is a reliable, deterministic stand-in for the
+        original per-participant unit ordering.
+
+        Idempotent (skips entirely once `unit_index` already exists), so
+        this runs safely on every `Database` connect, including against a
+        production database that already has real match data -- no
+        downtime, no wipe/recreate, no data loss.
+        """
+        if not self._units_needs_unit_index_migration():
+            return
+
+        try:
+            if self.dialect == "sqlite":
+                self.conn.execute(
+                    """
+                    CREATE TABLE units_new (
+                        match_id TEXT NOT NULL,
+                        participant_index INTEGER NOT NULL,
+                        unit_index INTEGER NOT NULL,
+                        character_id TEXT NOT NULL,
+                        unit_name TEXT NOT NULL,
+                        cost INTEGER,
+                        tier INTEGER NOT NULL,
+                        items_json TEXT NOT NULL,
+                        completed_item_count INTEGER NOT NULL,
+                        PRIMARY KEY (match_id, participant_index, unit_index),
+                        FOREIGN KEY (match_id, participant_index)
+                            REFERENCES participants(match_id, participant_index)
+                    )
+                    """
+                )
+                self.conn.execute(
+                    """
+                    INSERT INTO units_new (
+                        match_id, participant_index, unit_index, character_id,
+                        unit_name, cost, tier, items_json, completed_item_count
+                    )
+                    SELECT
+                        match_id, participant_index,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY match_id, participant_index ORDER BY rowid
+                        ) - 1,
+                        character_id, unit_name, cost, tier, items_json, completed_item_count
+                    FROM units
+                    """
+                )
+                self.conn.execute("DROP TABLE units")
+                self.conn.execute("ALTER TABLE units_new RENAME TO units")
+            else:
+                with self.conn.cursor() as cur:
+                    cur.execute("ALTER TABLE units ADD COLUMN unit_index INTEGER")
+                    cur.execute(
+                        """
+                        UPDATE units
+                        SET unit_index = ranked.rn
+                        FROM (
+                            SELECT ctid, ROW_NUMBER() OVER (
+                                PARTITION BY match_id, participant_index ORDER BY ctid
+                            ) - 1 AS rn
+                            FROM units
+                        ) AS ranked
+                        WHERE units.ctid = ranked.ctid
+                        """
+                    )
+                    cur.execute("ALTER TABLE units ALTER COLUMN unit_index SET NOT NULL")
+                    cur.execute("ALTER TABLE units DROP CONSTRAINT units_pkey")
+                    cur.execute(
+                        "ALTER TABLE units ADD PRIMARY KEY (match_id, participant_index, unit_index)"
+                    )
+        except Exception:
+            self.conn.rollback()
+            raise
+        self.conn.commit()
 
     def _backfill_balance_window(self) -> None:
         """Populate `balance_window` for rows a column migration left NULL.
@@ -266,10 +372,22 @@ class Database:
                 )
                 for u in p.units:
                     self.execute(
-                        "INSERT INTO units VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        # Explicit column list, not positional VALUES: a
+                        # Postgres database migrated from the old schema (see
+                        # `_migrate_units_unit_index`) has `unit_index` as its
+                        # LAST physical column (Postgres's `ALTER TABLE ADD
+                        # COLUMN` always appends), not third -- positional
+                        # VALUES would silently insert into the wrong columns
+                        # on a migrated table even though it works on a
+                        # freshly created one.
+                        """INSERT INTO units (
+                            match_id, participant_index, unit_index, character_id,
+                            unit_name, cost, tier, items_json, completed_item_count
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             p.match_id,
                             p.participant_index,
+                            u.unit_index,
                             u.character_id,
                             u.name,
                             u.cost,

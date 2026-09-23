@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .normalize import CostLookup
-from .riot import RiotApiError, RiotClient
+from .riot import RANKED_TFT_QUEUE_ID, RiotApiError, RiotClient
 from .storage import Database
 
 
@@ -12,7 +12,8 @@ class IngestResult:
     seed_players: int
     match_ids_seen: int
     #: Match bodies successfully fetched from Riot (whether or not they were
-    #: already stored -- see `duplicates_skipped` for that).
+    #: already stored -- see `duplicates_skipped` for that -- or from a
+    #: non-ranked queue -- see `non_target_matches_skipped`).
     matches_fetched: int
     matches_inserted: int
     #: Already in the store, so no network fetch was even attempted for them.
@@ -20,6 +21,11 @@ class IngestResult:
     #: Fetch was attempted and failed (network error, Riot API error, etc.);
     #: these do not abort the rest of the run.
     failed_requests: int
+    #: Fetched successfully but not `RANKED_TFT_QUEUE_ID` (a Challenger PUUID
+    #: can play Normal/Hyper Roll/Double Up too), so never inserted. Not a
+    #: failure -- Riot answered fine, the match just isn't in this project's
+    #: target dataset.
+    non_target_matches_skipped: int
 
 
 def ingest_ladder(
@@ -42,6 +48,14 @@ def ingest_ladder(
     into `RiotApiError`, so all three land here the same way) is recorded in
     `failed_requests` and skipped rather than aborting the whole run -- a
     batch of otherwise-good matches shouldn't be lost to one bad request.
+
+    A Challenger/Grandmaster/Master PUUID's recent match history isn't
+    exclusively standard ranked TFT -- it can include Normal, Hyper Roll, or
+    Double Up games too. Every fetched match is checked against
+    `RANKED_TFT_QUEUE_ID` before insertion; a non-target-queue match is
+    counted in `non_target_matches_skipped` (not `failed_requests` -- Riot
+    answered fine, it's just out of scope for this project's dataset) and
+    never stored.
     """
     puuids = client.ladder_puuids(leagues)[:player_limit]
     ids: list[str] = []
@@ -56,6 +70,7 @@ def ingest_ladder(
     inserted = 0
     duplicates = 0
     failed = 0
+    non_target = 0
     for match_id in ids:
         if db.has_match(match_id):
             duplicates += 1
@@ -66,6 +81,9 @@ def ingest_ladder(
             failed += 1
             continue
         fetched += 1
+        if payload.get("info", {}).get("queue_id") != RANKED_TFT_QUEUE_ID:
+            non_target += 1
+            continue
         inserted += int(db.ingest_match(payload, cost_lookup=cost_lookup))
 
     return IngestResult(
@@ -75,4 +93,5 @@ def ingest_ladder(
         matches_inserted=inserted,
         duplicates_skipped=duplicates,
         failed_requests=failed,
+        non_target_matches_skipped=non_target,
     )
