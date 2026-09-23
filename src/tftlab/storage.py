@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from .balance_window import resolve_balance_window
+from .experiments import EXPERIMENT_INDEXES_SQL, EXPERIMENT_TABLES_SQL
 from .normalize import CostLookup, normalize_match
 from .patch import patch_from_game_version
 from .unreal_patch import UNRESOLVED_UNREAL_PATCH, is_masked_unreal_version
@@ -155,8 +156,13 @@ class Database:
         # migration, or it fails against a database where the table already
         # existed pre-migration (see the TABLES_SQL/INDEXES_SQL split above).
         self._execute_script(TABLES_SQL)
+        # Notebook tables are brand new and additive (CREATE ... IF NOT
+        # EXISTS), so creating them on connect is the whole migration: it's
+        # idempotent and never touches match data.
+        self._execute_script(EXPERIMENT_TABLES_SQL)
         self._run_migrations()
         self._execute_script(INDEXES_SQL)
+        self._execute_script(EXPERIMENT_INDEXES_SQL)
 
     def _execute_script(self, sql: str) -> None:
         if self.dialect == "sqlite":

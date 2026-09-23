@@ -200,6 +200,7 @@ Every carry/discovery endpoint below is balance-window scoped (`?balance_window=
 - `GET /api/carries/{character_id}/items` -- `{"items": [...], "pairs": [...], "packages": [...]}`
 - `GET /api/carries/{character_id}/traits` -- trait-breakpoint associations
 - `GET /api/carries`, `GET /api/carries/{character_id}` -- unchanged; predate `/api/discovery` and are kept for their own existing tests/consumers
+- `GET /api/experiments`, `GET /api/experiments/{slug-or-id}` -- the read-only theorycraft notebook (see below); not balance-window scoped
 
 ## Frontend: Discovery Dashboard
 
@@ -211,10 +212,44 @@ Champion/item/trait art isn't fetched from CommunityDragon here (that would add 
 
 Evidence is currently always labeled `OBSERVED` (a real statistical result); `VARIANT` and `THEORYCRAFTED` styles exist in the CSS for later use but are never applied yet, since nothing in the backend synthesizes either kind of result today.
 
+## Theorycraft notebook ("My Experiments")
+
+A place to keep personal comp ideas ("6 Ravager Kha'Zix", "Cassiopeia/Fiddlesticks reroll") and let them grow. An idea can start as nothing but a title.
+
+**Model** (`src/tftlab/experiments.py`), created in the same database as the match data:
+
+- `experiments`: one row per idea. Anything we filter or sort on is a real column: `slug` (unique, URL name), `title`, `carry_character_id`, `carry_name`, `evidence_status`, `lifecycle`, `summary` (the thesis), `author_notes`, `origin` (`manual` or `demo`), and `created_at`/`updated_at` (ISO-8601 UTC). The id is a generated text key (`exp_…`), which works identically on SQLite and Postgres without auto-increment differences.
+- `comp_json`: the structured comp as one validated JSON document. Fields: `core_units`, `optional_units` (each `{name, character_id?, star?, note?}`), `target_traits` (`{name, breakpoint?, note?}`; `"6 Ravager"` shorthand works), `carry_items`, `tank_items`, `secondary_carry` (`{unit, items}`), `target_level`, `reroll_level`, `roll_timing`, `positioning_notes`, `augment_notes`. Every field is optional; unknown keys are rejected so typos fail loudly. JSON rather than child tables because the comp is always read and written whole, never queried field by field, and it has to grow without schema changes. It's stored as plain `TEXT`, so there are no backend-specific JSON operators.
+- `experiment_tags`: normalized, so `?tag=` filtering is a portable join.
+- `experiment_field_notes`: the dated research log. Its columns are `noted_at`, `kind`, `evidence_status`, `body`, `source_name`, `source_url`, and a `data_json` blob for things like similarity scores, first-seen/last-checked or Riot match ids. **Nothing writes to it yet.** It exists so the next milestone (sightings, source URLs, Riot evidence, status transitions) can append dated rows without reshaping `experiments`. The detail API already returns them, oldest first.
+
+**Evidence vs. lifecycle** are separate columns. Evidence is `THEORYCRAFTED` (the default), `VARIANT` or `OBSERVED`. `OBSERVED` can't be set by hand, because it's reserved for ideas with attached statistical evidence, which isn't supported yet; nothing is ever promoted automatically. Lifecycle is the owner's workflow: `idea`, `testing`, `watching` or `archived`. Both are also enforced with database `CHECK` constraints.
+
+**Migration**: the tables are `CREATE TABLE IF NOT EXISTS` and run on every connect, like the rest of the schema. An existing production database gains them on its next connect, with no separate command, no downtime and no change to match data. Running it repeatedly is a no-op.
+
+**Writing (owner only, via CLI)**: the website is read-only, since there are no accounts yet. Entries are written with these commands, against `--db`, else `DATABASE_URL` (production), else the local SQLite file:
+
+```bash
+tftlab experiment-add --title "Kha'Zix + 6 Ravager. Try rerolling him."
+tftlab experiment-add --title "6 Ravager Kha'Zix" --carry "Kha'Zix" --core "Kha'Zix" \
+  --trait "6 Ravager" --carry-item "Infinity Edge" --reroll-level 7 --tag reroll
+tftlab experiment-add --from-json idea.json          # richer entries; flags override the file
+tftlab experiment-list [--status ...] [--lifecycle ...] [--carry ...] [--tag ...] [--json]
+tftlab experiment-show 6-ravager-khazix [--json]
+tftlab experiment-update 6-ravager-khazix --lifecycle testing --add-tag ravager
+tftlab experiment-update 6-ravager-khazix --from-json edited.json
+```
+
+`experiment-show --json` prints exactly the shape `--from-json` accepts. So the workflow for "tell an assistant a comp, get an entry" is: have it write that JSON, then `experiment-add --from-json`. To edit, export with `show --json`, change it, and apply it with `update --from-json`. In `update`, list flags (`--core`, `--carry-item`, …) replace that list, and `comp` in JSON is merged key by key.
+
+**Reading (web)**: `GET /api/experiments` (filters `status`, `lifecycle`, `carry`, `tag`) and `GET /api/experiments/{slug-or-id}` (adds `field_notes`, 404 if unknown). There are no POST/PUT/PATCH/DELETE routes, and a test asserts that every route in the app is GET/HEAD only. Pages: `/experiments` and `/experiments/{slug}`.
+
+**Examples**: three clearly-labeled example entries (`is_example: true`, tagged `example`, `THEORYCRAFTED`, no stats) are seeded only into the local demo database, and only when it has no experiments. They're never written to a real database.
+
 ## Next milestones
 
 - Candidate-board generation with beam search (explicitly out of scope for this milestone).
-- Known-comp similarity detection against external public sources.
+- Known-comp similarity detection against external public sources, writing dated sightings into each experiment's field notes.
 - Champion/item/trait art via a cached CommunityDragon-backed endpoint.
 - TFT Academy-style comp pages with an evidence panel showing observed vs inferred recommendations (`VARIANT`/`THEORYCRAFTED`), once board synthesis exists.
 

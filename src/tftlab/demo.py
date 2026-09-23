@@ -4,17 +4,21 @@ import random
 from typing import Any
 
 
+# Real current-set champions (ids, names and shop costs as CommunityDragon
+# lists them), so demo screens never show a champion that isn't in the set.
+# The match results generated from them are entirely synthetic.
+# tests/test_demo_roster.py checks these against the committed roster.
 CARRIES = [
-    ("TFT18_Cassiopeia", "Cassiopeia", 2, 0.60),
-    ("TFT18_Khazix", "Kha'Zix", 1, 0.57),
-    ("TFT18_Warwick", "Warwick", 2, 0.54),
-    ("TFT18_Caitlyn", "Caitlyn", 1, 0.49),
+    ("DA_18_Cassiopeia", "Cassiopeia", 3, 0.60),
+    ("DA_18_KhaZix", "Kha'Zix", 3, 0.57),
+    ("DA_18_Warwick", "Warwick", 2, 0.54),
+    ("DA_18_Caitlyn", "Caitlyn", 2, 0.49),
 ]
 FILLERS = [
-    ("TFT18_Fiddlesticks", "Fiddlesticks", 3),
-    ("TFT18_Ivern", "Ivern", 2),
-    ("TFT18_Garen", "Garen", 1),
-    ("TFT18_Leona", "Leona", 3),
+    ("DA_Fiddlesticks18", "Fiddlesticks", 3),
+    ("DA_18_Ivern", "Ivern", 5),
+    ("DA_18_Sejuani", "Sejuani", 2),
+    ("DA_18_Leona", "Leona", 1),
 ]
 
 

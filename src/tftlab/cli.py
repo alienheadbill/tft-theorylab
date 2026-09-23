@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,15 @@ from .analytics import available_balance_windows, carry_commitment_stats, defaul
 from .cdragon import CommunityDragonClient, SetMetadata
 from .config import Settings
 from .demo import generate_demo_matches
+from .experiments import (
+    Experiment,
+    ExperimentError,
+    ExperimentNotFound,
+    create_experiment,
+    get_experiment,
+    list_experiments,
+    update_experiment,
+)
 from .ingest import ingest_ladder
 from .normalize import CostLookup
 from .riot import RiotApiError, RiotClient, classify_riot_error
@@ -490,6 +500,266 @@ def leaderboard(
             database, balance_window=balance_window, min_samples=min_samples, max_cost=max_cost
         )
     _print_stats(stats)
+
+
+# ---------------------------------------------------------------------------
+# Theorycraft notebook ("experiments"). Writes happen only here, through the
+# owner's CLI against the configured database -- the website is read-only.
+
+_DB_OPTION_HELP = "SQLite path or postgres:// URL; defaults to DATABASE_URL, then TFT_DB_PATH"
+
+
+def _describe_target(database: Database) -> str:
+    # Never echo a connection string: it may carry credentials.
+    return "postgres database" if database.dialect == "postgres" else f"sqlite file {database.path}"
+
+
+def _load_json_file(path: Path | None) -> dict:
+    if path is None:
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise typer.BadParameter(f"couldn't read {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise typer.BadParameter(f"{path} must contain a JSON object")
+    return data
+
+
+def _experiment_fields_from_flags(
+    *,
+    title: str | None,
+    slug: str | None,
+    carry: str | None,
+    carry_id: str | None,
+    status: str | None,
+    lifecycle: str | None,
+    summary: str | None,
+    notes: str | None,
+    core: list[str] | None,
+    optional: list[str] | None,
+    trait: list[str] | None,
+    carry_item: list[str] | None,
+    tank_item: list[str] | None,
+    secondary_unit: str | None,
+    secondary_item: list[str] | None,
+    target_level: int | None,
+    reroll_level: int | None,
+    roll_timing: str | None,
+    positioning: str | None,
+    augments: str | None,
+) -> dict:
+    """Only flags that were actually given end up in the result, so the same
+    helper serves both add (fills in) and update (partial change)."""
+    fields = {
+        "title": title, "slug": slug, "carry_name": carry, "carry_character_id": carry_id,
+        "evidence_status": status, "lifecycle": lifecycle, "summary": summary, "author_notes": notes,
+    }
+    data = {k: v for k, v in fields.items() if v is not None}
+    comp_flags = {
+        "core_units": core, "optional_units": optional, "target_traits": trait,
+        "carry_items": carry_item, "tank_items": tank_item, "target_level": target_level,
+        "reroll_level": reroll_level, "roll_timing": roll_timing,
+        "positioning_notes": positioning, "augment_notes": augments,
+    }
+    comp = {k: v for k, v in comp_flags.items() if v not in (None, [])}
+    if secondary_unit is not None or secondary_item:
+        comp["secondary_carry"] = {"unit": secondary_unit, "items": secondary_item or []}
+    if comp:
+        data["comp"] = comp
+    return data
+
+
+def _merge_entry(base: dict, overrides: dict) -> dict:
+    merged = {**base, **{k: v for k, v in overrides.items() if k != "comp"}}
+    if "comp" in overrides:
+        merged["comp"] = {**(base.get("comp") or {}), **overrides["comp"]}
+    return merged
+
+
+def _print_experiment(e: Experiment) -> None:
+    console.print(f"[bold]{e.title}[/bold]  [magenta][{e.evidence_status}][/magenta]  ({e.lifecycle})")
+    console.print(f"  slug: {e.slug}   id: {e.experiment_id}{'   (example entry)' if e.origin == 'demo' else ''}")
+    if e.carry_name or e.carry_character_id:
+        console.print(f"  carry: {e.carry_name or ''} {f'({e.carry_character_id})' if e.carry_character_id else ''}".rstrip())
+    if e.summary:
+        console.print(f'  thesis: "{e.summary}"')
+    comp = e.comp
+
+    def units(key: str) -> str:
+        parts = []
+        for u in comp[key]:
+            label = u["name"] + (f" {u['star']}★" if u.get("star") else "")
+            parts.append(label + (f" ({u['note']})" if u.get("note") else ""))
+        return ", ".join(parts)
+
+    lines = [
+        ("core", units("core_units")),
+        ("optional", units("optional_units")),
+        ("traits", ", ".join(
+            (f"{t['breakpoint']} " if t.get("breakpoint") else "") + t["name"] for t in comp["target_traits"]
+        )),
+        ("carry items", ", ".join(comp["carry_items"])),
+        ("tank items", ", ".join(comp["tank_items"])),
+        ("secondary", "" if not comp["secondary_carry"] else " ".join(filter(None, [
+            comp["secondary_carry"].get("unit"), ", ".join(comp["secondary_carry"].get("items") or [])
+        ]))),
+        ("target level", comp["target_level"] or ""),
+        ("reroll level", comp["reroll_level"] or ""),
+        ("roll timing", comp["roll_timing"] or ""),
+        ("positioning", comp["positioning_notes"] or ""),
+        ("augments", comp["augment_notes"] or ""),
+        ("notes", e.author_notes or ""),
+        ("tags", " ".join(f"#{t}" for t in e.tags)),
+    ]
+    for label, value in lines:
+        if value:
+            console.print(f"  {label}: {value}")
+    console.print(f"  created {e.created_at}   updated {e.updated_at}")
+
+
+@app.command("experiment-add")
+def experiment_add(
+    title: str = typer.Option(None, "--title", help="Required unless given in --from-json"),
+    from_json: Path = typer.Option(None, "--from-json", help="JSON file with any entry fields; flags override it"),
+    slug: str = typer.Option(None, "--slug", help="URL name; generated from the title if omitted"),
+    carry: str = typer.Option(None, "--carry", help="Carry's display name, e.g. \"Kha'Zix\""),
+    carry_id: str = typer.Option(None, "--carry-id", help="Carry's character_id, e.g. DA_18_KhaZix"),
+    status: str = typer.Option(None, "--status", help="THEORYCRAFTED (default) or VARIANT"),
+    lifecycle: str = typer.Option(None, "--lifecycle", help="idea (default), testing, watching, archived"),
+    summary: str = typer.Option(None, "--summary", help="One-line thesis"),
+    notes: str = typer.Option(None, "--notes", help="Personal notes"),
+    core: list[str] = typer.Option(None, "--core", help="Core unit (repeatable)"),
+    optional: list[str] = typer.Option(None, "--optional", help="Optional/flex unit (repeatable)"),
+    trait: list[str] = typer.Option(None, "--trait", help="Trait target like '6 Ravager' (repeatable)"),
+    carry_item: list[str] = typer.Option(None, "--carry-item", help="Carry item (repeatable)"),
+    tank_item: list[str] = typer.Option(None, "--tank-item", help="Tank item (repeatable)"),
+    secondary_unit: str = typer.Option(None, "--secondary-unit", help="Secondary carry"),
+    secondary_item: list[str] = typer.Option(None, "--secondary-item", help="Secondary carry item (repeatable)"),
+    target_level: int = typer.Option(None, "--target-level", min=1, max=11),
+    reroll_level: int = typer.Option(None, "--reroll-level", min=1, max=11),
+    roll_timing: str = typer.Option(None, "--roll-timing"),
+    positioning: str = typer.Option(None, "--positioning"),
+    augments: str = typer.Option(None, "--augments"),
+    tag: list[str] = typer.Option(None, "--tag", help="Tag (repeatable)"),
+    db: str = typer.Option(None, "--db", help=_DB_OPTION_HELP),
+) -> None:
+    """Add a theorycraft idea to the notebook. Only a title is required."""
+    flags = _experiment_fields_from_flags(
+        title=title, slug=slug, carry=carry, carry_id=carry_id, status=status, lifecycle=lifecycle,
+        summary=summary, notes=notes, core=core, optional=optional, trait=trait, carry_item=carry_item,
+        tank_item=tank_item, secondary_unit=secondary_unit, secondary_item=secondary_item,
+        target_level=target_level, reroll_level=reroll_level, roll_timing=roll_timing,
+        positioning=positioning, augments=augments,
+    )
+    if tag:
+        flags["tags"] = tag
+    data = _merge_entry(_load_json_file(from_json), flags)
+    with Database(_resolve_db_target(db)) as database:
+        try:
+            created = create_experiment(database, data)
+        except ExperimentError as exc:
+            console.print(f"[red]Not saved:[/red] {exc}")
+            raise typer.Exit(code=1)
+        console.print(f"Saved to the {_describe_target(database)}.")
+    _print_experiment(created)
+
+
+@app.command("experiment-update")
+def experiment_update(
+    key: str = typer.Argument(..., help="Experiment slug or id"),
+    from_json: Path = typer.Option(None, "--from-json", help="JSON with fields to change; flags override it"),
+    title: str = typer.Option(None, "--title"),
+    slug: str = typer.Option(None, "--slug"),
+    carry: str = typer.Option(None, "--carry"),
+    carry_id: str = typer.Option(None, "--carry-id"),
+    status: str = typer.Option(None, "--status", help="THEORYCRAFTED or VARIANT"),
+    lifecycle: str = typer.Option(None, "--lifecycle"),
+    summary: str = typer.Option(None, "--summary"),
+    notes: str = typer.Option(None, "--notes"),
+    core: list[str] = typer.Option(None, "--core", help="Replaces the core unit list (repeatable)"),
+    optional: list[str] = typer.Option(None, "--optional", help="Replaces the optional unit list"),
+    trait: list[str] = typer.Option(None, "--trait", help="Replaces the trait targets"),
+    carry_item: list[str] = typer.Option(None, "--carry-item", help="Replaces the carry items"),
+    tank_item: list[str] = typer.Option(None, "--tank-item", help="Replaces the tank items"),
+    secondary_unit: str = typer.Option(None, "--secondary-unit"),
+    secondary_item: list[str] = typer.Option(None, "--secondary-item"),
+    target_level: int = typer.Option(None, "--target-level", min=1, max=11),
+    reroll_level: int = typer.Option(None, "--reroll-level", min=1, max=11),
+    roll_timing: str = typer.Option(None, "--roll-timing"),
+    positioning: str = typer.Option(None, "--positioning"),
+    augments: str = typer.Option(None, "--augments"),
+    add_tag: list[str] = typer.Option(None, "--add-tag"),
+    remove_tag: list[str] = typer.Option(None, "--remove-tag"),
+    db: str = typer.Option(None, "--db", help=_DB_OPTION_HELP),
+) -> None:
+    """Change an existing idea. Only the fields you pass are touched."""
+    flags = _experiment_fields_from_flags(
+        title=title, slug=slug, carry=carry, carry_id=carry_id, status=status, lifecycle=lifecycle,
+        summary=summary, notes=notes, core=core, optional=optional, trait=trait, carry_item=carry_item,
+        tank_item=tank_item, secondary_unit=secondary_unit, secondary_item=secondary_item,
+        target_level=target_level, reroll_level=reroll_level, roll_timing=roll_timing,
+        positioning=positioning, augments=augments,
+    )
+    changes = _merge_entry(_load_json_file(from_json), flags)
+    with Database(_resolve_db_target(db)) as database:
+        try:
+            updated = update_experiment(database, key, changes, add_tags=add_tag, remove_tags=remove_tag)
+        except ExperimentNotFound:
+            console.print(f"[red]No experiment {key!r}.[/red]")
+            raise typer.Exit(code=1)
+        except ExperimentError as exc:
+            console.print(f"[red]Not saved:[/red] {exc}")
+            raise typer.Exit(code=1)
+        console.print(f"Updated in the {_describe_target(database)}.")
+    _print_experiment(updated)
+
+
+@app.command("experiment-list")
+def experiment_list(
+    status: str = typer.Option(None, "--status", help="THEORYCRAFTED, VARIANT or OBSERVED"),
+    lifecycle: str = typer.Option(None, "--lifecycle"),
+    carry: str = typer.Option(None, "--carry", help="Carry name or character_id"),
+    tag: str = typer.Option(None, "--tag"),
+    as_json: bool = typer.Option(False, "--json", help="Print JSON instead of a table"),
+    db: str = typer.Option(None, "--db", help=_DB_OPTION_HELP),
+) -> None:
+    """List notebook entries, most recently updated first."""
+    with Database(_resolve_db_target(db)) as database:
+        entries = list_experiments(database, evidence_status=status, lifecycle=lifecycle, carry=carry, tag=tag)
+    if as_json:
+        typer.echo(json.dumps([e.to_input() for e in entries], indent=2, ensure_ascii=False))
+        return
+    if not entries:
+        console.print("[yellow]No experiments match.[/yellow] Add one with `tftlab experiment-add --title ...`.")
+        return
+    table = Table(title="Theorycraft notebook")
+    for column in ("Slug", "Title", "Carry", "Evidence", "Lifecycle", "Updated"):
+        table.add_column(column)
+    for e in entries:
+        table.add_row(e.slug, e.title, e.carry_name or "—", e.evidence_status, e.lifecycle, e.updated_at)
+    console.print(table)
+
+
+@app.command("experiment-show")
+def experiment_show(
+    key: str = typer.Argument(..., help="Experiment slug or id"),
+    as_json: bool = typer.Option(
+        False, "--json", help="Print editable JSON (feed it back with experiment-update --from-json)"
+    ),
+    db: str = typer.Option(None, "--db", help=_DB_OPTION_HELP),
+) -> None:
+    """Show one notebook entry."""
+    with Database(_resolve_db_target(db)) as database:
+        try:
+            entry = get_experiment(database, key)
+        except ExperimentNotFound:
+            console.print(f"[red]No experiment {key!r}.[/red]")
+            raise typer.Exit(code=1)
+    if as_json:
+        typer.echo(json.dumps(entry.to_input(), indent=2, ensure_ascii=False))
+        return
+    _print_experiment(entry)
 
 
 @app.command()
