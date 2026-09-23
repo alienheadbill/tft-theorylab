@@ -333,20 +333,20 @@ class Database:
         production-safety requirement that this backfill never touch
         historical rows that were already correct.
 
-        Idempotent and self-healing: a row that resolves to
-        `UNRESOLVED_UNREAL_PATCH` (see `resolve_unreal_patch`) still
-        "looks Unreal-masked" (the sentinel itself contains "unreal"), so
-        it's re-examined -- and re-resolved with the *current*
-        `UNREAL_PATCH_REGISTRY` -- on every connect. That's deliberate: once
-        real cutover timestamps are added to the registry, previously
-        unresolved production rows correctly pick up their real patch on
-        the very next connect, with no separate one-off re-migration step
-        needed. A row already holding a real resolved patch is never
-        revisited (a real patch string never contains "unreal").
+        Idempotent and self-healing: a row already holding
+        `UNRESOLVED_UNREAL_PATCH` is explicitly re-examined too (not just
+        rows with the raw pre-fix masked string), and re-resolved with the
+        *current* `UNREAL_PATCH_REGISTRY` on every connect. That's
+        deliberate: once real, verified cutover windows are added to the
+        registry, previously unresolved production rows correctly pick up
+        their real patch on the very next connect, with no separate
+        one-off re-migration step needed. A row already holding a real
+        resolved patch (e.g. `"14.6"`) is never revisited -- it matches
+        neither the masked-placeholder shape nor the sentinel.
         """
         rows = self.query_all("SELECT match_id, patch, game_version, game_datetime FROM matches WHERE patch IS NOT NULL")
         for match_id, patch, game_version, game_datetime in rows:
-            if not is_masked_unreal_version(patch):
+            if not (is_masked_unreal_version(patch) or patch == UNRESOLVED_UNREAL_PATCH):
                 continue
             new_patch = patch_from_game_version(game_version, game_datetime)
             new_window = (

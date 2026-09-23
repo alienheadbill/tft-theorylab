@@ -232,6 +232,50 @@ def test_unreal_backfill_is_idempotent(tmp_path: Path) -> None:
     assert first == second == ("unreal-unresolved", None)
 
 
+def test_unreal_backfill_self_heals_once_a_verified_window_is_registered(tmp_path: Path) -> None:
+    """Regression test: tightening `is_masked_unreal_version` to the exact
+    "?.?.?.?" placeholder shape (so a future genuinely-parseable
+    "TFT Unreal Version 18.3.1234" isn't misclassified) must not also break
+    self-healing -- a row already holding the UNRESOLVED_UNREAL_PATCH
+    sentinel (which doesn't match that shape) must still be re-examined and
+    correctly reclassified once a real, verified+sourced window covering
+    its timestamp is added to the registry, with no separate re-migration
+    step."""
+    import tftlab.unreal_patch as unreal_patch_module
+    from tftlab.unreal_patch import UnrealPatchWindow
+
+    db_path = tmp_path / "self_heal.sqlite3"
+    with Database(db_path):
+        pass
+    _seed_pre_fix_unreal_row(db_path, "UNREAL_1", game_datetime=1_500_000)
+
+    with Database(db_path):
+        pass  # first connect: backfills to the unresolved sentinel
+
+    original_registry = unreal_patch_module.UNREAL_PATCH_REGISTRY
+    try:
+        unreal_patch_module.UNREAL_PATCH_REGISTRY = (
+            UnrealPatchWindow(
+                client_patch="18.2",
+                starts_at=1_000_000,
+                ends_at=2_000_000,
+                verified=True,
+                source="test fixture",
+            ),
+        )
+        with Database(db_path) as db:
+            healed = db.query_one("SELECT patch, balance_window FROM matches WHERE match_id = ?", ("UNREAL_1",))
+    finally:
+        unreal_patch_module.UNREAL_PATCH_REGISTRY = original_registry
+
+    # balance_window.py's own registered mid-patch cutover for 18.2 (see
+    # BALANCE_WINDOW_REGISTRY) is far later than this test's timestamp, so
+    # the resolved patch composes into the "a" half -- proving the two
+    # registries still compose correctly after self-healing, not just that
+    # a bare client patch comes back.
+    assert healed == ("18.2", "18.2a")
+
+
 def _clean_postgres_db() -> Database:
     # Only called from tests already guarded by @requires_postgres.
     db = Database(POSTGRES_TEST_URL)

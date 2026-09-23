@@ -18,11 +18,18 @@ def patch_from_game_version(game_version: str | None, game_datetime: int | None 
 
     Riot has also started returning a masked "Unreal"-era placeholder
     (`"TFT Unreal Version ?.?.?.?"`) with no parseable version at all, for
-    some matches; those are resolved from `game_datetime` via
-    `tftlab.unreal_patch.resolve_unreal_patch` instead (see that module --
-    this can return `UNRESOLVED_UNREAL_PATCH` when `game_datetime` doesn't
-    fall in any registered cutover, which callers must handle explicitly,
-    not treat as a normal patch string).
+    some matches. A normal numeric `Version X.Y` is always tried FIRST,
+    regardless of whether the string also happens to mention "Unreal" --
+    a hypothetical future `"TFT Unreal Version 18.3.1234"` must resolve to
+    `"18.3"` via the normal parse below, not get routed into timestamp
+    resolution just because of the word "Unreal". Only when no numeric
+    version can be parsed AND the string matches the actual masked
+    placeholder shape (literal `"?.?.?.?"` -- see
+    `tftlab.unreal_patch.is_masked_unreal_version`) is it resolved from
+    `game_datetime` via `tftlab.unreal_patch.resolve_unreal_patch` instead
+    (see that module -- this can return `UNRESOLVED_UNREAL_PATCH` when
+    `game_datetime` doesn't fall in any registered window, which callers
+    must handle explicitly, not treat as a normal patch string).
 
     For any other unparseable shape (e.g. deterministic demo data uses
     `"Version DEMO"`), the raw string is used as-is so a dataset still gets
@@ -31,11 +38,11 @@ def patch_from_game_version(game_version: str | None, game_datetime: int | None 
     """
     if not game_version:
         return None
-    if is_masked_unreal_version(game_version):
-        return resolve_unreal_patch(game_datetime)
     match = _VERSION_RE.search(game_version)
     if match:
         return f"{match.group(1)}.{match.group(2)}"
+    if is_masked_unreal_version(game_version):
+        return resolve_unreal_patch(game_datetime)
     return game_version.strip() or None
 
 

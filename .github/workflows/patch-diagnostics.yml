@@ -1,0 +1,74 @@
+name: Patch diagnostics
+
+# Manually-triggered only: this reads production's Postgres database (via
+# its external URL) to report patch/balance-window classification health,
+# so it must never run on push/pull_request, and has no schedule -- it's a
+# targeted, occasional diagnostic, not a recurring job.
+on:
+  workflow_dispatch: {}
+
+# The workflow can be started against any branch from the Actions UI, but
+# it must only ever run against production config from `main` -- enforced
+# in "Validate production configuration" below, not just by convention.
+permissions:
+  contents: read
+
+# A single fixed group serializes runs (queued, never cancelled) -- the
+# same safety principle as live-ingest.yml, kept as its own group since
+# this workflow only reads and never writes, so it has no need to
+# serialize against an actual ingest run.
+concurrency:
+  group: patch-diagnostics-production
+  cancel-in-progress: false
+
+jobs:
+  patch-diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Runs before checkout/install and before any database access: cheap
+      # fail-fast so a bad branch selection or missing/malformed secret
+      # never gets as far as a real connection. Static messages only --
+      # never echoes DATABASE_URL. No RIOT_API_KEY check: this workflow
+      # never talks to Riot at all.
+      - name: Validate production configuration
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This workflow must be run with 'main' explicitly selected as the branch (got ${GITHUB_REF})." >&2
+            exit 1
+          fi
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "::error::DATABASE_URL repository secret is not set. Refusing to proceed: the CLI's local-SQLite fallback must never be used against production." >&2
+            exit 1
+          fi
+          case "${DATABASE_URL}" in
+            postgres://*|postgresql://*) ;;
+            *)
+              echo "::error::DATABASE_URL must start with postgres:// or postgresql://." >&2
+              exit 1
+              ;;
+          esac
+          echo "Production configuration looks valid."
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package with Postgres support
+        run: pip install -e ".[dev,postgres]"
+
+      # Read-only and non-ingesting: no Riot calls, no CommunityDragon
+      # calls, no payload dumps, no deletion, no analytics/model changes --
+      # see tftlab.cli.patch_diagnostics_command. Connecting still runs the
+      # normal, safe, idempotent Unreal-patch backfill migration, which may
+      # move a still-unresolved row's patch to the explicit unresolved
+      # sentinel; that's expected self-healing, not a side effect to guard
+      # against here.
+      - name: Run patch diagnostics
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: tftlab patch-diagnostics

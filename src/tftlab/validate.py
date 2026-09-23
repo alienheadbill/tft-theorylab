@@ -7,7 +7,7 @@ from .analytics import default_balance_window
 from .cdragon import SetMetadata
 from .riot import RANKED_TFT_QUEUE_ID
 from .storage import Database
-from .unreal_patch import UNRESOLVED_UNREAL_PATCH
+from .unreal_patch import UNREAL_PATCH_REGISTRY, UNRESOLVED_UNREAL_PATCH
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,19 @@ class IntegrityReport:
     #: separately so "the ingest pipeline is broken" and "we just haven't
     #: registered this Unreal-era patch cutover yet" aren't conflated.
     unresolved_unreal_matches: int
+    #: The `game_datetime` range specifically among unresolved-Unreal
+    #: matches (`None` if there are none) -- exactly what's needed to
+    #: derive a real `UnrealPatchWindow` for `UNREAL_PATCH_REGISTRY`
+    #: without running another ingest just to see it.
+    unresolved_unreal_earliest_game_datetime: int | None
+    unresolved_unreal_latest_game_datetime: int | None
+    #: How many `UNREAL_PATCH_REGISTRY` entries exist vs. how many are
+    #: actually usable for resolution (`UnrealPatchWindow.is_usable`:
+    #: verified and sourced). A gap between these two numbers means someone
+    #: added a provisional/unsourced window that is silently NOT being used
+    #: to classify any match -- surfaced here so that never goes unnoticed.
+    unreal_registry_total_windows: int
+    unreal_registry_usable_windows: int
     #: Diagnostic-only, store-wide (not scoped to `balance_window` like the
     #: fields above -- their whole point is to be useful even when nothing
     #: has resolved into a balance window at all): distinct raw
@@ -213,6 +226,11 @@ def validate_live_data(
     unresolved_unreal_matches = db.query_one(
         "SELECT COUNT(*) FROM matches WHERE patch = ?", (UNRESOLVED_UNREAL_PATCH,)
     )[0]
+    unresolved_unreal_earliest_game_datetime, unresolved_unreal_latest_game_datetime = db.query_one(
+        "SELECT MIN(game_datetime), MAX(game_datetime) FROM matches WHERE patch = ?", (UNRESOLVED_UNREAL_PATCH,)
+    ) or (None, None)
+    unreal_registry_total_windows = len(UNREAL_PATCH_REGISTRY)
+    unreal_registry_usable_windows = sum(1 for w in UNREAL_PATCH_REGISTRY if w.is_usable)
     game_version_distribution = {
         str(v): int(n) for v, n in db.query_all("SELECT game_version, COUNT(*) FROM matches GROUP BY game_version")
     }
@@ -257,6 +275,10 @@ def validate_live_data(
         duplicate_match_ids=duplicate_match_ids,
         participants_without_units=participants_without_units,
         unresolved_unreal_matches=unresolved_unreal_matches,
+        unresolved_unreal_earliest_game_datetime=unresolved_unreal_earliest_game_datetime,
+        unresolved_unreal_latest_game_datetime=unresolved_unreal_latest_game_datetime,
+        unreal_registry_total_windows=unreal_registry_total_windows,
+        unreal_registry_usable_windows=unreal_registry_usable_windows,
         game_version_distribution=game_version_distribution,
         client_patch_distribution=client_patch_distribution,
         balance_window_distribution=balance_window_distribution,
