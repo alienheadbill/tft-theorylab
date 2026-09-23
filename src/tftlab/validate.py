@@ -47,7 +47,25 @@ class IntegrityReport:
     unknown_champion_ids: list[str] | None
     unknown_item_ids: list[str] | None
     unknown_trait_ids: list[str] | None
+    #: Every match with `balance_window IS NULL`, regardless of cause --
+    #: this includes matches intentionally left unresolved because their
+    #: masked-Unreal `game_version` doesn't fall in any usable
+    #: `UNREAL_PATCH_REGISTRY` window (see `unresolved_unreal_matches`)
+    #: alongside anything genuinely broken. Kept for backward-compatible
+    #: visibility into the raw total; `unexpected_missing_balance_window`
+    #: below is what actually drives `is_severe`.
     matches_missing_balance_window: int
+    #: Matches missing a `balance_window` for a reason OTHER than the
+    #: intentional, documented Unreal rollout-gap exclusion:
+    #: `balance_window IS NULL AND (patch IS NULL OR patch !=
+    #: UNRESOLVED_UNREAL_PATCH)`. A `NULL` patch counts as unexpected too --
+    #: `patch != UNRESOLVED_UNREAL_PATCH` alone would silently exclude it
+    #: under SQL's three-valued logic (`NULL != 'x'` is neither true nor
+    #: false), which would hide a genuinely broken row. This is the field
+    #: `is_severe` actually checks: a store with only intentionally-
+    #: unresolved Unreal matches must never fail validation just because
+    #: they exist, but anything else missing a balance window still should.
+    unexpected_missing_balance_window: int
     malformed_placements: int
     duplicate_match_ids: int
     participants_without_units: int
@@ -93,15 +111,25 @@ class IntegrityReport:
         Unknown champion/item/trait IDs and a low cost-presence/metadata-
         coverage rate are surfaced as warnings, not severe failures: they
         can legitimately happen right after a patch before CommunityDragon
-        updates, or for rare special units. A missing balance window, an
-        out-of-range placement, a duplicate primary key, or a participant
-        with no board at all indicate the ingest pipeline itself is broken
-        (or, for a missing balance window specifically, that some matches
-        are waiting on an Unreal-era patch registry entry -- still worth
-        failing loudly on rather than silently analyzing a partial dataset).
+        updates, or for rare special units. An out-of-range placement, a
+        duplicate primary key, a participant with no board at all, or a
+        match missing its balance window for anything other than the
+        intentional, documented Unreal rollout-gap exclusion
+        (`unexpected_missing_balance_window`) indicate the ingest pipeline
+        itself is broken.
+
+        Deliberately checks `unexpected_missing_balance_window`, NOT
+        `matches_missing_balance_window`: a production database can have
+        dozens of matches sitting in the Unreal registry's deliberate
+        18.2/18.3 gap (see `tftlab.unreal_patch`) that are correctly,
+        intentionally excluded from every balance-window-scoped analytics
+        query -- that is expected, safe, and must never fail validation on
+        its own. Those matches are still reported prominently (via
+        `unresolved_unreal_matches`/`matches_missing_balance_window`), just
+        not as a structural-corruption failure.
         """
         return bool(
-            self.matches_missing_balance_window
+            self.unexpected_missing_balance_window
             or self.malformed_placements
             or self.duplicate_match_ids
             or self.participants_without_units
@@ -223,6 +251,14 @@ def validate_live_data(
     matches_missing_balance_window = db.query_one(
         "SELECT COUNT(*) FROM matches WHERE balance_window IS NULL"
     )[0]
+    # A NULL patch must count as unexpected too: `patch != ?` alone would
+    # silently exclude it under SQL's three-valued logic (NULL != 'x' is
+    # neither true nor false), hiding a genuinely broken row behind the
+    # intentional-Unreal-gap exclusion it doesn't actually qualify for.
+    unexpected_missing_balance_window = db.query_one(
+        "SELECT COUNT(*) FROM matches WHERE balance_window IS NULL AND (patch IS NULL OR patch != ?)",
+        (UNRESOLVED_UNREAL_PATCH,),
+    )[0]
     unresolved_unreal_matches = db.query_one(
         "SELECT COUNT(*) FROM matches WHERE patch = ?", (UNRESOLVED_UNREAL_PATCH,)
     )[0]
@@ -271,6 +307,7 @@ def validate_live_data(
         unknown_item_ids=unknown_item_ids,
         unknown_trait_ids=unknown_trait_ids,
         matches_missing_balance_window=matches_missing_balance_window,
+        unexpected_missing_balance_window=unexpected_missing_balance_window,
         malformed_placements=malformed_placements,
         duplicate_match_ids=duplicate_match_ids,
         participants_without_units=participants_without_units,
