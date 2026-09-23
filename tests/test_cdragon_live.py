@@ -8,11 +8,15 @@ environment that has outbound network access.
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 import pytest
 
-from tftlab.cdragon import CommunityDragonClient
+from tftlab.cdragon import CommunityDragonClient, SetMetadata
+
+ROSTER_FIXTURE = Path(__file__).parent / "fixtures" / "current_set_roster.json"
 
 RUN_LIVE = os.environ.get("TFTLAB_LIVE_CDRAGON_TEST") == "1"
 
@@ -42,3 +46,32 @@ def test_live_communitydragon_feed_parses_with_sensible_costs(tmp_path) -> None:
     print(f"Set {meta.set_number} sample champions:")
     for champion in sample:
         print(f"  {champion.character_id}: {champion.name} (cost {champion.cost})")
+
+
+def roster_snapshot(meta: SetMetadata) -> dict:
+    """The committed-fixture shape of a set's roster (see
+    tests/fixtures/current_set_roster.json and tests/test_demo_roster.py)."""
+    return {
+        "set_number": meta.set_number,
+        "champions": {
+            cid: {"name": c.name, "cost": c.cost} for cid, c in sorted(meta.champions.items())
+        },
+        "traits": {tid: t.name for tid, t in sorted(meta.traits.items())},
+    }
+
+
+@requires_live_network
+def test_committed_roster_fixture_matches_live_set(tmp_path) -> None:
+    """The offline demo-roster check (tests/test_demo_roster.py) trusts a
+    committed copy of the current set's roster. This catches that copy going
+    stale when a new set ships. On a mismatch, the message contains the full
+    live roster as JSON so the fixture can be refreshed from the log."""
+    with CommunityDragonClient(cache_dir=tmp_path) as client:
+        live = roster_snapshot(client.get_set_metadata("latest", use_cache=False))
+
+    committed = json.loads(ROSTER_FIXTURE.read_text()) if ROSTER_FIXTURE.exists() else {}
+    committed = {k: committed.get(k) for k in ("set_number", "champions", "traits")}
+    assert committed == live, (
+        "tests/fixtures/current_set_roster.json is out of date. Live roster:\n"
+        + json.dumps(live, indent=1, ensure_ascii=False)
+    )
