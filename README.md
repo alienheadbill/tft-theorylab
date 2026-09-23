@@ -237,4 +237,6 @@ Both URLs point at the same database; only the host/network path differs. Gettin
 
 Neither secret is ever printed in the workflow's logs.
 
-**Running it:** GitHub → **Actions** tab → **Live ingest** in the left-hand workflow list → **Run workflow** button → confirm on the default branch.
+**Running it:** GitHub → **Actions** tab → **Live ingest** in the left-hand workflow list → **Run workflow** button → **explicitly select `main`** as the branch (this repository's GitHub default branch is not `main`, so the dropdown will not default to it -- picking anything else fails immediately, see below) → **Run workflow**.
+
+**Production safety checks:** before touching Riot or the database, a first `Validate production configuration` step fails the run (with a static error message, never a secret value) if the selected branch isn't `main`, if `RIOT_API_KEY`/`DATABASE_URL` is missing, or if `DATABASE_URL` doesn't start with `postgres://`/`postgresql://` -- this exists specifically so the ingest CLI's normal local-SQLite fallback can never be silently used in production. The workflow also declares `permissions: contents: read` (it never needs to write to the repo), a 30-minute job timeout, and a fixed `concurrency` group so two manually-triggered runs can never ingest into production at the same time (a second run queues rather than cancelling the first).
