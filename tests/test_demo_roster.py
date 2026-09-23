@@ -3,7 +3,7 @@ the current TFT set, with their real shop costs, so a demo screen never
 implies an out-of-set champion is playable.
 
 Offline on purpose: it checks against the committed roster in
-tests/fixtures/current_set_roster.json, not the live CommunityDragon feed.
+src/tftlab/data/set_roster.json, not the live CommunityDragon feed.
 tests/test_cdragon_live.py keeps that fixture honest (nightly, opt-in).
 """
 
@@ -17,7 +17,7 @@ import pytest
 from tftlab.demo import CARRIES, FILLERS, generate_demo_matches
 from tftlab.experiments import DEMO_EXPERIMENTS, normalize_comp
 
-ROSTER = json.loads((Path(__file__).parent / "fixtures" / "current_set_roster.json").read_text())
+ROSTER = json.loads((Path(__file__).parents[1] / "src" / "tftlab" / "data" / "set_roster.json").read_text())
 CHAMPIONS: dict[str, dict] = ROSTER["champions"]
 # Shop champions only: the roster also lists camps, anvils and other 0/8/11-"cost" units.
 PLAYABLE_NAMES = {c["name"] for c in CHAMPIONS.values() if 1 <= c["cost"] <= 5}

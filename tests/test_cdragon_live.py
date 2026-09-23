@@ -16,7 +16,7 @@ import pytest
 
 from tftlab.cdragon import CommunityDragonClient, SetMetadata
 
-ROSTER_FIXTURE = Path(__file__).parent / "fixtures" / "current_set_roster.json"
+ROSTER_FIXTURE = Path(__file__).parents[1] / "src" / "tftlab" / "data" / "set_roster.json"
 
 RUN_LIVE = os.environ.get("TFTLAB_LIVE_CDRAGON_TEST") == "1"
 
@@ -50,7 +50,7 @@ def test_live_communitydragon_feed_parses_with_sensible_costs(tmp_path) -> None:
 
 def roster_snapshot(meta: SetMetadata) -> dict:
     """The committed-fixture shape of a set's roster (see
-    tests/fixtures/current_set_roster.json and tests/test_demo_roster.py)."""
+    src/tftlab/data/set_roster.json and tests/test_demo_roster.py)."""
     return {
         "set_number": meta.set_number,
         "champions": {
@@ -72,6 +72,6 @@ def test_committed_roster_fixture_matches_live_set(tmp_path) -> None:
     committed = json.loads(ROSTER_FIXTURE.read_text()) if ROSTER_FIXTURE.exists() else {}
     committed = {k: committed.get(k) for k in ("set_number", "champions", "traits")}
     assert committed == live, (
-        "tests/fixtures/current_set_roster.json is out of date. Live roster:\n"
+        "src/tftlab/data/set_roster.json is out of date. Live roster:\n"
         + json.dumps(live, indent=1, ensure_ascii=False)
     )

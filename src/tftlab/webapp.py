@@ -24,6 +24,8 @@ from .analytics import (
 from .demo import generate_demo_matches
 from .experiments import ExperimentNotFound, get_experiment, list_experiments, seed_demo_experiments
 from .storage import Database
+from .scout import comp_fingerprint
+from .sources import scout_checklist
 from .unreal_patch import UNRESOLVED_UNREAL_PATCH
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -255,7 +257,12 @@ def create_app() -> FastAPI:
                 entry = get_experiment(db, key)
             except ExperimentNotFound:
                 raise HTTPException(status_code=404, detail="Experiment not found") from None
-        return {"demo": demo, "experiment": entry.to_api(include_field_notes=True)}
+        body = entry.to_api(include_field_notes=True)
+        # Read-only extras for the page: the normalized fingerprint and which
+        # sources the research log actually has notes from.
+        body["fingerprint"] = comp_fingerprint(entry)
+        body["scout_checklist"] = scout_checklist(entry.field_notes)
+        return {"demo": demo, "experiment": body}
 
     @app.get("/api/health")
     def health() -> dict[str, object]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -18,6 +19,8 @@ from .experiments import (
     Experiment,
     ExperimentError,
     ExperimentNotFound,
+    FIELD_NOTE_KINDS,
+    add_field_note,
     create_experiment,
     get_experiment,
     list_experiments,
@@ -28,6 +31,8 @@ from .normalize import CostLookup
 from .riot import RiotApiError, RiotClient, classify_riot_error
 from .storage import Database
 from .validate import validate_live_data
+from .scout import LOW_SAMPLE_COMMITMENT_GAMES, evidence_summary, record_riot_evidence, scout
+from .sources import RESEARCH_LABELS, SOURCES, scout_checklist
 
 app = typer.Typer(help="TFT Theory Lab: discover low-usage, data-backed carry lines.")
 console = Console()
@@ -418,7 +423,7 @@ def patch_diagnostics_command(
     )
 
 
-_LOW_SAMPLE_COMMITMENT_GAMES = 30
+_LOW_SAMPLE_COMMITMENT_GAMES = LOW_SAMPLE_COMMITMENT_GAMES
 
 
 def _is_low_sample(candidate) -> bool:
@@ -616,6 +621,31 @@ def _print_experiment(e: Experiment) -> None:
         if value:
             console.print(f"  {label}: {value}")
     console.print(f"  created {e.created_at}   updated {e.updated_at}")
+    if e.field_notes:
+        console.print("  [bold]field notes[/bold]")
+        for n in e.field_notes:
+            _print_note(n)
+    _print_checklist(scout_checklist(e.field_notes))
+
+
+def _print_note(n: dict) -> None:
+    source = f" · {n['source_name']}" if n["source_name"] else ""
+    extras = " ".join(filter(None, [
+        f"[{n['evidence_status']}]" if n["evidence_status"] else "",
+        f"({n['research_label_text']})" if n["research_label_text"] else "",
+    ]))
+    console.print(f"    {n['noted_at'][:10]}  {n['kind_label'].upper()}{source}  {extras}".rstrip())
+    console.print(f"      {n['body']}", markup=False)
+    if n["source_url"]:
+        console.print(f"      {n['source_url']}", markup=False)
+
+
+def _print_checklist(items: list[dict]) -> None:
+    console.print("  [bold]research checklist[/bold] (ticked only when a field note came from that source)")
+    for item in items:
+        mark = "x" if item["checked"] else " "
+        when = f"  last {item['last_noted_at'][:10]}" if item["last_noted_at"] else ""
+        console.print(f"    \\[{mark}] {item['label']}{when}")
 
 
 @app.command("experiment-add")
@@ -760,6 +790,152 @@ def experiment_show(
         typer.echo(json.dumps(entry.to_input(), indent=2, ensure_ascii=False))
         return
     _print_experiment(entry)
+
+
+@app.command("experiment-note")
+def experiment_note(
+    key: str = typer.Argument(..., help="Experiment slug or id"),
+    kind: str = typer.Option(None, "--kind", help=", ".join(k for k in FIELD_NOTE_KINDS if k not in ("riot_evidence", "status_change"))),
+    body: str = typer.Option(None, "--body", help="What you found, in a sentence or two"),
+    source: str = typer.Option(None, "--source", help="e.g. \"TFT Academy\", MetaTFT, tactics.tools, \"Little Buddy Bot\", Reddit"),
+    url: str = typer.Option(None, "--url", help="http(s) link to what you looked at"),
+    status: str = typer.Option(None, "--status", help="Evidence stamp for this note: THEORYCRAFTED or VARIANT"),
+    label: str = typer.Option(None, "--label", help="Research label: " + ", ".join(RESEARCH_LABELS)),
+    noted_at: str = typer.Option(None, "--noted-at", help="Date checked, e.g. 2026-09-24 (default: now)"),
+    from_json: Path = typer.Option(None, "--from-json", help="JSON with any of these fields plus optional 'data'"),
+    db: str = typer.Option(None, "--db", help=_DB_OPTION_HELP),
+) -> None:
+    """Record research about an idea: a scout report, mechanic note, sighting or personal note.
+
+    Only record a source you actually checked. The note is dated and shown in
+    the experiment's Field Notes; it never changes the evidence status.
+    """
+    data = _load_json_file(from_json)
+    allowed = {"kind", "body", "source", "url", "status", "label", "noted_at", "data"}
+    unknown = set(data) - allowed
+    if unknown:
+        raise typer.BadParameter(f"unknown field(s) in --from-json: {', '.join(sorted(unknown))}")
+    flags = {"kind": kind, "body": body, "source": source, "url": url, "status": status,
+             "label": label, "noted_at": noted_at}
+    data.update({k: v for k, v in flags.items() if v is not None})
+    with Database(_resolve_db_target(db)) as database:
+        try:
+            note = add_field_note(
+                database, key, kind=data.get("kind") or "", body=data.get("body"),
+                source=data.get("source"), source_url=data.get("url"), evidence_status=data.get("status"),
+                research_label=data.get("label"), noted_at=data.get("noted_at"), data=data.get("data"),
+            )
+        except ExperimentNotFound:
+            console.print(f"[red]No experiment {key!r}.[/red]")
+            raise typer.Exit(code=1)
+        except ExperimentError as exc:
+            console.print(f"[red]Not saved:[/red] {exc}")
+            raise typer.Exit(code=1)
+        console.print(f"Field note added in the {_describe_target(database)}.")
+    _print_note(note)
+
+
+def _readable(label: str) -> str:
+    """Item/trait ids as people write them: TFT_Item_BlueBuff+TFT_Item_Deathcap -> Blue Buff + Deathcap."""
+    parts = [re.sub(r"(?<=[a-z])(?=[A-Z])", " ", re.sub(r"^(?:TFT\d*_Item_|TFT\d*_|DA_\d*_?)", "", p)) for p in label.split("+")]
+    return " + ".join(parts)
+
+
+@app.command("experiment-scout")
+def experiment_scout(
+    key: str = typer.Argument(..., help="Experiment slug or id"),
+    balance_window: str = typer.Option(None, "--balance-window", help="Defaults to the latest window in the store"),
+    save: bool = typer.Option(False, "--save", help="Append the Riot evidence as a dated field note"),
+    as_json: bool = typer.Option(False, "--json", help="Print the full scout report as JSON"),
+    db: str = typer.Option(None, "--db", help=_DB_OPTION_HELP),
+) -> None:
+    """Fingerprint an idea, check it against OUR Riot data, and list the research still to do.
+
+    Makes no web requests: external sources are listed as still needed until a
+    field note from them is recorded with `tftlab experiment-note`.
+    """
+    with Database(_resolve_db_target(db)) as database:
+        try:
+            entry = get_experiment(database, key)
+        except ExperimentNotFound:
+            console.print(f"[red]No experiment {key!r}.[/red]")
+            raise typer.Exit(code=1)
+        report = scout(database, entry, balance_window=balance_window)
+        saved = record_riot_evidence(database, entry, report["riot_evidence"]) if save else None
+        target = _describe_target(database)
+
+    if as_json:
+        typer.echo(json.dumps({**report, "saved_note": saved}, indent=2, ensure_ascii=False, default=str))
+        return
+
+    fp, ev = report["fingerprint"], report["riot_evidence"]
+    console.print(f"[bold]SCOUT: {entry.title}[/bold]\n")
+    console.print("[bold]Fingerprint[/bold]")
+    if not fp["specified"]:
+        console.print("  (nothing structured yet: add a carry, core units or trait targets to scout this idea)")
+    rows = [
+        ("Carry", fp["primary_carry"]["name"] if fp["primary_carry"] else ""),
+        ("Secondary carry", fp["secondary_carry"]["name"] if fp["secondary_carry"] else ""),
+        ("Core", ", ".join(u["name"] for u in fp["core_units"])),
+        ("Optional", ", ".join(u["name"] for u in fp["optional_units"])),
+        ("Trait target", ", ".join(f"{t['breakpoint']} {t['name']}" if t["breakpoint"] else t["name"] for t in fp["target_traits"])),
+        ("Carry items", ", ".join(fp["carry_item_names"])),
+        ("Target level", fp["target_level"] or ""),
+        ("Reroll level", fp["reroll_level"] or ""),
+        ("Roll timing", fp["roll_timing"] or ""),
+    ]
+    for label_, value in rows:
+        if value:
+            console.print(f"  {label_}: {value}", markup=False)
+    if fp["signature"]:
+        console.print(f"  signature: {fp['signature']}", markup=False)
+
+    console.print(f"\n[bold]Our data[/bold] (balance window {ev['balance_window'] or '—'})")
+    if ev["status"] != "ok":
+        console.print(f"  {ev['message']}")
+    else:
+        pct = lambda v: "—" if v is None else f"{v:.1%}"  # noqa: E731
+        console.print(f"  Committed games: {ev['commitment_games']}")
+        console.print(f"  Appearance rate: {pct(ev['appearance_rate'])}   Commitment rate: {pct(ev['commitment_rate'])}")
+        console.print(f"  Avg placement: {ev['avg_placement']:.2f}   Top 4: {pct(ev['top4_rate'])}   "
+                      f"Win: {pct(ev['win_rate'])}   3\u2605 hit: {pct(ev['hit_3star_rate'])}")
+        console.print(f"  Opportunity Score (ours): {ev['opportunity_score']:.1f}")
+        for title, rows_ in (("Partners", ev["best_partners"]), ("Item packages", ev["best_item_packages"]),
+                             ("Trait breakpoints", ev["best_trait_breakpoints"])):
+            if rows_:
+                console.print(f"  Strongest {title.lower()}: " + "; ".join(f"{_readable(r['label'])} ({r['games']} g)" for r in rows_),
+                              markup=False)
+        for u in ev["core_units"]:
+            console.print(f"  With {u['name']}: {u['games']} of {ev['commitment_games']} committed games", markup=False)
+        if ev["core_together"]:
+            console.print(f"  All core units together: {ev['core_together']['games']} games", markup=False)
+        for t in ev["trait_targets"]:
+            label_ = f"{t['breakpoint']} {t['name']}" if t["breakpoint"] else t["name"]
+            note = "" if t["known_trait"] else " (not a trait in the current set roster)"
+            console.print(f"  With {label_} active: {t['games']} of {ev['commitment_games']} committed games{note}", markup=False)
+        if ev["low_sample"]:
+            console.print(f"  [bold red]LOW SAMPLE[/bold red]: fewer than {LOW_SAMPLE_COMMITMENT_GAMES} committed games; don't trust these numbers yet.")
+
+    console.print("\n[bold]External checks still needed[/bold] (not checked by this command)")
+    if report["external_checks_needed"]:
+        for label_ in report["external_checks_needed"]:
+            console.print(f"  - {label_}")
+    else:
+        console.print("  none: every source on the checklist has a field note")
+    if saved:
+        console.print(f"\nSaved a riot_evidence field note in the {target}.")
+    else:
+        console.print("\nNothing saved. Re-run with --save to append this as a field note.")
+
+
+@app.command("scout-sources")
+def scout_sources() -> None:
+    """Print the scout source vocabulary and research labels."""
+    for s_ in SOURCES:
+        console.print(f"[bold]{s_.label}[/bold] ({s_.key}){' · external' if s_.external else ''}: {s_.role}")
+    console.print("")
+    for key_, (text, meaning) in RESEARCH_LABELS.items():
+        console.print(f"[bold]{text.upper()}[/bold] ({key_}): {meaning}")
 
 
 @app.command()

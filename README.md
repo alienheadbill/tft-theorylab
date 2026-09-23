@@ -221,7 +221,7 @@ A place to keep personal comp ideas ("6 Ravager Kha'Zix", "Cassiopeia/Fiddlestic
 - `experiments`: one row per idea. Anything we filter or sort on is a real column: `slug` (unique, URL name), `title`, `carry_character_id`, `carry_name`, `evidence_status`, `lifecycle`, `summary` (the thesis), `author_notes`, `origin` (`manual` or `demo`), and `created_at`/`updated_at` (ISO-8601 UTC). The id is a generated text key (`exp_…`), which works identically on SQLite and Postgres without auto-increment differences.
 - `comp_json`: the structured comp as one validated JSON document. Fields: `core_units`, `optional_units` (each `{name, character_id?, star?, note?}`), `target_traits` (`{name, breakpoint?, note?}`; `"6 Ravager"` shorthand works), `carry_items`, `tank_items`, `secondary_carry` (`{unit, items}`), `target_level`, `reroll_level`, `roll_timing`, `positioning_notes`, `augment_notes`. Every field is optional; unknown keys are rejected so typos fail loudly. JSON rather than child tables because the comp is always read and written whole, never queried field by field, and it has to grow without schema changes. It's stored as plain `TEXT`, so there are no backend-specific JSON operators.
 - `experiment_tags`: normalized, so `?tag=` filtering is a portable join.
-- `experiment_field_notes`: the dated research log. Its columns are `noted_at`, `kind`, `evidence_status`, `body`, `source_name`, `source_url`, and a `data_json` blob for things like similarity scores, first-seen/last-checked or Riot match ids. **Nothing writes to it yet.** It exists so the next milestone (sightings, source URLs, Riot evidence, status transitions) can append dated rows without reshaping `experiments`. The detail API already returns them, oldest first.
+- `experiment_field_notes`: the dated research log (see "Comp Scout" below). Columns: `noted_at`, `kind`, `source_key`, `source_name`, `source_url`, `evidence_status`, `research_label`, `body`, and a `data_json` blob for structured extras (Riot evidence snapshots, similarity scores, first-seen/last-checked, match ids). The detail API returns them oldest first.
 
 **Evidence vs. lifecycle** are separate columns. Evidence is `THEORYCRAFTED` (the default), `VARIANT` or `OBSERVED`. `OBSERVED` can't be set by hand, because it's reserved for ideas with attached statistical evidence, which isn't supported yet; nothing is ever promoted automatically. Lifecycle is the owner's workflow: `idea`, `testing`, `watching` or `archived`. Both are also enforced with database `CHECK` constraints.
 
@@ -246,10 +246,88 @@ tftlab experiment-update 6-ravager-khazix --from-json edited.json
 
 **Examples**: three clearly-labeled example entries (`is_example: true`, tagged `example`, `THEORYCRAFTED`, no stats) are seeded only into the local demo database, and only when it has no experiments. They're never written to a real database.
 
+## Comp Scout (research log)
+
+The loop is **Discover → Save → Scout → Gather evidence → Add field notes → Reassess**. Scouting v1 makes no web requests: our own Riot data is checked automatically, and outside research is recorded by hand (or by an assistant working through the CLI) after someone actually looks.
+
+**Fingerprint** (`tftlab.scout.comp_fingerprint`). A deterministic, normalized description of what an idea actually specifies:
+- It covers the primary and secondary carry, core units, optional units (kept separate, never duplicating core), trait targets with breakpoints, carry items, target and reroll level, and roll timing.
+- Names are matched to current-set ids through the shipped roster (`src/tftlab/data/set_roster.json`, from CommunityDragon). "Ravager" becomes `DA_18_Slayer` and "Kha'Zix" becomes `DA_18_KhaZix`.
+- Matching ignores case and punctuation. Item names and ids normalize to the same key (`Infinity Edge` = `TFT_Item_InfinityEdge`), and every list is de-duplicated and sorted.
+- The output includes a `signature` such as `carry=khazix;traits=ravager@6;reroll_level=7`.
+- Nothing is inferred, and a full board is never required. "6 Ravager Kha'Zix" with only a carry and a trait target still fingerprints; a title-only idea fingerprints as empty rather than guessed.
+
+**Our Riot data** (`tftlab.scout.riot_evidence`), for one balance window (the latest by default, or `--balance-window`):
+- **Carry numbers:** commitment games, appearance, commitment and conversion rates, average placement, top 4, win, 3★ hit, our Opportunity Score, and the strongest partners, item packages and trait breakpoints. These come straight from the existing discovery analytics (`discovery_candidate_for`), so they match the Discoveries page exactly; nothing is re-derived.
+- **The idea's own pieces:** how often each other core unit, all core units together, and each trait target appeared alongside the committed carry. "6 Ravager" means six Ravager units on the board, not trait tier 6.
+- **Small samples:** fewer than 30 committed games is labeled `LOW SAMPLE`.
+
+**Field notes** (`tftlab.experiments.add_field_note`):
+
+| Kind | Meaning |
+|---|---|
+| `riot_evidence` | A snapshot of our data. Written only by `experiment-scout --save`, so "our data" can't be hand-typed. |
+| `scout_report` | What a checked source showed (or didn't). |
+| `mechanic_note` | Odds, shop, loot and encounter mechanics. |
+| `community_sighting`, `tournament_sighting` | Sightings from players or competitive play. |
+| `my_note` | A personal hypothesis or observation. |
+| `status_change` | Logged automatically whenever an experiment's evidence status changes. |
+
+- Every note is dated (`--noted-at`, default now; no future dates). Notes list oldest first.
+- Source URLs must be http(s) links to a real host, with no spaces and no embedded credentials.
+- A note may carry an evidence stamp (THEORYCRAFTED or VARIANT; never OBSERVED by hand) and a research label.
+- A note never changes the experiment's own evidence status.
+
+**Source vocabulary** (`tftlab.sources`, or `tftlab scout-sources`):
+
+| Source | Role |
+|---|---|
+| Our data / Riot | Statistical source of truth for Theory Lab metrics. The only input to the Opportunity Score. |
+| CommunityDragon | Game metadata (and, later, cached art). |
+| TFT Academy | Curated / established-comp scout signal. |
+| MetaTFT | External comp, meta and tournament corroboration. |
+| tactics.tools | External statistical relationship corroboration. |
+| Little Buddy Bot | Mechanics, odds, loot/shop/encounter/system notes. |
+| Community / Reddit | Emerging player sightings. |
+| Tournament / high-Elo | Competitive sightings. |
+| User / My note | Personal hypothesis or observation. |
+
+External sites' statistics are stored as separate evidence (in a note's body or `data`) and are **never** blended into our numbers or the Opportunity Score. A test checks that adding notes leaves every Opportunity Score unchanged. `--source` is matched by name ("tft academy", "MetaTFT", "Reddit"); a URL is never used to guess a source, and unknown names are kept as written (`source_key: other`).
+
+**Research labels** are a prepared vocabulary that a person attaches to a note after checking a source; nothing assigns them automatically.
+- `KNOWN`: a sufficiently similar established comp exists.
+- `VARIANT`: a recognizable established shell, but this version materially differs.
+- `EMERGING`: outside evidence exists, but it isn't an established listed comp.
+- `NO_PUBLIC_MATCH_FOUND`: nothing sufficiently similar in the sources actually checked. It must name its source and is dated by the note. We never say "nobody has played this."
+- `THEORYCRAFTED`: primarily our own hypothesis.
+
+**Scout checklist**. The experiment page (and `experiment-show`) lists:
+- Our Riot data
+- TFT Academy
+- MetaTFT
+- tactics.tools
+- Mechanics check
+- Community sightings
+- High-Elo / tournament sightings
+
+A line is ticked only when a field note from that source, or of that kind, exists. An unticked line means "not recorded as checked", nothing more.
+
+```bash
+tftlab experiment-scout 6-ravager-khazix              # fingerprint + our data + what's still unchecked
+tftlab experiment-scout 6-ravager-khazix --save       # also append a dated riot_evidence note
+tftlab experiment-note 6-ravager-khazix --kind scout_report --source "TFT Academy" \
+  --url "https://..." --body "No sufficiently similar listed comp found." --label "no public match found"
+tftlab experiment-note 6-ravager-khazix --kind mechanic_note --source "Little Buddy Bot" \
+  --url "https://..." --body "Relevant shop mechanic affects practical reroll odds."
+tftlab experiment-note 6-ravager-khazix --from-json note.json   # kind/body/source/url/status/label/noted_at/data
+```
+
+All of these write only through the CLI. The website remains read-only.
+
 ## Next milestones
 
 - Candidate-board generation with beam search (explicitly out of scope for this milestone).
-- Known-comp similarity detection against external public sources, writing dated sightings into each experiment's field notes.
+- Selected automated scout/watch runs that write dated field notes, using the fingerprint for similarity (no novelty scoring yet).
 - Champion/item/trait art via a cached CommunityDragon-backed endpoint.
 - TFT Academy-style comp pages with an evidence panel showing observed vs inferred recommendations (`VARIANT`/`THEORYCRAFTED`), once board synthesis exists.
 
