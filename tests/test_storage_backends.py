@@ -202,7 +202,10 @@ def test_backfill_only_touches_rows_from_the_masked_unreal_fallback(tmp_path: Pa
                 units=[make_unit("TFT14_Foo", tier=2, items=[])],
             )
         )
-    _seed_pre_fix_unreal_row(db_path, "UNREAL_OLD", game_datetime=1_790_000_000_000)
+    # 2026-09-23T00:00:00Z: inside the real registry's deliberate 18.2/18.3
+    # gap (the reported early-NA-18.3 rollout window), so this stays
+    # unresolved even against the now-populated production registry.
+    _seed_pre_fix_unreal_row(db_path, "UNREAL_OLD", game_datetime=1_790_121_600_000)
 
     with Database(db_path) as db:
         normal_row = db.query_one("SELECT patch, balance_window FROM matches WHERE match_id = ?", ("NORMAL_1",))
@@ -211,8 +214,8 @@ def test_backfill_only_touches_rows_from_the_masked_unreal_fallback(tmp_path: Pa
     # Untouched: already had a genuinely parsed patch.
     assert normal_row == ("14.6", "14.6")
     # Corrected: was the masked-Unreal fallback string; now the explicit
-    # unresolved sentinel with balance_window left unset (production's
-    # UNREAL_PATCH_REGISTRY is empty, so this can't resolve further yet).
+    # unresolved sentinel with balance_window left unset -- this timestamp
+    # falls in the registry's deliberate gap, not any known-safe window.
     assert unreal_row == ("unreal-unresolved", None)
 
 
@@ -222,7 +225,8 @@ def test_unreal_backfill_is_idempotent(tmp_path: Path) -> None:
     # seed a raw pre-fix row directly, bypassing normalize/ingest entirely.
     with Database(db_path):
         pass
-    _seed_pre_fix_unreal_row(db_path, "UNREAL_1", game_datetime=1_790_000_000_000)
+    # 2026-09-23T00:00:00Z: inside the real registry's deliberate gap.
+    _seed_pre_fix_unreal_row(db_path, "UNREAL_1", game_datetime=1_790_121_600_000)
 
     with Database(db_path) as db:
         first = db.query_one("SELECT patch, balance_window FROM matches WHERE match_id = ?", ("UNREAL_1",))
@@ -274,6 +278,28 @@ def test_unreal_backfill_self_heals_once_a_verified_window_is_registered(tmp_pat
     # registries still compose correctly after self-healing, not just that
     # a bare client patch comes back.
     assert healed == ("18.2", "18.2a")
+
+
+def test_real_populated_registry_self_heals_a_production_style_sentinel_row(tmp_path: Path) -> None:
+    """The actual deliverable of this milestone: a row shaped exactly like
+    production's 47 affected matches (raw masked-Unreal fallback value,
+    timestamp inside the real conservative 18.2 window) must self-heal to
+    a real patch/balance_window against the now-populated, real
+    UNREAL_PATCH_REGISTRY -- no fabricated/injected registry involved."""
+    # 2026-09-17T21:47:59.589Z -- production's actual reported earliest
+    # masked-Unreal game_datetime, which falls inside the real 18.2 window.
+    production_earliest = 1_789_681_679_589
+
+    db_path = tmp_path / "real_self_heal.sqlite3"
+    with Database(db_path):
+        pass
+    _seed_pre_fix_unreal_row(db_path, "PROD_STYLE_1", game_datetime=production_earliest)
+
+    with Database(db_path) as db:
+        healed = db.query_one("SELECT patch, balance_window FROM matches WHERE match_id = ?", ("PROD_STYLE_1",))
+
+    assert healed[0] == "18.2"
+    assert healed[1] in ("18.2a", "18.2b")
 
 
 def _clean_postgres_db() -> Database:
@@ -547,7 +573,7 @@ def test_postgres_unreal_backfill_matches_sqlite_and_is_idempotent() -> None:
             "INSERT INTO matches VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 "UNREAL_PG_1",
-                1_790_000_000_000,
+                1_790_121_600_000,  # 2026-09-23T00:00:00Z: inside the real registry's deliberate gap
                 _UNREAL_FALLBACK_VERSION,
                 _UNREAL_FALLBACK_VERSION,
                 _UNREAL_FALLBACK_VERSION,
@@ -576,3 +602,46 @@ def test_postgres_unreal_backfill_matches_sqlite_and_is_idempotent() -> None:
         db.close()
 
     assert first == second == ("unreal-unresolved", None)
+
+
+@requires_postgres
+def test_postgres_real_registry_resolves_a_production_style_sentinel_row() -> None:
+    """Postgres counterpart of
+    test_real_populated_registry_self_heals_a_production_style_sentinel_row:
+    a row shaped like production's affected matches, with a timestamp
+    inside the real conservative 18.2 window, must resolve identically on
+    Postgres -- proving SQLite/Postgres parity for the actual populated
+    registry, not just a fabricated one."""
+    production_earliest = 1_789_681_679_589  # 2026-09-17T21:47:59.589Z
+
+    db = _clean_postgres_db()
+    try:
+        db.execute(
+            "INSERT INTO matches VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                "PROD_STYLE_PG_1",
+                production_earliest,
+                _UNREAL_FALLBACK_VERSION,
+                _UNREAL_FALLBACK_VERSION,
+                _UNREAL_FALLBACK_VERSION,
+                "standard",
+                1100,
+                18,
+                "TFTSet18",
+                "{}",
+            ),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    db = Database(POSTGRES_TEST_URL)
+    try:
+        healed = db.query_one(
+            "SELECT patch, balance_window FROM matches WHERE match_id = ?", ("PROD_STYLE_PG_1",)
+        )
+    finally:
+        db.close()
+
+    assert healed[0] == "18.2"
+    assert healed[1] in ("18.2a", "18.2b")

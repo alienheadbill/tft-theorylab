@@ -185,16 +185,19 @@ def test_queue_distribution_reports_non_target_matches_without_deleting_them(tmp
 
 
 def test_unresolved_unreal_matches_reported_and_marked_severe(tmp_path: Path) -> None:
-    """A masked-Unreal match with no matching UNREAL_PATCH_REGISTRY entry
+    """A masked-Unreal match with no matching UNREAL_PATCH_REGISTRY window
     must be surfaced prominently (severe, via the existing missing-
     balance-window check) and counted separately so it reads as "needs a
-    registry entry", not "the ingest pipeline is broken"."""
+    registry entry", not "the ingest pipeline is broken". Uses a
+    game_datetime inside the real registry's deliberate 18.2/18.3 gap
+    (the reported early-NA-18.3 rollout period), which must stay
+    unresolved even though the registry itself is now populated."""
     with Database(tmp_path / "unreal.sqlite3") as db:
         db.ingest_match(
             make_match(
                 "UNREAL_1",
                 game_version="TFT Unreal Version ?.?.?.?",
-                game_datetime=1_790_000_000_000,
+                game_datetime=1_790_121_600_000,  # 2026-09-23T00:00:00Z: in the gap
                 units=[make_unit("TFT18_Foo", tier=2, items=[])],
             )
         )

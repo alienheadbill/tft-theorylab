@@ -16,9 +16,25 @@ _MASKED_PLACEHOLDER_RE = re.compile(r"\?\.\?\.\?\.\?")
 
 @dataclass(frozen=True)
 class UnrealPatchWindow:
-    """One TFT client patch's deployment window during the "Unreal" era,
-    when Riot Match-V1 returns a masked `game_version` (e.g. `"TFT Unreal
-    Version ?.?.?.?"`) with no parseable major.minor version at all.
+    """One TFT client patch's **trusted classification window** during the
+    "Unreal" era, when Riot Match-V1 returns a masked `game_version` (e.g.
+    `"TFT Unreal Version ?.?.?.?"`) with no parseable major.minor version
+    at all.
+
+    Deliberately named a "classification window", not a "deployment
+    window": `starts_at`/`ends_at` are NOT a claim about the exact second
+    Riot flipped the patch live, nor about exactly when every region
+    received it. They mark a conservative interval this codebase is
+    confident belongs entirely to one patch, derived from Riot's public
+    patch schedule with a safety margin on both ends. Real rollouts are
+    messy -- a patch can ship late, early, or region-by-region (see the
+    real 18.2/18.3 case this was built for: NA reportedly received 18.3
+    roughly a day early) -- and a window here is intentionally drawn to
+    exclude that whole ambiguous rollout period rather than guess which
+    side of it a given match falls on. Losing a small number of matches to
+    "unresolved" during a patch-day transition is the intended, accepted
+    cost: it is strictly better than silently mixing two different balance
+    states into one bucket.
 
     `starts_at`/`ends_at` are epoch-millisecond `game_datetime` bounds,
     inclusive/exclusive respectively: a match resolves to this window only
@@ -31,7 +47,10 @@ class UnrealPatchWindow:
     registered yet -- that inference is exactly the kind of confident
     wrong guess this module exists to avoid. A timestamp before every
     window, in a gap between two windows, or after every window's `ends_at`
-    simply doesn't resolve (see `resolve_unreal_patch`).
+    simply doesn't resolve (see `resolve_unreal_patch`) -- gaps are a
+    deliberate, load-bearing feature of this design, not an oversight: the
+    space between two windows is exactly where real-world rollout
+    ambiguity is meant to land.
 
     Kept as an entirely separate registry from
     `tftlab.balance_window.BALANCE_WINDOW_REGISTRY` on purpose: this one
@@ -71,8 +90,6 @@ class UnrealPatchWindow:
         return self.verified and bool(self.source)
 
 
-# NEEDS VERIFICATION -- this registry is currently EMPTY.
-#
 # Riot Match-V1 started returning a masked game_version ("TFT Unreal
 # Version ?.?.?.?") for some window of live matches, with no parseable
 # major.minor version at all. Resolving which real client patch (18.2,
@@ -80,35 +97,57 @@ class UnrealPatchWindow:
 # timestamp-based registry, since the version string itself carries no
 # usable information anymore.
 #
-# This sandbox's network egress cannot reach Riot's patch notes / status
-# endpoints to confirm real deployment timestamps (the same restriction
-# that has blocked raw.communitydragon.org and
-# static.developer.riotgames.com throughout this project), and no
-# fabricated timestamp belongs here -- an invented cutover would silently
-# mislabel real production matches with more confidence than the data
-# deserves. Even if an entry were added without verification, it would be
-# silently ignored by resolve_unreal_patch (see UnrealPatchWindow.is_usable)
-# rather than affect production classification.
+# These two windows are deliberately CONSERVATIVE CLASSIFICATION windows,
+# not exact deployment windows -- see UnrealPatchWindow's docstring. Source
+# for both: Riot's official TFT patch schedule,
+# https://support.riotgames.com/en-us/tft/events/patch-schedule-teamfight-tactics/
+# (18.2 scheduled 2026-09-10, 18.3 scheduled 2026-09-23 Pacific Time, 18.4
+# scheduled 2026-10-07). Community reports say NA actually received 18.3
+# roughly a day early (~2026-09-22); that entire ambiguous transition
+# period is deliberately EXCLUDED from both windows below, left as a gap
+# that resolves to UNRESOLVED_UNREAL_PATCH -- this sandbox has no way to
+# confirm the exact real rollout second for either region or patch, so it
+# does not guess one. A handful of matches from the patch-day transition
+# staying unresolved is the accepted, correct cost of never mixing two
+# different balance states into one bucket.
 #
-# To fill this in: run `tftlab patch-diagnostics` (or `validate-live-data`)
-# against production -- see its raw game_version distribution and
-# earliest/latest game_datetime output -- to read off the actual
-# masked-Unreal match timestamp range, cross-reference that against Riot's
-# published patch notes for the real deployment dates of 18.2/18.3/etc.,
-# then add entries here, e.g.:
+#   18.2 window: 2026-09-11T00:00:00Z .. 2026-09-22T00:00:00Z (exclusive)
+#     Starts a full day after the scheduled 2026-09-10 release (well past
+#     any normal same-day rollout); ends before the earliest reported NA
+#     18.3 sighting on 2026-09-22, so it can't bleed into the transition.
+#   18.3 window: 2026-09-24T07:00:00Z .. 2026-10-06T00:00:00Z (exclusive)
+#     Starts after the full scheduled 2026-09-23 Pacific-Time release day
+#     has elapsed everywhere in that timezone (2026-09-24T07:00:00Z is
+#     2026-09-23T24:00:00 -07:00, i.e. midnight PDT rolling into the 24th);
+#     ends before the next scheduled patch (18.4) on 2026-10-07.
 #
-#   UnrealPatchWindow(
-#       client_patch="18.2",
-#       starts_at=<epoch_ms patch 18.2 deployed>,
-#       ends_at=<epoch_ms patch 18.3 deployed>,  # exclusive; required
-#       verified=True,
-#       source="<link to Riot's patch notes or status announcement>",
-#   ),
+# Anything in the gap between these two windows (2026-09-22T00:00:00Z
+# through 2026-09-24T07:00:00Z) -- exactly the reported early-NA-18.3
+# transition period -- remains UNRESOLVED_UNREAL_PATCH by design.
 #
-# Until a verified, sourced entry covers a given masked match's
-# game_datetime, resolution deliberately returns UNRESOLVED_UNREAL_PATCH
-# rather than guessing.
-UNREAL_PATCH_REGISTRY: tuple[UnrealPatchWindow, ...] = ()
+# To extend this as new patches ship: read off the actual masked-Unreal
+# match timestamp range via `tftlab patch-diagnostics` (or
+# `validate-live-data`), cross-reference Riot's published patch schedule,
+# and add another conservative window following the same pattern -- margin
+# in from both the previous patch's scheduled end and this patch's
+# scheduled start, wide enough to exclude the rollout transition, backed
+# by the schedule URL as `source`.
+UNREAL_PATCH_REGISTRY: tuple[UnrealPatchWindow, ...] = (
+    UnrealPatchWindow(
+        client_patch="18.2",
+        starts_at=1_789_084_800_000,  # 2026-09-11T00:00:00Z
+        ends_at=1_790_035_200_000,  # 2026-09-22T00:00:00Z (exclusive)
+        verified=True,
+        source="https://support.riotgames.com/en-us/tft/events/patch-schedule-teamfight-tactics/",
+    ),
+    UnrealPatchWindow(
+        client_patch="18.3",
+        starts_at=1_790_233_200_000,  # 2026-09-24T07:00:00Z
+        ends_at=1_791_244_800_000,  # 2026-10-06T00:00:00Z (exclusive)
+        verified=True,
+        source="https://support.riotgames.com/en-us/tft/events/patch-schedule-teamfight-tactics/",
+    ),
+)
 
 #: Returned by `resolve_unreal_patch` (and therefore
 #: `tftlab.patch.patch_from_game_version`) when a masked Unreal
