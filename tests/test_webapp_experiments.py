@@ -61,7 +61,7 @@ def test_detail_and_filters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     client, path = _live_client(tmp_path, monkeypatch)
     with Database(path) as db:
         kha = create_experiment(db, {
-            "title": "6 Ravager Kha'Zix", "carry_name": "Kha'Zix", "carry_character_id": "TFT18_KhaZix",
+            "title": "6 Ravager Kha'Zix", "carry_name": "Kha'Zix", "carry_character_id": "DA_18_KhaZix",
             "comp": {"target_traits": ["6 Ravager"]}, "tags": ["ravager"],
         })
         create_experiment(db, {"title": "Caitlyn sketch", "evidence_status": "VARIANT", "lifecycle": "watching"})
@@ -69,7 +69,7 @@ def test_detail_and_filters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     detail = client.get(f"/api/experiments/{kha.slug}")
     assert detail.status_code == 200
     e = detail.json()["experiment"]
-    assert e["carry"] == {"character_id": "TFT18_KhaZix", "name": "Kha'Zix"}
+    assert e["carry"] == {"character_id": "DA_18_KhaZix", "name": "Kha'Zix"}
     assert e["comp"]["target_traits"] == [{"name": "Ravager", "breakpoint": 6, "note": None}]
     assert e["field_notes"] == []
     assert e["is_example"] is False

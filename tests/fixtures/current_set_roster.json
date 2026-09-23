@@ -1,0 +1,409 @@
+{
+ "_about": "Current TFT set roster from CommunityDragon (latest cdragon/tft/en_us.json, parsed by tftlab.cdragon.parse_set_metadata). Offline reference for tests/test_demo_roster.py. tests/test_cdragon_live.py::test_committed_roster_fixture_matches_live_set compares it with the live feed nightly and prints the new roster when a set changes; paste that output here to refresh.",
+ "_fetched": "2026-09-23 via the cdragon-live GitHub Actions workflow",
+ "set_number": 18,
+ "champions": {
+  "DA_18_Ahri": {
+   "name": "Ahri",
+   "cost": 4
+  },
+  "DA_18_Akali_AD": {
+   "name": "Akali",
+   "cost": 1
+  },
+  "DA_18_Alistar": {
+   "name": "Alistar",
+   "cost": 2
+  },
+  "DA_18_Alune": {
+   "name": "Alune",
+   "cost": 5
+  },
+  "DA_18_Aphelios": {
+   "name": "Aphelios",
+   "cost": 4
+  },
+  "DA_18_Ashe": {
+   "name": "Ashe",
+   "cost": 5
+  },
+  "DA_18_Azir": {
+   "name": "Azir",
+   "cost": 3
+  },
+  "DA_18_Caitlyn": {
+   "name": "Caitlyn",
+   "cost": 2
+  },
+  "DA_18_Camille": {
+   "name": "Camille",
+   "cost": 1
+  },
+  "DA_18_Cassiopeia": {
+   "name": "Cassiopeia",
+   "cost": 3
+  },
+  "DA_18_Diana": {
+   "name": "Diana",
+   "cost": 3
+  },
+  "DA_18_ElderDragon": {
+   "name": "Elder Dragon",
+   "cost": 5
+  },
+  "DA_18_Elise": {
+   "name": "Elise",
+   "cost": 2
+  },
+  "DA_18_Ezreal": {
+   "name": "Ezreal",
+   "cost": 4
+  },
+  "DA_18_GnarSmall": {
+   "name": "Gnar",
+   "cost": 5
+  },
+  "DA_18_Hecarim": {
+   "name": "Hecarim",
+   "cost": 3
+  },
+  "DA_18_Ivern": {
+   "name": "Ivern",
+   "cost": 5
+  },
+  "DA_18_Kayle": {
+   "name": "Kayle",
+   "cost": 2
+  },
+  "DA_18_Kennen": {
+   "name": "Kennen",
+   "cost": 5
+  },
+  "DA_18_KhaZix": {
+   "name": "Kha'Zix",
+   "cost": 3
+  },
+  "DA_18_Kobuko": {
+   "name": "Kobuko",
+   "cost": 1
+  },
+  "DA_18_LeBlanc": {
+   "name": "LeBlanc",
+   "cost": 2
+  },
+  "DA_18_Leona": {
+   "name": "Leona",
+   "cost": 1
+  },
+  "DA_18_Lillia": {
+   "name": "Lillia",
+   "cost": 4
+  },
+  "DA_18_Lux_Coven": {
+   "name": "Lux (Coven)",
+   "cost": 5
+  },
+  "DA_18_Lux_Elderwood": {
+   "name": "Lux (Elderwood)",
+   "cost": 5
+  },
+  "DA_18_Lux_Fae": {
+   "name": "Lux (Fae)",
+   "cost": 5
+  },
+  "DA_18_Lux_Inferno": {
+   "name": "Lux (Inferno)",
+   "cost": 5
+  },
+  "DA_18_Lux_Moonbeam": {
+   "name": "Lux (Lunar)",
+   "cost": 5
+  },
+  "DA_18_Lux_Primal": {
+   "name": "Lux (Primal)",
+   "cost": 5
+  },
+  "DA_18_Lux_Sunbeam": {
+   "name": "Lux (Solar)",
+   "cost": 5
+  },
+  "DA_18_Malphite": {
+   "name": "Malphite",
+   "cost": 4
+  },
+  "DA_18_Maokai": {
+   "name": "Maokai",
+   "cost": 5
+  },
+  "DA_18_MasterYi_AD": {
+   "name": "Master Yi",
+   "cost": 3
+  },
+  "DA_18_Morgana": {
+   "name": "Morgana",
+   "cost": 4
+  },
+  "DA_18_Ornn": {
+   "name": "Ornn",
+   "cost": 1
+  },
+  "DA_18_Rakan": {
+   "name": "Rakan",
+   "cost": 1
+  },
+  "DA_18_Rammus": {
+   "name": "Rammus",
+   "cost": 3
+  },
+  "DA_18_RekSai": {
+   "name": "Rek'Sai",
+   "cost": 1
+  },
+  "DA_18_Rengar": {
+   "name": "Rengar",
+   "cost": 3
+  },
+  "DA_18_Sejuani": {
+   "name": "Sejuani",
+   "cost": 2
+  },
+  "DA_18_Sentry": {
+   "name": "Pebbles",
+   "cost": 1
+  },
+  "DA_18_Sett": {
+   "name": "Sett",
+   "cost": 4
+  },
+  "DA_18_Shen": {
+   "name": "Shen",
+   "cost": 2
+  },
+  "DA_18_Sivir": {
+   "name": "Sivir",
+   "cost": 4
+  },
+  "DA_18_Soraka": {
+   "name": "Soraka",
+   "cost": 4
+  },
+  "DA_18_Teemo": {
+   "name": "Teemo",
+   "cost": 2
+  },
+  "DA_18_Tristana": {
+   "name": "Tristana",
+   "cost": 3
+  },
+  "DA_18_Varus": {
+   "name": "Varus",
+   "cost": 1
+  },
+  "DA_18_Veigar": {
+   "name": "Veigar",
+   "cost": 1
+  },
+  "DA_18_Warwick": {
+   "name": "Warwick",
+   "cost": 2
+  },
+  "DA_18_Xayah": {
+   "name": "Xayah",
+   "cost": 1
+  },
+  "DA_18_Yorick": {
+   "name": "Yorick",
+   "cost": 1
+  },
+  "DA_18_Yunara": {
+   "name": "Yunara",
+   "cost": 2
+  },
+  "DA_18_Zyra": {
+   "name": "Zyra",
+   "cost": 4
+  },
+  "DA_Amumu18": {
+   "name": "Amumu",
+   "cost": 4
+  },
+  "DA_Brambleback18": {
+   "name": "Brambleback",
+   "cost": 4
+  },
+  "DA_Cinderling18": {
+   "name": "Cinderling",
+   "cost": 1
+  },
+  "DA_CrimsonRaptor18": {
+   "name": "Mama Beak",
+   "cost": 3
+  },
+  "DA_Draven18": {
+   "name": "Draven",
+   "cost": 5
+  },
+  "DA_Fiddlesticks18": {
+   "name": "Fiddlesticks",
+   "cost": 3
+  },
+  "DA_Gromp18_AP": {
+   "name": "Gromp",
+   "cost": 2
+  },
+  "DA_Karma18": {
+   "name": "Karma",
+   "cost": 1
+  },
+  "DA_KogMaw18_AD": {
+   "name": "Kog'Maw",
+   "cost": 3
+  },
+  "DA_Krug18": {
+   "name": "Krug",
+   "cost": 3
+  },
+  "DA_Lux18_Base": {
+   "name": "Lux",
+   "cost": 5
+  },
+  "DA_Lux18_Blackthorn": {
+   "name": "Lux (Blackthorn)",
+   "cost": 5
+  },
+  "DA_Lux18_Blossom": {
+   "name": "Lux (Blossom)",
+   "cost": 5
+  },
+  "DA_Murkwolf18": {
+   "name": "Murkwolf",
+   "cost": 2
+  },
+  "DA_Nidalee18_AP": {
+   "name": "Nidalee",
+   "cost": 4
+  },
+  "DA_Scuttlecrab18": {
+   "name": "Scuttlecrab",
+   "cost": 2
+  },
+  "DA_Sentinel18": {
+   "name": "Sentinel",
+   "cost": 4
+  },
+  "DA_Taric18": {
+   "name": "Taric",
+   "cost": 5
+  },
+  "DA_Vi18": {
+   "name": "Vi",
+   "cost": 3
+  },
+  "TFT5_EmblemArmoryKey": {
+   "name": "Tome of Traits",
+   "cost": 8
+  },
+  "TFT6_MercenaryChest": {
+   "name": "Mercenary Chest",
+   "cost": 11
+  },
+  "TFT9_SLIME_Crab": {
+   "name": "Rift Scuttler",
+   "cost": 1
+  },
+  "TFT_ArmoryKeyCompleted": {
+   "name": "Completed Item Anvil",
+   "cost": 8
+  },
+  "TFT_ArmoryKeyComponent": {
+   "name": "Component Anvil",
+   "cost": 8
+  },
+  "TFT_ArmoryKeyOrnn": {
+   "name": "Artifact Item Anvil",
+   "cost": 8
+  },
+  "TFT_ArmoryKeySupport": {
+   "name": "Support item anvil",
+   "cost": 8
+  },
+  "TFT_BlueGolem": {
+   "name": "Golem",
+   "cost": 1
+  },
+  "TFT_ElderDragon": {
+   "name": "Elder Dragon",
+   "cost": 1
+  },
+  "TFT_Krug": {
+   "name": "Krug",
+   "cost": 1
+  },
+  "TFT_Murkwolf": {
+   "name": "Murk Wolf",
+   "cost": 1
+  },
+  "TFT_MurkwolfMini": {
+   "name": "Murkwolf",
+   "cost": 1
+  },
+  "TFT_Razorbeak": {
+   "name": "Razorbeak",
+   "cost": 1
+  },
+  "TFT_RazorbeakMini": {
+   "name": "Razorbeak",
+   "cost": 1
+  },
+  "TFT_RiftHerald": {
+   "name": "Rift Herald",
+   "cost": 1
+  },
+  "TFT_TrainingDummy": {
+   "name": "Training Dummy",
+   "cost": 1
+  },
+  "TFT_Voidspawn": {
+   "name": "Voidspawn",
+   "cost": 1
+  }
+ },
+ "traits": {
+  "DA_18_Adaptor": "Adaptor",
+  "DA_18_ApexPredator": "Apex Predator",
+  "DA_18_Battlemage": "Monolith",
+  "DA_18_Blackthorn": "Blackthorn",
+  "DA_18_Blossom": "Blossom",
+  "DA_18_Brawler": "Brawler",
+  "DA_18_Caustic": "Caustic",
+  "DA_18_Coven": "Coven",
+  "DA_18_Defender": "Defender",
+  "DA_18_Eclipse": "Eclipse",
+  "DA_18_Elderwood": "Elderwood",
+  "DA_18_Executioner": "Executioner",
+  "DA_18_Fae": "Fae",
+  "DA_18_Greenfather": "Greenfather",
+  "DA_18_Hunter": "Hunter",
+  "DA_18_Inferno": "Inferno",
+  "DA_18_Invoker": "Invoker",
+  "DA_18_Lunar": "Lunar",
+  "DA_18_LuxUniqueTrait": "Avatar",
+  "DA_18_Maokai_UniqueTrait": "Old Growth",
+  "DA_18_Rapidfire": "Rapidfire",
+  "DA_18_Rival": "Rival",
+  "DA_18_Slayer": "Ravager",
+  "DA_18_Solar": "Solar",
+  "DA_18_Spellweaver": "Spellweaver",
+  "DA_18_Sprykin": "Sprykin",
+  "DA_18_Summoner": "Summoner",
+  "DA_18_Vanguard": "Vanguard",
+  "DA_18_ZyraUniqueTrait": "Thornmaiden",
+  "DA_AluneUniqueTrait18": "Attuned",
+  "DA_DravenUniqueTrait18": "Bounty Seeker",
+  "DA_Emerald18": "Emerald Aspect",
+  "DA_FloraFatalis18": "Flora Fatalis",
+  "DA_Juggernaut18": "Juggernaut",
+  "DA_Primal18": "Primal",
+  "DA_Riftbeast18": "Riftbeast"
+ }
+}

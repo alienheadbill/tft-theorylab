@@ -23,13 +23,13 @@ requires_postgres = pytest.mark.skipif(
 
 FULL_ENTRY = {
     "title": "Cassiopeia / Fiddlesticks reroll",
-    "carry_character_id": "TFT18_Cassiopeia",
+    "carry_character_id": "DA_18_Cassiopeia",
     "carry_name": "Cassiopeia",
     "lifecycle": "testing",
     "summary": "Double reroll.",
     "author_notes": "unsure about the tank",
     "comp": {
-        "core_units": [{"name": "Cassiopeia", "star": 3, "character_id": "TFT18_Cassiopeia"}, "Fiddlesticks"],
+        "core_units": [{"name": "Cassiopeia", "star": 3, "character_id": "DA_18_Cassiopeia"}, "Fiddlesticks"],
         "optional_units": ["Leona"],
         "target_traits": ["6 Ravager", {"name": "Bastion", "breakpoint": 2, "note": "if Leona"}, "Vanguard"],
         "carry_items": ["Blue Buff", "Jeweled Gauntlet"],
@@ -46,7 +46,7 @@ FULL_ENTRY = {
 
 EXPECTED_COMP = {
     "core_units": [
-        {"name": "Cassiopeia", "character_id": "TFT18_Cassiopeia", "star": 3, "note": None},
+        {"name": "Cassiopeia", "character_id": "DA_18_Cassiopeia", "star": 3, "note": None},
         {"name": "Fiddlesticks", "character_id": None, "star": None, "note": None},
     ],
     "optional_units": [{"name": "Leona", "character_id": None, "star": None, "note": None}],
@@ -252,7 +252,7 @@ def test_list_filters(db: Database) -> None:
     assert slugs(evidence_status="variant") == ["variant-one"]
     assert slugs(lifecycle="archived") == ["variant-one"]
     assert slugs(carry="kha'zix") == ["kha-idea"]
-    assert slugs(carry="TFT18_Cassiopeia") == ["cassiopeia-fiddlesticks-reroll"]
+    assert slugs(carry="DA_18_Cassiopeia") == ["cassiopeia-fiddlesticks-reroll"]
     assert slugs(tag="#Reroll") == ["cassiopeia-fiddlesticks-reroll"]
     assert slugs(tag="nothing") == []
 

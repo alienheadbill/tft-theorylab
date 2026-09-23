@@ -35,7 +35,7 @@ def test_add_minimal_then_show(tmp_path: Path) -> None:
 def test_add_with_flags_builds_structured_comp(tmp_path: Path) -> None:
     db = str(tmp_path / "cli.sqlite3")
     result = _run(
-        "experiment-add", "--title", "Cass/Fiddle", "--carry", "Cassiopeia", "--carry-id", "TFT18_Cassiopeia",
+        "experiment-add", "--title", "Cass/Fiddle", "--carry", "Cassiopeia", "--carry-id", "DA_18_Cassiopeia",
         "--core", "Cassiopeia", "--core", "Fiddlesticks", "--optional", "Leona",
         "--trait", "6 Ravager", "--carry-item", "Blue Buff", "--carry-item", "Jeweled Gauntlet",
         "--tank-item", "Warmog's Armor", "--secondary-unit", "Fiddlesticks", "--secondary-item", "Morello",
@@ -52,7 +52,7 @@ def test_add_with_flags_builds_structured_comp(tmp_path: Path) -> None:
     assert e.comp["secondary_carry"] == {"unit": "Fiddlesticks", "items": ["Morello"]}
     assert (e.comp["target_level"], e.comp["reroll_level"]) == (7, 5)
     assert (e.evidence_status, e.lifecycle, e.tags) == ("VARIANT", "testing", ["reroll"])
-    assert e.carry_character_id == "TFT18_Cassiopeia"
+    assert e.carry_character_id == "DA_18_Cassiopeia"
 
 
 def test_add_from_json_with_flag_override(tmp_path: Path) -> None:

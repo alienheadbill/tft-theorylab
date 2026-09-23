@@ -624,7 +624,7 @@ def experiment_add(
     from_json: Path = typer.Option(None, "--from-json", help="JSON file with any entry fields; flags override it"),
     slug: str = typer.Option(None, "--slug", help="URL name; generated from the title if omitted"),
     carry: str = typer.Option(None, "--carry", help="Carry's display name, e.g. \"Kha'Zix\""),
-    carry_id: str = typer.Option(None, "--carry-id", help="Carry's character_id, e.g. TFT18_KhaZix"),
+    carry_id: str = typer.Option(None, "--carry-id", help="Carry's character_id, e.g. DA_18_KhaZix"),
     status: str = typer.Option(None, "--status", help="THEORYCRAFTED (default) or VARIANT"),
     lifecycle: str = typer.Option(None, "--lifecycle", help="idea (default), testing, watching, archived"),
     summary: str = typer.Option(None, "--summary", help="One-line thesis"),

@@ -582,10 +582,12 @@ def list_experiments(
 
 #: Clearly-labeled example notebook entries for the local demo dataset only
 #: (never seeded into a real database). Personal theorycraft, so no stats.
+#: Champion and trait names must exist in the current set; see
+#: tests/test_demo_roster.py.
 DEMO_EXPERIMENTS: tuple[dict[str, Any], ...] = (
     {
         "title": "6 Ravager Kha'Zix",
-        "carry_character_id": "TFT18_KhaZix",
+        "carry_character_id": "DA_18_KhaZix",
         "carry_name": "Kha'Zix",
         "lifecycle": "idea",
         "summary": "Can Kha'Zix be the reroll carry inside 6 Ravager instead of the standard shell?",
@@ -594,14 +596,14 @@ DEMO_EXPERIMENTS: tuple[dict[str, Any], ...] = (
             "core_units": [{"name": "Kha'Zix", "star": 3, "note": "the whole point"}],
             "target_traits": ["6 Ravager"],
             "carry_items": ["Infinity Edge", "Last Whisper"],
-            "reroll_level": 6,
-            "roll_timing": "slow roll at 6 above 50 gold",
+            "reroll_level": 7,
+            "roll_timing": "slow roll at 7 above 50 gold",
         },
         "tags": ["reroll", "ravager", "example"],
     },
     {
         "title": "Cassiopeia / Fiddlesticks reroll",
-        "carry_character_id": "TFT18_Cassiopeia",
+        "carry_character_id": "DA_18_Cassiopeia",
         "carry_name": "Cassiopeia",
         "lifecycle": "testing",
         "summary": "Double reroll: Cassiopeia carries, Fiddlesticks holds the tank items.",
@@ -611,21 +613,21 @@ DEMO_EXPERIMENTS: tuple[dict[str, Any], ...] = (
                 {"name": "Cassiopeia", "star": 3},
                 {"name": "Fiddlesticks", "star": 3, "note": "secondary tank"},
             ],
-            "optional_units": ["Leona", "Garen"],
+            "optional_units": ["Leona"],
             "carry_items": ["Blue Buff", "Jeweled Gauntlet", "Deathcap"],
             "tank_items": ["Warmog's Armor", "Dragon's Claw"],
-            "target_level": 7,
-            "reroll_level": 5,
+            "target_level": 8,
+            "reroll_level": 7,
             "positioning_notes": "Cass corner, Fiddle in front of her.",
         },
         "tags": ["reroll", "double-reroll", "example"],
     },
     {
         "title": "Caitlyn reroll, odd shell",
-        "carry_character_id": "TFT18_Caitlyn",
+        "carry_character_id": "DA_18_Caitlyn",
         "carry_name": "Caitlyn",
         "lifecycle": "watching",
-        "summary": "Caitlyn as a 1-cost reroll without the usual frontline. Just a sketch so far.",
+        "summary": "Caitlyn as a 2-cost reroll without the usual frontline. Just a sketch so far.",
         "comp": {"core_units": ["Caitlyn"]},
         "tags": ["reroll", "example"],
     },
