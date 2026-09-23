@@ -22,6 +22,7 @@ from .analytics import (
     trait_breakpoint_associations,
 )
 from .demo import generate_demo_matches
+from .experiments import ExperimentNotFound, get_experiment, list_experiments, seed_demo_experiments
 from .storage import Database
 from .unreal_patch import UNRESOLVED_UNREAL_PATCH
 
@@ -79,7 +80,11 @@ def _build_demo_db() -> Database:
             demo_path.unlink()
         with Database(demo_path) as db:
             db.ingest_many(generate_demo_matches(180))
-    return Database(demo_path)
+    db = Database(demo_path)
+    # Example notebook entries live only in this local demo database, never in
+    # a real one. No-op once any experiment exists.
+    seed_demo_experiments(db)
+    return db
 
 
 def _resolve_database() -> tuple[Database, bool]:
@@ -220,6 +225,37 @@ def create_app() -> FastAPI:
     @app.get("/", include_in_schema=False)
     def home() -> FileResponse:
         return FileResponse(WEB_DIR / "index.html")
+
+    @app.get("/experiments", include_in_schema=False)
+    @app.get("/experiments/{key}", include_in_schema=False)
+    def experiments_page(key: str | None = None) -> FileResponse:
+        # One page for both views; experiments.js reads the path and fetches
+        # the list or a single entry from the read-only API below.
+        return FileResponse(WEB_DIR / "experiments.html")
+
+    # The notebook is read-only on the web: there are no accounts yet, so
+    # entries are only written through the owner's `tftlab experiment-*` CLI.
+    @app.get("/api/experiments")
+    def experiments(
+        status: str | None = Query(None, description="THEORYCRAFTED, VARIANT or OBSERVED"),
+        lifecycle: str | None = Query(None, description="idea, testing, watching or archived"),
+        carry: str | None = Query(None, description="Carry name or character_id"),
+        tag: str | None = Query(None),
+    ) -> dict[str, object]:
+        db, demo = _resolve_database()
+        with db:
+            entries = list_experiments(db, evidence_status=status, lifecycle=lifecycle, carry=carry, tag=tag)
+        return {"demo": demo, "count": len(entries), "experiments": [e.to_api() for e in entries]}
+
+    @app.get("/api/experiments/{key}")
+    def experiment_detail(key: str) -> dict[str, object]:
+        db, demo = _resolve_database()
+        with db:
+            try:
+                entry = get_experiment(db, key)
+            except ExperimentNotFound:
+                raise HTTPException(status_code=404, detail="Experiment not found") from None
+        return {"demo": demo, "experiment": entry.to_api(include_field_notes=True)}
 
     @app.get("/api/health")
     def health() -> dict[str, object]:
