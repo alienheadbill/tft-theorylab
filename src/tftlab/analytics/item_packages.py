@@ -7,6 +7,14 @@ from ..items import is_component
 from ..storage import Database
 from .association import Association, compute_associations
 
+#: Deterministic tie-break for picking one "canonical" carry instance when a
+#: board fields more than one copy of the same champion in the same game
+#: (see `units.unit_index`): highest completed-item count first, then
+#: highest star tier, then lowest `unit_index` as a final, stable tiebreaker.
+#: Used for item-package analysis, where a game must contribute exactly one
+#: item observation, not one per instance -- see `_carry_commitment_item_games`.
+CANONICAL_UNIT_TIEBREAK_SQL = "completed_item_count DESC, tier DESC, unit_index ASC"
+
 
 def _completed_items(items_json: str) -> tuple[str, ...]:
     raw = json.loads(items_json)
@@ -21,18 +29,32 @@ def _carry_commitment_item_games(
     commitment_items: int = 2,
 ) -> list[tuple[int, tuple[str, ...]]]:
     """The carry's commitment games, each paired with its own sorted,
-    completed (non-component) item tuple."""
+    completed (non-component) item tuple.
+
+    A board can field more than one committed instance of `character_id` in
+    the same game; when it does, exactly one instance is chosen per
+    `CANONICAL_UNIT_TIEBREAK_SQL` so that game contributes one item
+    observation, not one per instance.
+    """
     rows = db.query_all(
-        """
-        SELECT p.placement, c.items_json
-        FROM units c
-        JOIN participants p
-          ON p.match_id = c.match_id AND p.participant_index = c.participant_index
-        JOIN matches m
-          ON m.match_id = c.match_id
-        WHERE c.character_id = ?
-          AND c.completed_item_count >= ?
-          AND m.balance_window = ?
+        f"""
+        WITH ranked AS (
+            SELECT
+                c.items_json, p.placement,
+                ROW_NUMBER() OVER (
+                    PARTITION BY c.match_id, c.participant_index
+                    ORDER BY {CANONICAL_UNIT_TIEBREAK_SQL}
+                ) AS rn
+            FROM units c
+            JOIN participants p
+              ON p.match_id = c.match_id AND p.participant_index = c.participant_index
+            JOIN matches m
+              ON m.match_id = c.match_id
+            WHERE c.character_id = ?
+              AND c.completed_item_count >= ?
+              AND m.balance_window = ?
+        )
+        SELECT placement, items_json FROM ranked WHERE rn = 1
         """,
         (character_id, commitment_items, balance_window),
     )

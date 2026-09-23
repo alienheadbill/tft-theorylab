@@ -11,6 +11,20 @@ class RiotApiError(RuntimeError):
     pass
 
 
+#: Riot's `queue_id` for standard Ranked Teamfight Tactics, per Riot's public
+#: queue metadata (https://static.developer.riotgames.com/docs/lol/queues.json,
+#: unreachable from this sandbox's network egress -- this value is taken from
+#: well-established, widely-documented TFT tooling convention instead, and
+#: matches what this codebase's own test fixtures (`tests/_helpers.py`'s
+#: `make_match`) have defaulted to since Milestone 1). Distinct from Normal
+#: (unranked) TFT (1090), Hyper Roll (1130), and Double Up (1160): a
+#: Challenger-ladder PUUID's recent match history can include any of these,
+#: but this project's discovery dataset is scoped to standard ranked only --
+#: see `ingest.ingest_ladder`. Verify against the real values seen in a live
+#: ingest before trusting this beyond that scope.
+RANKED_TFT_QUEUE_ID = 1100
+
+
 _STATUS_RE = re.compile(r"returned (\d+)")
 
 

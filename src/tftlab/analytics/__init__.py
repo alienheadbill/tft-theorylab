@@ -7,7 +7,7 @@ from .discovery import (
     discover_candidates,
     discovery_candidate_for,
 )
-from .item_packages import item_package_stats
+from .item_packages import CANONICAL_UNIT_TIEBREAK_SQL, item_package_stats
 from .partners import carry_partner_associations
 from .traits import trait_breakpoint_associations
 
@@ -20,6 +20,7 @@ __all__ = [
     "compute_associations",
     "carry_partner_associations",
     "item_package_stats",
+    "CANONICAL_UNIT_TIEBREAK_SQL",
     "trait_breakpoint_associations",
     "DiscoveryCandidate",
     "discover_candidates",

@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .analytics import (
+    CANONICAL_UNIT_TIEBREAK_SQL,
     carry_commitment_stats,
     carry_partner_associations,
     default_balance_window,
@@ -122,45 +123,70 @@ def carry_partners(db: Database, character_id: str, balance_window: str) -> list
     Extracted from the route handler so the Postgres-vs-SQLite `HAVING`
     behavior (Postgres rejects a SELECT alias there; SQLite allows it) has a
     unit test independent of the FastAPI/env-based database resolution.
+
+    A board can field more than one committed instance of `character_id`, or
+    more than one instance of a given partner, in the same game; both CTEs
+    below `DISTINCT`-deduplicate to one row per (game, partner) pair first,
+    so `COUNT(*)`/the placement averages reflect games, not raw unit-row
+    combinations -- a naive join here would otherwise double- (or more-)
+    count a game for every extra instance on either side.
     """
     return db.query_all(
         """
-        SELECT f.unit_name, f.cost, COUNT(*) AS together,
+        WITH carry_games AS (
+            SELECT DISTINCT c.match_id, c.participant_index
+            FROM units c
+            JOIN matches m ON m.match_id = c.match_id
+            WHERE c.character_id = ? AND c.completed_item_count >= 2 AND m.balance_window = ?
+        ),
+        partner_games AS (
+            SELECT DISTINCT cg.match_id, cg.participant_index, f.character_id, f.unit_name, f.cost
+            FROM carry_games cg
+            JOIN units f ON f.match_id = cg.match_id AND f.participant_index = cg.participant_index
+            WHERE f.character_id <> ?
+        )
+        SELECT pg.unit_name, pg.cost, COUNT(*) AS together,
                AVG(p.placement * 1.0) AS avg_place,
                AVG(CASE WHEN p.placement <= 4 THEN 1.0 ELSE 0.0 END) AS top4
-        FROM units c
+        FROM partner_games pg
         JOIN participants p
-          ON p.match_id = c.match_id AND p.participant_index = c.participant_index
-        JOIN units f
-          ON f.match_id = c.match_id AND f.participant_index = c.participant_index
-        JOIN matches m
-          ON m.match_id = c.match_id
-        WHERE c.character_id = ?
-          AND c.completed_item_count >= 2
-          AND f.character_id <> c.character_id
-          AND m.balance_window = ?
-        GROUP BY f.character_id, f.unit_name, f.cost
+          ON p.match_id = pg.match_id AND p.participant_index = pg.participant_index
+        GROUP BY pg.character_id, pg.unit_name, pg.cost
         HAVING COUNT(*) >= 3
         ORDER BY top4 DESC, together DESC
         LIMIT 8
         """,
-        (character_id, balance_window),
+        (character_id, balance_window, character_id),
     )
 
 
 def carry_item_sets(db: Database, character_id: str, balance_window: str) -> list[tuple[Any, ...]]:
+    """A board can field more than one committed instance of `character_id`
+    in the same game; `ranked`/`rn = 1` picks exactly one canonical instance
+    per game (`CANONICAL_UNIT_TIEBREAK_SQL`) so that game contributes one
+    item-set observation, not one per instance."""
     return db.query_all(
-        """
+        f"""
+        WITH ranked AS (
+            SELECT
+                u.items_json, p.placement,
+                ROW_NUMBER() OVER (
+                    PARTITION BY u.match_id, u.participant_index
+                    ORDER BY {CANONICAL_UNIT_TIEBREAK_SQL}
+                ) AS rn
+            FROM units u
+            JOIN participants p
+              ON p.match_id = u.match_id AND p.participant_index = u.participant_index
+            JOIN matches m
+              ON m.match_id = u.match_id
+            WHERE u.character_id = ? AND u.completed_item_count >= 2
+              AND m.balance_window = ?
+        )
         SELECT items_json, COUNT(*) AS games,
-               AVG(p.placement * 1.0) AS avg_place,
-               AVG(CASE WHEN p.placement <= 4 THEN 1.0 ELSE 0.0 END) AS top4
-        FROM units u
-        JOIN participants p
-          ON p.match_id = u.match_id AND p.participant_index = u.participant_index
-        JOIN matches m
-          ON m.match_id = u.match_id
-        WHERE u.character_id = ? AND u.completed_item_count >= 2
-          AND m.balance_window = ?
+               AVG(placement * 1.0) AS avg_place,
+               AVG(CASE WHEN placement <= 4 THEN 1.0 ELSE 0.0 END) AS top4
+        FROM ranked
+        WHERE rn = 1
         GROUP BY items_json
         ORDER BY games DESC, top4 DESC
         LIMIT 5
