@@ -97,7 +97,7 @@ TFT champions and items get rebalanced every patch -- and sometimes mid-patch, w
 - `tftlab.balance_window.resolve_balance_window(client_patch, game_datetime)` derives a window like `18.2a`/`18.2b` from a small registry of known mid-patch cutovers (a client patch with no registered cutover is simply its own window, e.g. `18.3`).
 - Pass `balance_window="18.2b"` explicitly to any analytics function, or omit it and the chronologically **latest** window in the store is used (`tftlab.analytics.default_balance_window`) -- never just the most-played one, and ordered numerically (`18.10` sorts after `18.9`), not lexicographically.
 
-The web API exposes this as an optional `?balance_window=` query param on every carry/discovery endpoint; the current frontend doesn't send it, so behavior is unchanged there, but a window selector can be added later without any backend work.
+The web API exposes this as an optional `?balance_window=` query param on every carry/discovery endpoint. `GET /api/balance-windows` lists every window actually present in the store (never the Unreal-unresolved sentinel, which always has a `NULL` balance_window); the dashboard's window selector is built directly from this endpoint, so it can only ever offer a real, resolvable window.
 
 ### Unreal-era client patch resolution
 
@@ -191,20 +191,32 @@ Weights sum to 1.0 (enforced by a test). `carry_rarity`/`champion_rarity` split 
 
 ## API endpoints
 
-All of these are balance-window scoped (`?balance_window=`, defaulting to the latest window) and cost-neutral to call (frontend changes are a separate milestone):
+Every carry/discovery endpoint below is balance-window scoped (`?balance_window=`, defaulting to the latest window):
 
+- `GET /api/balance-windows` -- every balance window actually present in the store (`balance_window`, `matches`, `latest_game_datetime`), plus `default_balance_window` and a store-wide `unresolved_unreal_matches` count. Backs the dashboard's window selector; never lists the Unreal-unresolved sentinel as a selectable window.
 - `GET /api/discovery` -- ranked `DiscoveryCandidate` list (`max_cost`, `min_samples`, `top_n`, `limit`)
 - `GET /api/discovery/{character_id}` -- one carry's full `DiscoveryCandidate`
 - `GET /api/carries/{character_id}/partners` -- partner associations
 - `GET /api/carries/{character_id}/items` -- `{"items": [...], "pairs": [...], "packages": [...]}`
 - `GET /api/carries/{character_id}/traits` -- trait-breakpoint associations
-- `GET /api/carries`, `GET /api/carries/{character_id}` -- unchanged from before this milestone (still back the current frontend)
+- `GET /api/carries`, `GET /api/carries/{character_id}` -- unchanged; predate `/api/discovery` and are kept for their own existing tests/consumers
+
+## Frontend: Discovery Dashboard
+
+The web frontend (`src/tftlab/web/`) is a single-page discovery dashboard built entirely on the API endpoints above -- no backend logic lives in the frontend. It defaults to 1-3 cost, sorted by Opportunity Score, and fetches the full candidate pool for the selected balance window once (`min_samples=1`, `max_cost=5`) so cost/sample/sort controls re-filter instantly client-side rather than round-tripping on every change. Each candidate card previews its single best-evidenced partner/item-package/trait-breakpoint (already returned by `/api/discovery`); clicking a card opens a full evidence panel backed by `/api/discovery/{character_id}` at a higher `top_n`. Candidates under 30 commitment games are labeled `LOW SAMPLE`, matching the CLI's `discovery-smoke` threshold.
+
+Visually it's a "strategist's notebook": system serif/monospace type (no web fonts or other external assets), a faint graph-paper surface, index-card entries with cost-colored tabs, a hand-circled Opportunity Score, rubber-stamp evidence labels, and margin annotations in the working-notes panel. All decoration is CSS or small inline SVG marked `aria-hidden`, and every imperfection (rotations, uneven corners, alternating rules, which circle shape a score gets) is fixed by CSS `nth-child` or list position, never randomized, so the page renders identically on every load. Reduced-motion preferences are respected.
+
+Champion/item/trait art isn't fetched from CommunityDragon here (that would add a live external dependency to every page load). Instead, champions get a taped `figure.portrait` frame and partners/items/traits get a small clipped `.ref-icon` slot, both showing initials for now; both frames already style a child `<img>` (`object-fit: cover`), so real art can drop into the same frames later without a layout change.
+
+Evidence is currently always labeled `OBSERVED` (a real statistical result); `VARIANT` and `THEORYCRAFTED` styles exist in the CSS for later use but are never applied yet, since nothing in the backend synthesizes either kind of result today.
 
 ## Next milestones
 
 - Candidate-board generation with beam search (explicitly out of scope for this milestone).
 - Known-comp similarity detection against external public sources.
-- TFT Academy-style comp pages with an evidence panel showing observed vs inferred recommendations, and a frontend that surfaces partner/item/trait evidence and the Opportunity Score breakdown.
+- Champion/item/trait art via a cached CommunityDragon-backed endpoint.
+- TFT Academy-style comp pages with an evidence panel showing observed vs inferred recommendations (`VARIANT`/`THEORYCRAFTED`), once board synthesis exists.
 
 ## Riot policy boundary
 
