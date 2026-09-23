@@ -645,3 +645,49 @@ def test_postgres_real_registry_resolves_a_production_style_sentinel_row() -> No
 
     assert healed[0] == "18.2"
     assert healed[1] in ("18.2a", "18.2b")
+
+
+@requires_postgres
+def test_postgres_and_sqlite_agree_on_unexpected_missing_balance_window(tmp_path: Path) -> None:
+    """SQLite-vs-Postgres parity for the intentional-Unreal-gap vs.
+    genuinely-unexpected missing-balance-window distinction: a mix of
+    intentionally unresolved rows and one genuinely broken row (NULL
+    game_version) must produce identical unexpected_missing_balance_window/
+    is_severe results on both backends."""
+    from tftlab.validate import validate_live_data
+
+    from _helpers import make_match, make_unit
+
+    def _seed(db: Database) -> None:
+        for i in range(3):
+            db.ingest_match(
+                make_match(
+                    f"GAP_{i}",
+                    game_version="TFT Unreal Version ?.?.?.?",
+                    game_datetime=1_790_121_600_000 + i,  # inside the registry's deliberate gap
+                    units=[make_unit("TFT18_Foo", tier=2, items=[])],
+                )
+            )
+        db.ingest_match(
+            make_match("BROKEN_1", game_version=None, units=[make_unit("TFT14_Foo", tier=2, items=[])])
+        )
+
+    with Database(tmp_path / "unexpected_parity.sqlite3") as sqlite_db:
+        _seed(sqlite_db)
+        sqlite_report = validate_live_data(sqlite_db, balance_window="doesnt-matter")
+
+    postgres_db = _clean_postgres_db()
+    try:
+        _seed(postgres_db)
+        postgres_report = validate_live_data(postgres_db, balance_window="doesnt-matter")
+    finally:
+        postgres_db.close()
+
+    assert sqlite_report.matches_missing_balance_window == postgres_report.matches_missing_balance_window == 4
+    assert sqlite_report.unresolved_unreal_matches == postgres_report.unresolved_unreal_matches == 3
+    assert (
+        sqlite_report.unexpected_missing_balance_window
+        == postgres_report.unexpected_missing_balance_window
+        == 1
+    )
+    assert sqlite_report.is_severe is postgres_report.is_severe is True

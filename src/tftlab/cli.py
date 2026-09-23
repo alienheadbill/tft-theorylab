@@ -315,17 +315,21 @@ def validate_live_data_command(
     _report_unknown("Unknown trait IDs", report.unknown_trait_ids)
 
     console.print(f"Matches missing balance_window: {report.matches_missing_balance_window}")
+    console.print(f"  Expected Unreal rollout-gap unresolved: {report.unresolved_unreal_matches}")
+    console.print(f"  Unexpected missing balance_window: {report.unexpected_missing_balance_window}")
     console.print(f"Malformed placements: {report.malformed_placements}")
     console.print(f"Duplicate match IDs: {report.duplicate_match_ids}")
     console.print(f"Participants without units: {report.participants_without_units}")
 
-    console.print(f"Unresolved Unreal-era matches: {report.unresolved_unreal_matches}")
     if report.unresolved_unreal_matches:
         console.print(
-            "[bold yellow]  These have a masked Unreal-era game_version with no usable (verified + sourced) "
-            "window in tftlab.unreal_patch.UNREAL_PATCH_REGISTRY. Their balance_window is intentionally left "
-            "unset (never a fake shared bucket), so they're excluded from every balance-window-scoped "
-            "analytics query until a real cutover window is added -- see the diagnostics below.[/bold yellow]"
+            f"[bold yellow]  {report.unresolved_unreal_matches} match(es) have a masked Unreal-era "
+            "game_version with no usable (verified + sourced) window in "
+            "tftlab.unreal_patch.UNREAL_PATCH_REGISTRY (e.g. the rollout-gap period between two "
+            "patches). This is intentional and safe, not structural corruption: their balance_window "
+            "is left unset on purpose (never a fake shared bucket), so they're excluded from every "
+            "patch-scoped analytics query, and they do NOT by themselves fail validation. Any "
+            "'Unexpected missing balance_window' count above zero still does.[/bold yellow]"
         )
         console.print(
             f"  Earliest: {_format_epoch_ms(report.unresolved_unreal_earliest_game_datetime)}"

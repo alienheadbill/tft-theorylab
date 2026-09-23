@@ -129,6 +129,9 @@ def test_malformed_placement_is_severe(tmp_path: Path) -> None:
 
 
 def test_matches_missing_balance_window_is_severe(tmp_path: Path) -> None:
+    """A NULL game_version -> NULL patch is genuinely broken data, not the
+    intentional Unreal rollout-gap exclusion, so it must count as
+    unexpected and stay severe."""
     with Database(tmp_path / "no_window.sqlite3") as db:
         # A match with no game_version at all can't be classified into any
         # balance window.
@@ -138,6 +141,7 @@ def test_matches_missing_balance_window_is_severe(tmp_path: Path) -> None:
         report = validate_live_data(db, balance_window="doesnt-matter")
 
     assert report.matches_missing_balance_window == 1
+    assert report.unexpected_missing_balance_window == 1
     assert report.is_severe is True
 
 
@@ -184,14 +188,14 @@ def test_queue_distribution_reports_non_target_matches_without_deleting_them(tmp
     assert stored_matches == 5
 
 
-def test_unresolved_unreal_matches_reported_and_marked_severe(tmp_path: Path) -> None:
-    """A masked-Unreal match with no matching UNREAL_PATCH_REGISTRY window
-    must be surfaced prominently (severe, via the existing missing-
-    balance-window check) and counted separately so it reads as "needs a
-    registry entry", not "the ingest pipeline is broken". Uses a
-    game_datetime inside the real registry's deliberate 18.2/18.3 gap
-    (the reported early-NA-18.3 rollout period), which must stay
-    unresolved even though the registry itself is now populated."""
+def test_intentional_unreal_unresolved_match_reported_but_not_severe(tmp_path: Path) -> None:
+    """A masked-Unreal match whose game_datetime falls in the Unreal
+    registry's deliberate 18.2/18.3 rollout gap (see tftlab.unreal_patch)
+    is intentionally, safely excluded from balance-window-scoped analytics
+    -- it must still be surfaced prominently (matches_missing_balance_window
+    / unresolved_unreal_matches), but must NOT make validation fail. A
+    healthy production database full of nothing but these rows must end
+    "No severe integrity issues detected.", not a false alarm."""
     with Database(tmp_path / "unreal.sqlite3") as db:
         db.ingest_match(
             make_match(
@@ -205,7 +209,8 @@ def test_unresolved_unreal_matches_reported_and_marked_severe(tmp_path: Path) ->
 
     assert report.unresolved_unreal_matches == 1
     assert report.matches_missing_balance_window == 1
-    assert report.is_severe is True
+    assert report.unexpected_missing_balance_window == 0
+    assert report.is_severe is False
 
 
 def test_diagnostic_distributions_are_store_wide_not_window_scoped(tmp_path: Path) -> None:
@@ -239,3 +244,33 @@ def test_diagnostic_distributions_are_store_wide_not_window_scoped(tmp_path: Pat
     assert report.balance_window_distribution == {None: 2}
     assert report.earliest_game_datetime == 1_000
     assert report.latest_game_datetime == 5_000
+
+
+def test_mixed_expected_and_unexpected_missing_balance_windows_reports_correct_counts(
+    tmp_path: Path,
+) -> None:
+    """A production-realistic mix: some matches intentionally unresolved in
+    the Unreal rollout gap (safe), one genuinely broken row with no
+    game_version at all (not safe). matches_missing_balance_window must
+    count both; unexpected_missing_balance_window must count only the
+    genuinely broken one; is_severe must be True because of that one row,
+    not the intentional ones."""
+    with Database(tmp_path / "mixed.sqlite3") as db:
+        for i in range(3):
+            db.ingest_match(
+                make_match(
+                    f"UNREAL_{i}",
+                    game_version="TFT Unreal Version ?.?.?.?",
+                    game_datetime=1_790_121_600_000 + i,  # in the registry's deliberate gap
+                    units=[make_unit("TFT18_Foo", tier=2, items=[])],
+                )
+            )
+        db.ingest_match(
+            make_match("BROKEN_1", game_version=None, units=[make_unit("TFT14_Foo", tier=2, items=[])])
+        )
+        report = validate_live_data(db, balance_window="doesnt-matter")
+
+    assert report.matches_missing_balance_window == 4
+    assert report.unresolved_unreal_matches == 3
+    assert report.unexpected_missing_balance_window == 1
+    assert report.is_severe is True
