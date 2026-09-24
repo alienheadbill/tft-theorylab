@@ -1,0 +1,84 @@
+name: Game art refresh
+
+# Manually-triggered only. Downloads the current set's champion, item and
+# trait art from CommunityDragon (the only host it contacts), normalizes it
+# with `tftlab refresh-game-art`, and -- only when asked -- commits the
+# result to the branch the run was started from, so the change lands in a
+# normal pull request for review. The site itself never fetches art from
+# CommunityDragon; it serves these committed files.
+#
+# No secrets: no RIOT_API_KEY, no DATABASE_URL, no database of any kind,
+# no Riot requests, no ingest.
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Commit refreshed art to this branch (never main)"
+        type: boolean
+        default: false
+
+# Write access is only used by the final step to push the refreshed assets
+# back to the (non-main) branch this run was started from.
+permissions:
+  contents: write
+
+concurrency:
+  group: game-art-refresh-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check branch
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          case "${GITHUB_REF}" in
+            refs/heads/*) ;;
+            *)
+              echo "::error::Run this workflow from a branch (got ${GITHUB_REF})." >&2
+              exit 1
+              ;;
+          esac
+          if [ "${COMMIT}" = "true" ] && [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            echo "::error::Refusing to commit to main. Start the run from a feature branch and review the diff in a pull request." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package with the art extra
+        run: pip install -e ".[art]"
+
+      # Exits non-zero (and leaves the committed assets untouched) if any
+      # download fails its status/content/size/format checks.
+      - name: Refresh game art from CommunityDragon
+        run: tftlab refresh-game-art
+
+      - name: Summarize changes
+        run: |
+          git add -N src/tftlab/web/static/game src/tftlab/data/game_art_manifest.json
+          git diff --stat -- src/tftlab/web/static/game src/tftlab/data/game_art_manifest.json | tail -n 1
+          du -sh src/tftlab/web/static/game
+          for kind in champions items traits; do
+            echo "${kind}: $(ls src/tftlab/web/static/game/${kind} | wc -l) files"
+          done
+
+      - name: Commit refreshed art to this branch
+        if: ${{ inputs.commit }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/tftlab/web/static/game src/tftlab/data/game_art_manifest.json
+          if git diff --cached --quiet; then
+            echo "Game art already up to date; nothing to commit."
+            exit 0
+          fi
+          git commit -m "Refresh cached TFT game art from CommunityDragon"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
