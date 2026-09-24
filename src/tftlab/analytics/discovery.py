@@ -307,6 +307,14 @@ def discover_candidates(
     adjusted partner/item/trait evidence and a confidence-adjusted
     Opportunity Score, all scoped to a single balance window.
 
+    The search space is every carry observed in the window's sampled
+    matches (see `tftlab.sampling` for the population): no champion
+    allowlist, and saved experiments play no part in selection. v1 is
+    carry-centric -- it surfaces unusual carries and their partner shells,
+    item packages and trait breakpoints, but not arbitrary complete boards
+    as entities of their own (a niche comp around a common carry isn't
+    separated out); board signatures / clustering are a later milestone.
+
     `min_cost`/`max_cost` default to 1..3 to favor reroll-style discovery,
     matching the rest of the API's defaults; pass `max_cost=5` for full
     coverage. Ranking itself also biases toward 1-3 cost carries via the

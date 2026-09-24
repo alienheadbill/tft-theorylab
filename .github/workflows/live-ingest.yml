@@ -4,8 +4,28 @@ name: Live ingest
 # CommunityDragon and writes to the production database (via its external
 # Postgres URL), so it must never run on push/pull_request, and has no
 # schedule yet -- that's a deliberate follow-up milestone, not this one.
+#
+# Sampling size is chosen per run through the inputs below (validated in
+# the first step, before checkout or any Riot/database access). Defaults
+# keep the original conservative Challenger-only 10 x 5 run; the production
+# ceiling is 100 seed players x 10 matches each -- the CLI allows deeper
+# histories, but breadth (more players) beats depth (the same players'
+# older games), since high-Elo players share lobbies.
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      players:
+        description: "Seed players (1-100)"
+        type: number
+        default: 10
+      matches_per_player:
+        description: "Recent matches read per seed player (1-10)"
+        type: number
+        default: 5
+      expanded_high_elo:
+        description: "Stratify seeds across Challenger / Grandmaster / Master (4:3:3) instead of Challenger only"
+        type: boolean
+        default: false
 
 # The workflow can be started against any branch from the Actions UI, but
 # it must only ever run against production config from `main` -- enforced
@@ -22,7 +42,8 @@ concurrency:
 jobs:
   live-ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Room for a 100 x 10 run at Riot development-key rate limits.
+    timeout-minutes: 60
     steps:
       # Runs before checkout/install and before any Riot or database access:
       # cheap fail-fast so a bad branch selection or missing/malformed
@@ -32,6 +53,11 @@ jobs:
         env:
           RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # Inputs reach the shell only as environment variables, never
+          # interpolated into the script text.
+          PLAYERS: ${{ inputs.players }}
+          MATCHES_PER_PLAYER: ${{ inputs.matches_per_player }}
+          EXPANDED_HIGH_ELO: ${{ inputs.expanded_high_elo }}
         run: |
           if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
             echo "::error::This workflow must be run with 'main' explicitly selected as the branch (got ${GITHUB_REF})." >&2
@@ -52,7 +78,35 @@ jobs:
               exit 1
               ;;
           esac
+          case "${PLAYERS}" in
+            ''|*[!0-9]*)
+              echo "::error::players must be a whole number from 1 to 100." >&2
+              exit 1
+              ;;
+          esac
+          if [ "${PLAYERS}" -lt 1 ] || [ "${PLAYERS}" -gt 100 ]; then
+            echo "::error::players must be a whole number from 1 to 100." >&2
+            exit 1
+          fi
+          case "${MATCHES_PER_PLAYER}" in
+            ''|*[!0-9]*)
+              echo "::error::matches_per_player must be a whole number from 1 to 10." >&2
+              exit 1
+              ;;
+          esac
+          if [ "${MATCHES_PER_PLAYER}" -lt 1 ] || [ "${MATCHES_PER_PLAYER}" -gt 10 ]; then
+            echo "::error::matches_per_player must be a whole number from 1 to 10." >&2
+            exit 1
+          fi
+          case "${EXPANDED_HIGH_ELO}" in
+            true|false) ;;
+            *)
+              echo "::error::expanded_high_elo must be true or false." >&2
+              exit 1
+              ;;
+          esac
           echo "Production configuration looks valid."
+          echo "Planned sample: ${PLAYERS} seed players x ${MATCHES_PER_PLAYER} matches, expanded_high_elo=${EXPANDED_HIGH_ELO}."
 
       - uses: actions/checkout@v4
 
@@ -77,17 +131,28 @@ jobs:
           TFT_REGION: americas
         run: tftlab verify-riot
 
-      - name: Ingest first live sample
+      - name: Ingest live sample
         env:
           RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           TFT_PLATFORM: na1
           TFT_REGION: americas
-        # Challenger only, 10 seed players, 5 matches/player -- intentionally
-        # tiny for this first controlled run. No --allow-degraded-costs: if
-        # CommunityDragon can't be reached, this must fail rather than
-        # silently ingesting rarity+1 fallback costs as if authoritative.
-        run: tftlab ingest-riot --players 10 --matches-per-player 5
+          PLAYERS: ${{ inputs.players }}
+          MATCHES_PER_PLAYER: ${{ inputs.matches_per_player }}
+          EXPANDED_HIGH_ELO: ${{ inputs.expanded_high_elo }}
+        # Sizes were bounds-checked in "Validate production configuration".
+        # Seeds are chosen deterministically by ladder tier and League
+        # Points (tftlab.sampling), never by champion or comp. No
+        # --allow-degraded-costs: if CommunityDragon can't be reached, this
+        # must fail rather than silently ingesting rarity+1 fallback costs as
+        # if authoritative.
+        run: |
+          if [ "${EXPANDED_HIGH_ELO}" = "true" ]; then
+            SAMPLING=high_elo
+          else
+            SAMPLING=challenger
+          fi
+          tftlab ingest-riot --players "${PLAYERS}" --matches-per-player "${MATCHES_PER_PLAYER}" --sampling "${SAMPLING}"
 
       - name: Validate ingested data
         env:

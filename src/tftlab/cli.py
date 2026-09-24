@@ -28,6 +28,7 @@ from .experiments import (
     update_experiment,
 )
 from .ingest import ingest_ladder
+from .sampling import SAMPLING_MODES
 from .normalize import CostLookup
 from .riot import RiotApiError, RiotClient, classify_riot_error
 from .storage import Database
@@ -162,7 +163,14 @@ def demo(
 def ingest_riot(
     players: int = typer.Option(25, min=1, help="High-Elo seed players"),
     matches_per_player: int = typer.Option(10, min=1, max=100),
-    include_master: bool = typer.Option(False, help="Include Master + GM seeds"),
+    sampling: str = typer.Option(
+        "challenger",
+        help=(
+            "Seed sampling: 'challenger' (Challenger only) or 'high_elo' (stratified "
+            "Challenger / Grandmaster / Master, 4:3:3). See tftlab.sampling."
+        ),
+    ),
+    include_master: bool = typer.Option(False, help="Same as --sampling high_elo"),
     use_static_costs: bool = typer.Option(
         True, help="Resolve champion shop costs from CommunityDragon instead of rarity+1"
     ),
@@ -176,15 +184,24 @@ def ingest_riot(
 ) -> None:
     """Pull recent high-Elo matches from Riot into the configured database.
 
-    Challenger-only by default; pass --include-master to widen the seed
-    pool. A safe first real ingest: `tftlab ingest-riot --players 10
+    Challenger-only by default; `--sampling high_elo` draws seeds
+    deterministically from Challenger, Grandmaster and Master (4:3:3). A
+    safe first real ingest: `tftlab ingest-riot --players 10
     --matches-per-player 5`.
+
+    The population is recent high-Elo NA standard Ranked TFT matches reached
+    through those ladder players -- not all TFT games. Analytics then look at
+    every champion, item and trait in those matches.
     """
     _load_dotenv()
     settings = Settings.from_env()
     if not settings.riot_api_key:
         raise typer.BadParameter("Set RIOT_API_KEY in .env or the environment")
-    leagues = ("challenger", "grandmaster", "master") if include_master else ("challenger",)
+    sampling_mode = "high_elo" if include_master else sampling
+    if sampling_mode not in SAMPLING_MODES:
+        raise typer.BadParameter(
+            f"--sampling must be one of: {', '.join(SAMPLING_MODES)}", param_hint="--sampling"
+        )
 
     try:
         cost_lookup, degraded, set_number = _resolve_cost_lookup(
@@ -212,24 +229,44 @@ def ingest_riot(
             db,
             player_limit=players,
             matches_per_player=matches_per_player,
-            leagues=leagues,
+            sampling_mode=sampling_mode,
             cost_lookup=cost_lookup,
         )
         windows = available_balance_windows(db)
         total_participants = db.query_one("SELECT COUNT(*) FROM participants")[0]
 
+    def _rate(value: float | None) -> str:
+        return "n/a" if value is None else f"{value:.1%}"
+
+    def _ratio(value: float | None) -> str:
+        return "n/a" if value is None else f"{value:.2f}"
+
     console.print("\n[bold]Ingest report[/bold]")
+    console.print(f"  Sampling mode: {result.sampling_mode}")
+    console.print(f"  Requested seed players: {result.requested_seeds}")
     console.print(f"  Seed players: {result.seed_players}")
+    for tier, count in result.seeds_by_tier.items():
+        console.print(f"    {tier}: {count} (of {result.ladder_sizes.get(tier, 0)} on the ladder)")
+    console.print(f"  Requested histories per seed: {result.histories_per_seed}")
+    console.print(f"  Failed history requests: {result.failed_history_requests}")
+    console.print(f"  Match-ID references (before dedupe): {result.match_id_references}")
     console.print(f"  Unique match IDs discovered: {result.match_ids_seen}")
+    console.print(f"  Matches skipped as duplicates: {result.duplicates_skipped}")
     console.print(f"  Matches fetched: {result.matches_fetched}")
     console.print(f"  Matches inserted: {result.matches_inserted}")
-    console.print(f"  Matches skipped as duplicates: {result.duplicates_skipped}")
     console.print(f"  Failed requests: {result.failed_requests}")
     console.print(f"  Non-ranked-queue matches skipped: {result.non_target_matches_skipped}")
+    console.print(f"  In-run overlap rate: {_rate(result.in_run_overlap_rate)}")
+    console.print(f"  Already-stored duplicate rate: {_rate(result.known_duplicate_rate)}")
+    console.print(f"  Inserted matches per seed: {_ratio(result.inserted_per_seed)}")
+    console.print(f"  New-match yield (inserted / references): {_rate(result.new_match_yield)}")
     console.print(f"  Balance windows found: {', '.join(w for w, _, _ in windows) or 'none'}")
     console.print(f"  Total participants now stored: {total_participants}")
     if degraded:
         console.print("[yellow]  Note: this ingest used degraded (rarity+1) costs.[/yellow]")
+    if result.seed_players and result.failed_history_requests == result.seed_players:
+        console.print("[red]Every seed's match-history request failed; nothing could be sampled.[/red]")
+        raise typer.Exit(code=1)
 
 
 @app.command("verify-riot")
