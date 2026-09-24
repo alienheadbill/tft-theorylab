@@ -35,6 +35,12 @@ def _payload(set_number: int = 18) -> dict:
             },
             {"apiName": "TFT_Item_Artifact_Fishbones", "name": "Fishbones", "icon": "ASSETS/Items/Fish.png"},
             {"apiName": "TFT_Item_NoIcon", "name": "Nameless", "composition": ["TFT_Item_BFSword", "TFT_Item_BFSword"]},
+            # A same-named variant and an unnamed placeholder are left out.
+            {
+                "apiName": "TFT_Item_CorruptedInfinityEdge", "name": "Infinity Edge", "icon": "ASSETS/Items/CIE.png",
+                "composition": ["TFT_Item_BFSword", "TFT_Item_SparringGloves"],
+            },
+            {"apiName": "TFT_Item_EmptyBag", "name": "TFT_Item_EmptyBag", "icon": "ASSETS/Items/Bag.png"},
         ],
         "setData": [
             {
@@ -103,6 +109,7 @@ def test_selection_keeps_playable_units_all_traits_and_standard_items() -> None:
         "TFT_Item_BFSword", "TFT_Item_SparringGloves", "TFT_Item_InfinityEdge", "TFT_Item_NoIcon",
     }
     assert "TFT_Item_BFSword" in shape["components_found"]
+    assert shape["duplicate_item_names"] == []
 
 
 def test_selection_refuses_a_set_that_is_not_the_shipped_roster() -> None:

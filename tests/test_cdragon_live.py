@@ -104,6 +104,7 @@ def test_live_game_art_refresh_integrity(tmp_path) -> None:
     # Surfaced in the pytest warnings summary so a passing run still logs it.
     warnings.warn("game art refresh summary: " + json.dumps(summary, ensure_ascii=False))
     assert report.ok, f"game art refresh failed: {report.failures[:20]}"
+    assert not report.shape["duplicate_item_names"], "two cached items share a display name"
 
     if MANIFEST_PATH.exists():
         live = json.loads((tmp_path / "manifest.json").read_text())

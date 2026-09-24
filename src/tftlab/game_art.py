@@ -47,6 +47,8 @@ KINDS = ("champions", "items", "traits")
 # each kind is drawn at, for sharp high-DPI screens).
 MAX_SIZE = {"champions": 128, "items": 64, "traits": 64}
 
+# Craftable variants that share a standard item's display name.
+_VARIANT_ITEM_PREFIXES = ("TFT_Item_Corrupted",)
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_]{1,80}$")
 _MAX_DOWNLOAD_BYTES = 5 * 1024 * 1024
 _MAGIC = {b"\x89PNG\r\n\x1a\n": "png", b"\xff\xd8\xff": "jpeg"}
@@ -82,16 +84,21 @@ def _url(kind: str, key: str | None) -> str | None:
 
 
 def _unique_by_name(kind: str, text: str | None, extra_key: Any = None) -> str | None:
-    """The one manifest id whose display name (or id-derived key) matches;
-    None if nothing or more than one matches, never a guess."""
+    """The one manifest id whose display name matches (same normalization as
+    the roster), else the one whose id-derived key does; None if nothing or
+    more than one matches at either step, never a guess."""
     key = name_key(text)
     if not key:
         return None
-    hits = [
-        k for k, e in load_manifest().get(kind, {}).items()
-        if name_key(e["name"]) == key or (extra_key and extra_key(k) == key)
-    ]
-    return hits[0] if len(hits) == 1 else None
+    entries = load_manifest().get(kind, {})
+    for matches in (
+        lambda k, e: name_key(e["name"]) == key,
+        lambda k, e: bool(extra_key) and extra_key(k) == key,
+    ):
+        hits = [k for k, e in entries.items() if matches(k, e)]
+        if hits:
+            return hits[0] if len(hits) == 1 else None
+    return None
 
 
 def champion_art(character_id: str | None = None, name: str | None = None) -> str | None:
@@ -138,7 +145,10 @@ _BREAKPOINT_LABEL = re.compile(r"^(.*) \((\d+)\)$")
 
 
 def _item_refs(package_key: str) -> list[dict[str, Any]]:
-    return [{"id": k, "name": item_name(k), "art_url": item_art(k)} for k in package_key.split("+") if k]
+    """One ref per item in a package key ("TFT_Item_A+TFT_Item_B") or label
+    ("Infinity Edge + Last Whisper")."""
+    parts = [p.strip() for p in (package_key or "").split("+")]
+    return [{"id": p, "name": item_name(p), "art_url": item_art(p)} for p in parts if p]
 
 
 def enrich_association(assoc: dict[str, Any], kind: str) -> dict[str, Any]:
@@ -192,7 +202,10 @@ def field_note_art(note: dict[str, Any]) -> dict[str, Any] | None:
         "carry": champion_art(data.get("character_id"), data.get("carry")),
         "best_partners": [champion_art(name=p.get("label")) for p in data.get("best_partners") or []],
         "best_item_packages": [_item_refs(p.get("label") or "") for p in data.get("best_item_packages") or []],
-        "best_trait_breakpoints": [trait_art(_trait_from_label(t.get("label") or "")) for t in data.get("best_trait_breakpoints") or []],
+        "best_trait_breakpoints": [
+            {"art_url": trait_art(tid), "trait_name": trait_name(tid)}
+            for tid in (_trait_from_label(t.get("label") or "") for t in data.get("best_trait_breakpoints") or [])
+        ],
         "core_units": [champion_art(name=u.get("name")) for u in data.get("core_units") or []],
         "trait_targets": [trait_art(t.get("name")) for t in data.get("trait_targets") or []],
     }
@@ -228,7 +241,9 @@ def select_assets(payload: dict[str, Any], *, patch: str = "latest") -> tuple[in
     - Traits: every trait of the current set.
     - Items: the standard components (`tftlab.items`) plus every
       bundle-wide `TFT_Item_*` item crafted from exactly two of them. Older
-      sets' variants, radiant/artifact items and event items are left out.
+      sets' variants, radiant/artifact items and event items are left out,
+      as are the craftable "Corrupted" variants, which reuse the base
+      items' names, and unnamed placeholders.
     """
     from .cdragon import parse_set_metadata
 
@@ -248,11 +263,13 @@ def select_assets(payload: dict[str, Any], *, patch: str = "latest") -> tuple[in
     components = {iid for iid in meta.items if is_component(iid)}
     for iid, item in sorted(meta.items.items()):
         standard_craft = (
-            iid.startswith("TFT_Item_") and len(item.composition) == 2 and set(item.composition) <= components
+            iid.startswith("TFT_Item_") and not iid.startswith(_VARIANT_ITEM_PREFIXES)
+            and len(item.composition) == 2 and set(item.composition) <= components
         )
-        if iid in components or standard_craft:
+        if (iid in components or standard_craft) and item.name != iid:
             picks.append(Selection("items", iid, item.name, item.icon_url, {"component": iid in components}))
 
+    names = Counter(p.name for p in picks if p.kind == "items")
     # A short shape summary so a dry run shows what the bundle looks like.
     chosen = max(payload.get("setData") or payload.get("sets") or [], key=lambda s: int(s.get("number") or 0))
     shape = {
@@ -263,6 +280,7 @@ def select_assets(payload: dict[str, Any], *, patch: str = "latest") -> tuple[in
         "set_champions": len(meta.champions),
         "set_traits": len(meta.traits),
         "components_found": sorted(components),
+        "duplicate_item_names": sorted(n for n, count in names.items() if count > 1),
         "roster_champions_not_selected": sorted(
             set(roster.champions) - {p.asset_id for p in picks if p.kind == "champions"}
         ),
