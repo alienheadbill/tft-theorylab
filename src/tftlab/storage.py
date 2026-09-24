@@ -385,6 +385,20 @@ class Database:
         cur.execute(translated, params)
         return cur
 
+    def executemany(self, sql: str, rows: Sequence[Sequence[Any]]) -> None:
+        """Run one statement for many parameter rows. On Postgres, psycopg
+        pipelines these into a few round trips instead of one per row, which
+        is what keeps remote-database ingestion time bounded. Same rows,
+        same order, same transaction as calling `execute` per row."""
+        if not rows:
+            return
+        translated = self._translate(sql)
+        if self.dialect == "sqlite":
+            self.conn.executemany(translated, rows)
+            return
+        with self.conn.cursor() as cur:
+            cur.executemany(translated, rows)
+
     def query_one(self, sql: str, params: Sequence[Any] = ()) -> tuple[Any, ...] | None:
         return self.execute(sql, params).fetchone()
 
@@ -431,25 +445,15 @@ class Database:
                 ),
             )
 
+            participant_rows: list[tuple[Any, ...]] = []
+            unit_rows: list[tuple[Any, ...]] = []
+            trait_rows: list[tuple[Any, ...]] = []
             for p in normalized.participants:
-                self.execute(
-                    "INSERT INTO participants VALUES (?, ?, ?, ?, ?)",
-                    (p.match_id, p.participant_index, p.placement, p.level, json.dumps(p.augments)),
+                participant_rows.append(
+                    (p.match_id, p.participant_index, p.placement, p.level, json.dumps(p.augments))
                 )
                 for u in p.units:
-                    self.execute(
-                        # Explicit column list, not positional VALUES: a
-                        # Postgres database migrated from the old schema (see
-                        # `_migrate_units_unit_index`) has `unit_index` as its
-                        # LAST physical column (Postgres's `ALTER TABLE ADD
-                        # COLUMN` always appends), not third -- positional
-                        # VALUES would silently insert into the wrong columns
-                        # on a migrated table even though it works on a
-                        # freshly created one.
-                        """INSERT INTO units (
-                            match_id, participant_index, unit_index, character_id,
-                            unit_name, cost, tier, items_json, completed_item_count
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    unit_rows.append(
                         (
                             p.match_id,
                             p.participant_index,
@@ -460,14 +464,13 @@ class Database:
                             u.tier,
                             json.dumps(u.items),
                             u.completed_item_count,
-                        ),
+                        )
                     )
                 for trait in p.traits:
                     name = str(trait.get("name") or "")
                     if not name:
                         continue
-                    self.execute(
-                        _TRAIT_UPSERT_SQL[self.dialect],
+                    trait_rows.append(
                         (
                             p.match_id,
                             p.participant_index,
@@ -476,8 +479,28 @@ class Database:
                             trait.get("style"),
                             trait.get("tier_current"),
                             trait.get("tier_total"),
-                        ),
+                        )
                     )
+            # Batched per table (participants before the units/traits that
+            # reference them), still inside this match's one transaction.
+            self.executemany("INSERT INTO participants VALUES (?, ?, ?, ?, ?)", participant_rows)
+            self.executemany(
+                # Explicit column list, not positional VALUES: a Postgres
+                # database migrated from the old schema (see
+                # `_migrate_units_unit_index`) has `unit_index` as its LAST
+                # physical column (Postgres's `ALTER TABLE ADD COLUMN` always
+                # appends), not third -- positional VALUES would silently
+                # insert into the wrong columns on a migrated table even
+                # though it works on a freshly created one.
+                """INSERT INTO units (
+                    match_id, participant_index, unit_index, character_id,
+                    unit_name, cost, tier, items_json, completed_item_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                unit_rows,
+            )
+            # Row by row within the batch, so a trait repeated for the same
+            # participant still upserts exactly as before.
+            self.executemany(_TRAIT_UPSERT_SQL[self.dialect], trait_rows)
         except Exception:
             self.conn.rollback()
             raise

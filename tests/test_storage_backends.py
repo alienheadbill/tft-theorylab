@@ -691,3 +691,66 @@ def test_postgres_and_sqlite_agree_on_unexpected_missing_balance_window(tmp_path
         == 1
     )
     assert sqlite_report.is_severe is postgres_report.is_severe is True
+
+
+def _all_rows(db: Database) -> dict[str, list[tuple]]:
+    """Every stored row except the raw payload, sorted, for backend comparison."""
+    return {
+        "matches": sorted(db.query_all(
+            "SELECT match_id, game_datetime, patch, balance_window, queue_id, set_number FROM matches"
+        )),
+        "participants": sorted(db.query_all("SELECT * FROM participants")),
+        "units": sorted(db.query_all(
+            "SELECT match_id, participant_index, unit_index, character_id, unit_name, cost, tier, "
+            "items_json, completed_item_count FROM units"
+        )),
+        "traits": sorted(db.query_all(
+            "SELECT match_id, participant_index, trait_name, num_units, style, tier_current, tier_total FROM traits"
+        )),
+    }
+
+
+def _batched_insert_fixture() -> list[dict]:
+    """Full 8-player demo matches plus a payload that lists the same trait
+    twice for one participant (the later entry must win, as before)."""
+    from _helpers import make_match, make_unit
+
+    repeated = make_match(
+        "REPEATED_TRAIT",
+        units=[make_unit("TFT14_Foo", tier=2, items=["TFT_Item_BlueBuff"]), make_unit("TFT14_Foo", tier=1, items=[])],
+        traits=[
+            {"name": "Juggernaut", "num_units": 2, "style": 1, "tier_current": 1, "tier_total": 3},
+            {"name": "Juggernaut", "num_units": 4, "style": 2, "tier_current": 2, "tier_total": 3},
+            {"name": "", "num_units": 9},
+        ],
+    )
+    return [*generate_demo_matches(6, seed=3), repeated]
+
+
+def test_batched_ingest_stores_every_row_once_on_sqlite(tmp_path: Path) -> None:
+    matches = _batched_insert_fixture()
+    with Database(tmp_path / "batch.sqlite3") as db:
+        assert db.ingest_many(matches) == len(matches)
+        rows = _all_rows(db)
+    assert len(rows["participants"]) == 6 * 8 + 1
+    expected_units = sum(len(p["units"]) for m in matches for p in m["info"]["participants"])
+    assert len(rows["units"]) == expected_units
+    repeated = [r for r in rows["traits"] if r[0] == "REPEATED_TRAIT"]
+    assert repeated == [("REPEATED_TRAIT", 0, "Juggernaut", 4, 2, 2, 3)]
+
+
+@requires_postgres
+def test_postgres_and_sqlite_store_identical_rows_with_batched_inserts(tmp_path: Path) -> None:
+    matches = _batched_insert_fixture()
+    with Database(tmp_path / "batch_parity.sqlite3") as sqlite_db:
+        sqlite_db.ingest_many(matches)
+        sqlite_rows = _all_rows(sqlite_db)
+
+    postgres_db = _clean_postgres_db()
+    try:
+        postgres_db.ingest_many(matches)
+        postgres_rows = _all_rows(postgres_db)
+    finally:
+        postgres_db.close()
+
+    assert postgres_rows == sqlite_rows

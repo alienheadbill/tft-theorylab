@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any, Iterable
+from typing import Any
 
 import httpx
 
@@ -124,18 +124,6 @@ class RiotClient:
         return self._get(
             f"https://{self.platform}.api.riotgames.com/tft/league/v1/master"
         )
-
-    def ladder_puuids(self, leagues: Iterable[str] = ("challenger",)) -> list[str]:
-        puuids: list[str] = []
-        seen: set[str] = set()
-        for league in leagues:
-            payload = getattr(self, league)()
-            for entry in payload.get("entries", []):
-                puuid = entry.get("puuid")
-                if puuid and puuid not in seen:
-                    seen.add(puuid)
-                    puuids.append(puuid)
-        return puuids
 
     def match_ids(self, puuid: str, *, count: int = 20, start: int = 0) -> list[str]:
         return self._get(
