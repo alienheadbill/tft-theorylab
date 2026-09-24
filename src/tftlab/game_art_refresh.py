@@ -74,9 +74,14 @@ def _relative_source(url: str) -> str:
 def select_assets(payload: dict[str, Any], *, patch: str = "latest") -> tuple[int, list[Selection], dict[str, Any]]:
     """Choose the current set's art from a CommunityDragon bundle.
 
-    - Champions: the current set's units that are in our shipped roster
-      (`data/set_roster.json`), cost 1-5, and have at least one trait.
-      Summons, camps, anvils and other special units don't qualify.
+    - Champions: every current-set unit that is in our shipped roster
+      (`data/set_roster.json`), costs 1-5 and has at least one trait. That
+      drops units CommunityDragon lists without a cost or traits (e.g. the
+      jungle camps, armory keys and training dummy in Set 18), but it is not
+      a "shop champions only" filter: special units that do have a cost and
+      traits in the feed qualify too (in Set 18 that includes, for example,
+      Elder Dragon, Pebbles, Mama Beak and each Lux form). Their art is only
+      shown when their own id appears in our data.
     - Traits: every trait of the current set.
     - Items: the standard components (`tftlab.items`) plus every
       bundle-wide `TFT_Item_*` item crafted from exactly two of them. Older

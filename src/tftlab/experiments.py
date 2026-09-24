@@ -812,7 +812,7 @@ DEMO_EXPERIMENTS: tuple[dict[str, Any], ...] = (
                 {"name": "Fiddlesticks", "star": 3, "note": "secondary tank"},
             ],
             "optional_units": ["Leona"],
-            "carry_items": ["Blue Buff", "Jeweled Gauntlet", "Deathcap"],
+            "carry_items": ["Blue Buff", "Jeweled Gauntlet", "Rabadon's Deathcap"],
             "tank_items": ["Warmog's Armor", "Dragon's Claw"],
             "target_level": 8,
             "reroll_level": 7,

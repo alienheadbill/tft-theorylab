@@ -45,7 +45,7 @@ def test_demo_notebook_lists_example_entries(tmp_path: Path, monkeypatch: pytest
         assert entry["evidence_status"] == "THEORYCRAFTED"
         assert set(entry) == {
             "id", "slug", "title", "carry", "evidence_status", "lifecycle", "summary",
-            "author_notes", "comp", "tags", "is_example", "created_at", "updated_at",
+            "author_notes", "comp", "tags", "is_example", "created_at", "updated_at", "art",
         }
         assert "field_notes" not in entry  # detail only
 
@@ -69,7 +69,7 @@ def test_detail_and_filters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     detail = client.get(f"/api/experiments/{kha.slug}")
     assert detail.status_code == 200
     e = detail.json()["experiment"]
-    assert e["carry"] == {"character_id": "DA_18_KhaZix", "name": "Kha'Zix"}
+    assert {k: e["carry"][k] for k in ("character_id", "name")} == {"character_id": "DA_18_KhaZix", "name": "Kha'Zix"}
     assert e["comp"]["target_traits"] == [{"name": "Ravager", "breakpoint": 6, "note": None}]
     assert e["field_notes"] == []
     assert e["is_example"] is False

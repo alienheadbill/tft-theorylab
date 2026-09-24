@@ -1,0 +1,1571 @@
+{
+ "champions": {
+  "DA_18_Ahri": {
+   "cost": 4,
+   "file": "champions/DA_18_Ahri.png",
+   "height": 128,
+   "name": "Ahri",
+   "sha256": "2eeb96d7b4c9723095e464bb250f99dc697397e6e728068d44eedbec72d26c2e",
+   "source_etag": "\"6a824dc6-14f51\"",
+   "source_path": "assets/characters/tft18_ahri/skins/base/images/tft18_ahri_splash_tile_27.png",
+   "width": 128
+  },
+  "DA_18_Akali_AD": {
+   "cost": 1,
+   "file": "champions/DA_18_Akali_AD.png",
+   "height": 128,
+   "name": "Akali",
+   "sha256": "c120e49c2244a76a2e9128827cbc6f42231f14ddcf4819b412f73bbf441e5044",
+   "source_etag": "\"6a824dc9-12fd6\"",
+   "source_path": "assets/characters/tft18_akali/skins/base/images/tft18_akali_splash_tile_2.png",
+   "width": 128
+  },
+  "DA_18_Alistar": {
+   "cost": 2,
+   "file": "champions/DA_18_Alistar.png",
+   "height": 128,
+   "name": "Alistar",
+   "sha256": "094ca8825fb836656fa22db3f32af6a2a81c64017d4786b3ec9f08f43c6d5d14",
+   "source_etag": "\"6a824dbe-13a2e\"",
+   "source_path": "assets/characters/tft18_alistar/skins/base/images/tft18_alistar_splash_tile_40.png",
+   "width": 128
+  },
+  "DA_18_Alune": {
+   "cost": 5,
+   "file": "champions/DA_18_Alune.png",
+   "height": 128,
+   "name": "Alune",
+   "sha256": "5be98e35840f809ac796df5b03e68c549cdff7b6fb90c139d1a8a2bf72b28bb0",
+   "source_etag": "\"6a824dc3-12b0f\"",
+   "source_path": "assets/characters/tft18_alune/skins/base/images/tft18_alune_splash_tile_15.png",
+   "width": 128
+  },
+  "DA_18_Aphelios": {
+   "cost": 4,
+   "file": "champions/DA_18_Aphelios.png",
+   "height": 128,
+   "name": "Aphelios",
+   "sha256": "cd6fa766cf2011b01cdb8ac4e2e421e72cffd5b90d9cbcc233722890197a379a",
+   "source_etag": "\"6a824dbf-13413\"",
+   "source_path": "assets/characters/tft18_aphelios/skins/base/images/tft18_aphelios_splash_tile_0.png",
+   "width": 128
+  },
+  "DA_18_Ashe": {
+   "cost": 5,
+   "file": "champions/DA_18_Ashe.png",
+   "height": 128,
+   "name": "Ashe",
+   "sha256": "dae2ddad253a94f2d52769433a8e2394a084f1bcf41a0aeb173cfc045bd71b9a",
+   "source_etag": "\"6a824dc4-15fe0\"",
+   "source_path": "assets/characters/tft18_ashe/skins/base/images/tft18_ashe_splash_tile_76.png",
+   "width": 128
+  },
+  "DA_18_Azir": {
+   "cost": 3,
+   "file": "champions/DA_18_Azir.png",
+   "height": 128,
+   "name": "Azir",
+   "sha256": "0d1bc8ddd82be5a7f5205b28b680a8edae66b0ef535c5331761986c1975e67a2",
+   "source_etag": "\"6a824dca-160a8\"",
+   "source_path": "assets/characters/tft18_azir/skins/base/images/tft18_azir_splash_tile_5.png",
+   "width": 128
+  },
+  "DA_18_Caitlyn": {
+   "cost": 2,
+   "file": "champions/DA_18_Caitlyn.png",
+   "height": 128,
+   "name": "Caitlyn",
+   "sha256": "1b485d4d609f14a1aba95343c6529abb93cf695d01ab1e1bdadcecb8881f4d13",
+   "source_etag": "\"6a824dcb-1514d\"",
+   "source_path": "assets/characters/tft18_caitlyn/skins/base/images/tft18_caitlyn_splash_tile_30.png",
+   "width": 128
+  },
+  "DA_18_Camille": {
+   "cost": 1,
+   "file": "champions/DA_18_Camille.png",
+   "height": 128,
+   "name": "Camille",
+   "sha256": "c31ef44a7535fdba1ef8da8c1af02041e74210259ed2cbe0373027e4140bcab8",
+   "source_etag": "\"6a824dc4-129c2\"",
+   "source_path": "assets/characters/tft18_camille/skins/base/images/tft18_camille_splash_tile_2.png",
+   "width": 128
+  },
+  "DA_18_Cassiopeia": {
+   "cost": 3,
+   "file": "champions/DA_18_Cassiopeia.png",
+   "height": 128,
+   "name": "Cassiopeia",
+   "sha256": "1f23c00f12c8296b61367089391e096a554cc1ee0ec26603d33227c43f488a73",
+   "source_etag": "\"6a824dcb-13cf3\"",
+   "source_path": "assets/characters/tft18_cassiopeia/skins/base/images/tft18_cassiopeia_splash_tile_18.png",
+   "width": 128
+  },
+  "DA_18_Diana": {
+   "cost": 3,
+   "file": "champions/DA_18_Diana.png",
+   "height": 128,
+   "name": "Diana",
+   "sha256": "5f815ccf53eae10f91656124ca4bc2688c63e860186e85a90f2a9ad84fe49edd",
+   "source_etag": "\"6a824dcb-13f69\"",
+   "source_path": "assets/characters/tft18_diana/skins/base/images/tft18_diana_splash_tile_0.png",
+   "width": 128
+  },
+  "DA_18_ElderDragon": {
+   "cost": 5,
+   "file": "champions/DA_18_ElderDragon.png",
+   "height": 128,
+   "name": "Elder Dragon",
+   "sha256": "12660d7d4f5adcd0507d2d4d7f230615bdf2eafbe4618b42101e742e8839a45c",
+   "source_etag": "\"6a824dbb-fe8f\"",
+   "source_path": "assets/characters/tft18_elderdragon/skins/base/images/t_18_elderdragon_teamplannersplash.png",
+   "width": 128
+  },
+  "DA_18_Elise": {
+   "cost": 2,
+   "file": "champions/DA_18_Elise.png",
+   "height": 128,
+   "name": "Elise",
+   "sha256": "5c7d3c63a82491442094e58bb906a6a1d2089f61ff47de6640ee7b880585aa18",
+   "source_etag": "\"6a824dbe-1390b\"",
+   "source_path": "assets/characters/tft18_elise/skins/base/images/tft18_elise_splash_tile_24.png",
+   "width": 128
+  },
+  "DA_18_Ezreal": {
+   "cost": 4,
+   "file": "champions/DA_18_Ezreal.png",
+   "height": 128,
+   "name": "Ezreal",
+   "sha256": "bcad94ab42f4ef3d20416ec4b38af238d54d9d2f960d4a063e1efa0e59aaf48a",
+   "source_etag": "\"6a824dba-14fc1\"",
+   "source_path": "assets/characters/tft18_ezreal/skins/base/images/tft18_ezreal_splash_tile_1.png",
+   "width": 128
+  },
+  "DA_18_GnarSmall": {
+   "cost": 5,
+   "file": "champions/DA_18_GnarSmall.png",
+   "height": 128,
+   "name": "Gnar",
+   "sha256": "0d268f75b461689911fab30eb2ddd81892b37015dd08d6b5b35c872c3b15b9d4",
+   "source_etag": "\"6a824dc3-12fb7\"",
+   "source_path": "assets/characters/tft18_gnar/skins/base/images/tft18_gnar_splash_tile_0.png",
+   "width": 128
+  },
+  "DA_18_Hecarim": {
+   "cost": 3,
+   "file": "champions/DA_18_Hecarim.png",
+   "height": 128,
+   "name": "Hecarim",
+   "sha256": "a930dd54fbf42487551e9bd5901a2c73b73250aeb164a929de0403229d6de608",
+   "source_etag": "\"6a824dc6-163d3\"",
+   "source_path": "assets/characters/tft18_hecarim/skins/base/images/tft18_hecarim_splash_tile_5.png",
+   "width": 128
+  },
+  "DA_18_Ivern": {
+   "cost": 5,
+   "file": "champions/DA_18_Ivern.png",
+   "height": 128,
+   "name": "Ivern",
+   "sha256": "a7bcb608d659ebcf62e1d20d9560a51508c07fa240c087ff3d674f1325e22936",
+   "source_etag": "\"6a824dc2-132b9\"",
+   "source_path": "assets/characters/tft18_ivern/skins/base/images/tft18_ivern_splash_tile_0.png",
+   "width": 128
+  },
+  "DA_18_Kayle": {
+   "cost": 2,
+   "file": "champions/DA_18_Kayle.png",
+   "height": 128,
+   "name": "Kayle",
+   "sha256": "47bbaddfa41cd4dd2528e3146353e022a2381e15282cf68912a3b98bb9ad4298",
+   "source_etag": "\"6a824dbb-154ea\"",
+   "source_path": "assets/characters/tft18_kayle/skins/base/images/tft18_kayle_splash_tile_42.png",
+   "width": 128
+  },
+  "DA_18_Kennen": {
+   "cost": 5,
+   "file": "champions/DA_18_Kennen.png",
+   "height": 128,
+   "name": "Kennen",
+   "sha256": "53c47af3058629b1ef5792c75c236ab34373d7a3464a8520c8ae90014bd99393",
+   "source_etag": "\"6a824dcb-151de\"",
+   "source_path": "assets/characters/tft18_kennen/skins/base/images/tft18_kennen_splash_tile_8.png",
+   "width": 128
+  },
+  "DA_18_KhaZix": {
+   "cost": 3,
+   "file": "champions/DA_18_KhaZix.png",
+   "height": 128,
+   "name": "Kha'Zix",
+   "sha256": "2b56e94a14f6a7f6b9244cf53eb3d78e7fe011051175a294375c214f1810561b",
+   "source_etag": "\"6a824dca-124a3\"",
+   "source_path": "assets/characters/tft18_khazix/skins/base/images/tft18_khazix_splash_tile_0.png",
+   "width": 128
+  },
+  "DA_18_Kobuko": {
+   "cost": 1,
+   "file": "champions/DA_18_Kobuko.png",
+   "height": 128,
+   "name": "Kobuko",
+   "sha256": "933d5dd6aa07d59f4cb199b9194abd16e003a1f790d3a88a975fd4ba017a14c2",
+   "source_etag": "\"6a824dbb-14c70\"",
+   "source_path": "assets/characters/tft18_kobuko/skins/base/images/tft18_kobuko_splash_tile_2.png",
+   "width": 128
+  },
+  "DA_18_LeBlanc": {
+   "cost": 2,
+   "file": "champions/DA_18_LeBlanc.png",
+   "height": 128,
+   "name": "LeBlanc",
+   "sha256": "e632b5103fee2176e6964e23437fe41c82a1997fe15e0bbf42fd0dd84952b71a",
+   "source_etag": "\"6a824dcb-1331e\"",
+   "source_path": "assets/characters/tft18_leblanc/skins/base/images/tft18_leblanc_splash_tile_5.png",
+   "width": 128
+  },
+  "DA_18_Leona": {
+   "cost": 1,
+   "file": "champions/DA_18_Leona.png",
+   "height": 128,
+   "name": "Leona",
+   "sha256": "114e628dd3517a678ff37bc97a24b678b173e535f5f140ebac031864412333e3",
+   "source_etag": "\"6a824dc4-155cb\"",
+   "source_path": "assets/characters/tft18_leona/skins/base/images/tft18_leona_splash_tile_10.png",
+   "width": 128
+  },
+  "DA_18_Lillia": {
+   "cost": 4,
+   "file": "champions/DA_18_Lillia.png",
+   "height": 128,
+   "name": "Lillia",
+   "sha256": "a68919d2f6b7f824c9057477f59228e351e0ca90b512319a74b4da76df576b76",
+   "source_etag": "\"6a824dbf-170e1\"",
+   "source_path": "assets/characters/tft18_lillia/skins/base/images/tft18_lillia_splash_tile_28.png",
+   "width": 128
+  },
+  "DA_18_Lux_Coven": {
+   "cost": 5,
+   "file": "champions/DA_18_Lux_Coven.png",
+   "height": 128,
+   "name": "Lux (Coven)",
+   "sha256": "4b056c6a28ce11e313aa592d40e1a8c0cb9ac26b5795b352dda16581403f3a23",
+   "source_etag": "\"6a824dbb-1219c\"",
+   "source_path": "assets/characters/tft18_lux/hud/splashes/t_18_lux_coven_teamplanner.png",
+   "width": 128
+  },
+  "DA_18_Lux_Elderwood": {
+   "cost": 5,
+   "file": "champions/DA_18_Lux_Elderwood.png",
+   "height": 128,
+   "name": "Lux (Elderwood)",
+   "sha256": "c44d4061cb7959f81c0598e40223880acd49770daf2dd75aead98f2f09761626",
+   "source_etag": "\"6a824dba-12f0a\"",
+   "source_path": "assets/characters/tft18_lux/hud/splashes/t_18_lux_elderwood_teamplanner.png",
+   "width": 128
+  },
+  "DA_18_Lux_Fae": {
+   "cost": 5,
+   "file": "champions/DA_18_Lux_Fae.png",
+   "height": 128,
+   "name": "Lux (Fae)",
+   "sha256": "5e6b6e5c65bdadea8f01b532da75b61e14e6dcdeca0a0b9f56a632771c4dd920",
+   "source_etag": "\"6a824dc6-12de9\"",
+   "source_path": "assets/characters/tft18_lux/hud/splashes/t_18_lux_fae_teamplanner.png",
+   "width": 128
+  },
+  "DA_18_Lux_Inferno": {
+   "cost": 5,
+   "file": "champions/DA_18_Lux_Inferno.png",
+   "height": 128,
+   "name": "Lux (Inferno)",
+   "sha256": "2147626721ba3f6535d70301da29e3e0b2b10cdbcdf981d28ae17220f941677e",
+   "source_etag": "\"6a824dc1-12d7d\"",
+   "source_path": "assets/characters/tft18_lux/hud/splashes/t_18_lux_inferno_teamplanner.png",
+   "width": 128
+  },
+  "DA_18_Lux_Moonbeam": {
+   "cost": 5,
+   "file": "champions/DA_18_Lux_Moonbeam.png",
+   "height": 128,
+   "name": "Lux (Lunar)",
+   "sha256": "54567be9ba19f3c82583d3c156a7670265f79d9928963591a555afd2462e762f",
+   "source_etag": "\"6a824dbf-11439\"",
+   "source_path": "assets/characters/tft18_lux/hud/splashes/t_18_lux_moonbeam_teamplanner.png",
+   "width": 128
+  },
+  "DA_18_Lux_Primal": {
+   "cost": 5,
+   "file": "champions/DA_18_Lux_Primal.png",
+   "height": 128,
+   "name": "Lux (Primal)",
+   "sha256": "a201a79adb21a9060536fc81e93ff8ae0a1891ef687193a6f0d299d5e67a7b73",
+   "source_etag": "\"6a824dba-13911\"",
+   "source_path": "assets/characters/tft18_lux/hud/splashes/t_18_lux_primal_teamplanner.png",
+   "width": 128
+  },
+  "DA_18_Lux_Sunbeam": {
+   "cost": 5,
+   "file": "champions/DA_18_Lux_Sunbeam.png",
+   "height": 128,
+   "name": "Lux (Solar)",
+   "sha256": "c9608acb1cab5ddcf4dec0bdf091599f51c8ea380f4ff1076ea8e681b39d900e",
+   "source_etag": "\"6a824dca-120ae\"",
+   "source_path": "assets/characters/tft18_lux/hud/splashes/t_18_lux_sunbeam_teamplanner.png",
+   "width": 128
+  },
+  "DA_18_Malphite": {
+   "cost": 4,
+   "file": "champions/DA_18_Malphite.png",
+   "height": 128,
+   "name": "Malphite",
+   "sha256": "bc3424dc3d04e944cf1c73190108ba1ca9c40c0681cb20411e9e7aafe678ddc3",
+   "source_etag": "\"6a824dc2-106d2\"",
+   "source_path": "assets/characters/tft18_malphite/skins/base/images/tft18_malphite_splash_tile_27.png",
+   "width": 128
+  },
+  "DA_18_Maokai": {
+   "cost": 5,
+   "file": "champions/DA_18_Maokai.png",
+   "height": 128,
+   "name": "Maokai",
+   "sha256": "94b4ddb395ecb83e6805597d005357cc080c62d3ad9bfc953d27ebba086d2330",
+   "source_etag": "\"6a824dc9-11f65\"",
+   "source_path": "assets/characters/tft18_maokai/skins/base/images/tft18_maokai_splash_tile_0.png",
+   "width": 128
+  },
+  "DA_18_MasterYi_AD": {
+   "cost": 3,
+   "file": "champions/DA_18_MasterYi_AD.png",
+   "height": 128,
+   "name": "Master Yi",
+   "sha256": "d58b140c24abeaa5608645cca7b4956180a51a4a93a6462e3591c3036d677ca0",
+   "source_etag": "\"6a824dc0-17992\"",
+   "source_path": "assets/characters/tft18_masteryi/skins/base/images/tft18_masteryi_splash_tile_52.png",
+   "width": 128
+  },
+  "DA_18_Morgana": {
+   "cost": 4,
+   "file": "champions/DA_18_Morgana.png",
+   "height": 128,
+   "name": "Morgana",
+   "sha256": "7a6683ab71140aee189dc5c99f843dd80ad041aefa080a3c8618640a85c5dd8b",
+   "source_etag": "\"6a824dc3-12cf8\"",
+   "source_path": "assets/characters/tft18_morgana/skins/base/images/tft18_morgana_splash_tile_26.png",
+   "width": 128
+  },
+  "DA_18_Ornn": {
+   "cost": 1,
+   "file": "champions/DA_18_Ornn.png",
+   "height": 128,
+   "name": "Ornn",
+   "sha256": "a67f4a3186997ec18ef963fb91032928377a1c77cfdff79297cd235390101be4",
+   "source_etag": "\"6a824dc6-138e6\"",
+   "source_path": "assets/characters/tft18_ornn/skins/base/images/tft18_ornn_splash_tile_2.png",
+   "width": 128
+  },
+  "DA_18_Rakan": {
+   "cost": 1,
+   "file": "champions/DA_18_Rakan.png",
+   "height": 128,
+   "name": "Rakan",
+   "sha256": "5163f3fcd12317685b46a97e5af2adb08ec939bb6e6e8cf8e5ba64c535c1056d",
+   "source_etag": "\"6a824dcb-12806\"",
+   "source_path": "assets/characters/tft18_rakan/skins/base/images/tft18_rakan_splash_tile_9.png",
+   "width": 128
+  },
+  "DA_18_Rammus": {
+   "cost": 3,
+   "file": "champions/DA_18_Rammus.png",
+   "height": 128,
+   "name": "Rammus",
+   "sha256": "7446f353f9917f0016f700b1446b27cd2627b98de36e6e5a66f1953828e22869",
+   "source_etag": "\"6a824dc8-113c9\"",
+   "source_path": "assets/characters/tft18_rammus/skins/base/images/tft18_rammus_splash_tile_26.png",
+   "width": 128
+  },
+  "DA_18_RekSai": {
+   "cost": 1,
+   "file": "champions/DA_18_RekSai.png",
+   "height": 128,
+   "name": "Rek'Sai",
+   "sha256": "07f6bf9204ef17ddfe27c6c36747c1d3b8a899aa88cfd91631076b75e6c2a1f0",
+   "source_etag": "\"6a824dbc-15a20\"",
+   "source_path": "assets/characters/tft18_reksai/skins/base/images/tft18_reksai_splash_tile_17.png",
+   "width": 128
+  },
+  "DA_18_Rengar": {
+   "cost": 3,
+   "file": "champions/DA_18_Rengar.png",
+   "height": 128,
+   "name": "Rengar",
+   "sha256": "ebb95181e3b666b4bb3d406e393c0b091af8f6e74530bf72c8ba90575aa8b3b6",
+   "source_etag": "\"6a824dc9-1659e\"",
+   "source_path": "assets/characters/tft18_rengar/skins/base/images/tft18_rengar_splash_tile_0.png",
+   "width": 128
+  },
+  "DA_18_Sejuani": {
+   "cost": 2,
+   "file": "champions/DA_18_Sejuani.png",
+   "height": 128,
+   "name": "Sejuani",
+   "sha256": "852f8558af0315a344e3a2b7295d9708670033ef1e639d203590bc56b1658a8c",
+   "source_etag": "\"6a824dc2-17179\"",
+   "source_path": "assets/characters/tft18_sejuani/skins/base/images/tft18_sejuani_splash_tile_26.png",
+   "width": 128
+  },
+  "DA_18_Sentry": {
+   "cost": 1,
+   "file": "champions/DA_18_Sentry.png",
+   "height": 128,
+   "name": "Pebbles",
+   "sha256": "58f0818cd4cbeb9c8525530d146028f5d9e36167c41d73337353f96c2fa56497",
+   "source_etag": "\"6a824dc4-10d54\"",
+   "source_path": "assets/characters/tft18_sentry/skins/base/images/t_18_sentry_teamplannersplash.png",
+   "width": 128
+  },
+  "DA_18_Sett": {
+   "cost": 4,
+   "file": "champions/DA_18_Sett.png",
+   "height": 128,
+   "name": "Sett",
+   "sha256": "882f5571596a659dadffdb5f56a24fb20e9dc0b1ea9ef61b4d794f66c3495556",
+   "source_etag": "\"6a824dca-13b9d\"",
+   "source_path": "assets/characters/tft18_sett/skins/base/images/tft18_sett_splash_tile_38.png",
+   "width": 128
+  },
+  "DA_18_Shen": {
+   "cost": 2,
+   "file": "champions/DA_18_Shen.png",
+   "height": 128,
+   "name": "Shen",
+   "sha256": "3e44864d6f20702cfed830250672c3ad357cfedba71112ad0b0dbb1822e1d1e6",
+   "source_etag": "\"6a824dc4-175fe\"",
+   "source_path": "assets/characters/tft18_shen/skins/base/images/tft18_shen_splash_tile_16.png",
+   "width": 128
+  },
+  "DA_18_Sivir": {
+   "cost": 4,
+   "file": "champions/DA_18_Sivir.png",
+   "height": 128,
+   "name": "Sivir",
+   "sha256": "9b446b5350497c412ece0d2cd861b2f1ce212167961357e2a357eb0a314b1b9b",
+   "source_etag": "\"6a824dc9-17f4f\"",
+   "source_path": "assets/characters/tft18_sivir/skins/base/images/tft18_sivir_splash_tile_61.png",
+   "width": 128
+  },
+  "DA_18_Soraka": {
+   "cost": 4,
+   "file": "champions/DA_18_Soraka.png",
+   "height": 128,
+   "name": "Soraka",
+   "sha256": "c209a595cbec57015c997aadcc7b89a0571609d2812d44a96f3bd7b4038290a1",
+   "source_etag": "\"6a824dbf-179e6\"",
+   "source_path": "assets/characters/tft18_soraka/skins/base/images/tft18_soraka_splash_tile_53.png",
+   "width": 128
+  },
+  "DA_18_Teemo": {
+   "cost": 2,
+   "file": "champions/DA_18_Teemo.png",
+   "height": 128,
+   "name": "Teemo",
+   "sha256": "d3ebcc0efd3dfeec55462645bf3773c7ea4e2616746d838a5f3dc8db417d3a54",
+   "source_etag": "\"6a824dc3-15003\"",
+   "source_path": "assets/characters/tft18_teemo/skins/base/images/tft18_teemo_splash_tile_0.png",
+   "width": 128
+  },
+  "DA_18_Tristana": {
+   "cost": 3,
+   "file": "champions/DA_18_Tristana.png",
+   "height": 128,
+   "name": "Tristana",
+   "sha256": "6309484d08fef7632238aad7c155b6af6a399374aca222c27e056df99266f356",
+   "source_etag": "\"6a824dbd-16864\"",
+   "source_path": "assets/characters/tft18_tristana/skins/base/images/tft18_tristana_splash_tile_61.png",
+   "width": 128
+  },
+  "DA_18_Varus": {
+   "cost": 1,
+   "file": "champions/DA_18_Varus.png",
+   "height": 128,
+   "name": "Varus",
+   "sha256": "d4d26bf2d2172e206bcfe4e709513de6d2bc3718de78ac5e859f6cc3f823ae72",
+   "source_etag": "\"6a824dc9-15a3a\"",
+   "source_path": "assets/characters/tft18_varus/skins/base/images/tft18_varus_splash_tile_9.png",
+   "width": 128
+  },
+  "DA_18_Veigar": {
+   "cost": 1,
+   "file": "champions/DA_18_Veigar.png",
+   "height": 128,
+   "name": "Veigar",
+   "sha256": "c72b5dfbf0be9584d1df56947f39ccc7c9cd0e97b15b880032c2e3a8c82793d7",
+   "source_etag": "\"6a824dbf-136a6\"",
+   "source_path": "assets/characters/tft18_veigar/skins/base/images/tft18_veigar_splash_tile_13.png",
+   "width": 128
+  },
+  "DA_18_Warwick": {
+   "cost": 2,
+   "file": "champions/DA_18_Warwick.png",
+   "height": 128,
+   "name": "Warwick",
+   "sha256": "08bdfe4e9a2816220c17d6492bdab23a7f81eb0dd7f2f5e22ffd4e34e7a10953",
+   "source_etag": "\"6a824dbf-13ea9\"",
+   "source_path": "assets/characters/tft18_warwick/skins/base/images/tft18_warwick_splash_tile_35.png",
+   "width": 128
+  },
+  "DA_18_Xayah": {
+   "cost": 1,
+   "file": "champions/DA_18_Xayah.png",
+   "height": 128,
+   "name": "Xayah",
+   "sha256": "cb7c1cdbb95649cf333b481bbd053563d9930148589fbeb13d276bca3efbf596",
+   "source_etag": "\"6a824dc0-124af\"",
+   "source_path": "assets/characters/tft18_xayah/skins/base/images/tft18_xayah_splash_tile_8.png",
+   "width": 128
+  },
+  "DA_18_Yorick": {
+   "cost": 1,
+   "file": "champions/DA_18_Yorick.png",
+   "height": 128,
+   "name": "Yorick",
+   "sha256": "be64b3a2a1a23f32c91078adeaeebe6cf5e3102079bf3877c954d719ca9cb370",
+   "source_etag": "\"6a824dc7-129e8\"",
+   "source_path": "assets/characters/tft18_yorick/skins/base/images/tft18_yorick_splash_tile_30.png",
+   "width": 128
+  },
+  "DA_18_Yunara": {
+   "cost": 2,
+   "file": "champions/DA_18_Yunara.png",
+   "height": 128,
+   "name": "Yunara",
+   "sha256": "50152fe8de9715d93a7d00ec094d22d463ee6b8b116c8fff14be9be23551fb14",
+   "source_etag": "\"6a824dba-1868b\"",
+   "source_path": "assets/characters/tft18_yunara/skins/base/images/tft18_yunara_splash_tile_0.png",
+   "width": 128
+  },
+  "DA_18_Zyra": {
+   "cost": 4,
+   "file": "champions/DA_18_Zyra.png",
+   "height": 128,
+   "name": "Zyra",
+   "sha256": "99f5e44c300cac8b63813a4e5c27d81c664f54eb1ba8c2c5964f17a9b95284bc",
+   "source_etag": "\"6a824dbf-14e86\"",
+   "source_path": "assets/characters/tft18_zyra/skins/base/images/tft18_zyra_splash_tile_0.png",
+   "width": 128
+  },
+  "DA_Amumu18": {
+   "cost": 4,
+   "file": "champions/DA_Amumu18.png",
+   "height": 128,
+   "name": "Amumu",
+   "sha256": "53b06ca7ca017e803e089e2156797bd648f3ff7e4f46337d3dd1b284f0381d20",
+   "source_etag": "\"6a824dbe-1521a\"",
+   "source_path": "assets/characters/tft18_amumu/skins/base/images/tft18_amumu_splash_tile_17.png",
+   "width": 128
+  },
+  "DA_Brambleback18": {
+   "cost": 4,
+   "file": "champions/DA_Brambleback18.png",
+   "height": 128,
+   "name": "Brambleback",
+   "sha256": "37ee928ff21683a48df77858f38c36dd57e278c736b60dfb564eb51f4bcea653",
+   "source_etag": "\"6a824dc4-16e46\"",
+   "source_path": "assets/characters/tft18_brambleback/skins/base/images/t_18_brambleback_teamplannersplash.png",
+   "width": 128
+  },
+  "DA_Cinderling18": {
+   "cost": 1,
+   "file": "champions/DA_Cinderling18.png",
+   "height": 128,
+   "name": "Cinderling",
+   "sha256": "e4c296afed4190d2f41aee2e647c26326ef8343faccaab74ffc45d6af01a5fb7",
+   "source_etag": "\"6a824dc0-13fca\"",
+   "source_path": "assets/characters/tft18_cinderling/skins/base/images/t_18_cinderling_teamplannersplash.png",
+   "width": 128
+  },
+  "DA_CrimsonRaptor18": {
+   "cost": 3,
+   "file": "champions/DA_CrimsonRaptor18.png",
+   "height": 128,
+   "name": "Mama Beak",
+   "sha256": "c3cb1a6f15321005215f6700bd6b9e0787e98e7a405c7c631bbac555ac148e9a",
+   "source_etag": "\"6a824dc9-13df5\"",
+   "source_path": "assets/characters/tft18_raptor/skins/base/images/t_18_crimsonraptor_teamplannersplash.png",
+   "width": 128
+  },
+  "DA_Draven18": {
+   "cost": 5,
+   "file": "champions/DA_Draven18.png",
+   "height": 128,
+   "name": "Draven",
+   "sha256": "1a1057356c11e132b19c7af4b744388d72bb006050594bc80656daeebfc6c78c",
+   "source_etag": "\"6a824dba-13d7e\"",
+   "source_path": "assets/characters/tft18_draven/skins/base/images/tft18_draven_splash_tile_5.png",
+   "width": 128
+  },
+  "DA_Fiddlesticks18": {
+   "cost": 3,
+   "file": "champions/DA_Fiddlesticks18.png",
+   "height": 128,
+   "name": "Fiddlesticks",
+   "sha256": "79f57544ed1ed9066a8e2173233f47d33658e25cf9d774aa8bfb05a38347dd19",
+   "source_etag": "\"6a824dc4-13ce3\"",
+   "source_path": "assets/characters/tft18_fiddlesticks/skins/base/images/tft18_fiddlesticks_splash_tile_46.png",
+   "width": 128
+  },
+  "DA_Gromp18_AP": {
+   "cost": 2,
+   "file": "champions/DA_Gromp18_AP.png",
+   "height": 128,
+   "name": "Gromp",
+   "sha256": "5359da225207de7d4f06308c884fe443481fd862e75979e908518f8451c4f024",
+   "source_etag": "\"6a824dbd-10952\"",
+   "source_path": "assets/characters/tft18_gromp/skins/base/images/t_18_gromp_teamplannersplash.png",
+   "width": 128
+  },
+  "DA_Karma18": {
+   "cost": 1,
+   "file": "champions/DA_Karma18.png",
+   "height": 128,
+   "name": "Karma",
+   "sha256": "bc987bd8f9037be0f5c2bb340c2c4be587b7176cfbc63ecdf039c4047927c04e",
+   "source_etag": "\"6a824dc7-1675b\"",
+   "source_path": "assets/characters/tft18_karma/skins/base/images/tft18_karma_splash_tile_70.png",
+   "width": 128
+  },
+  "DA_KogMaw18_AD": {
+   "cost": 3,
+   "file": "champions/DA_KogMaw18_AD.png",
+   "height": 128,
+   "name": "Kog'Maw",
+   "sha256": "ca8a95d66c56e8bf61f2bc979f6cb7921652fd88499b924912d0eae1ee2df847",
+   "source_etag": "\"6a824dbe-14d30\"",
+   "source_path": "assets/characters/tft18_kogmaw/skins/base/images/tft18_kogmaw_splash_tile_3.png",
+   "width": 128
+  },
+  "DA_Krug18": {
+   "cost": 3,
+   "file": "champions/DA_Krug18.png",
+   "height": 128,
+   "name": "Krug",
+   "sha256": "56ac5e3eac7e4d8b72545a18b6d379338eda0948dfbaa6888b2f1bb18b74af92",
+   "source_etag": "\"6a824dc6-127cc\"",
+   "source_path": "assets/characters/tft18_krug/skins/base/images/t_18_krug_teamplannersplash.png",
+   "width": 128
+  },
+  "DA_Lux18_Base": {
+   "cost": 5,
+   "file": "champions/DA_Lux18_Base.png",
+   "height": 128,
+   "name": "Lux",
+   "sha256": "2d9217393353e39a22f685c98a988426b1ef2fe3b0addf95310120c3ca82aeea",
+   "source_etag": "\"6a824dc2-15f6b\"",
+   "source_path": "assets/characters/tft18_lux/skins/base/images/tft18_lux_splash_tile_7.png",
+   "width": 128
+  },
+  "DA_Lux18_Blackthorn": {
+   "cost": 5,
+   "file": "champions/DA_Lux18_Blackthorn.png",
+   "height": 128,
+   "name": "Lux (Blackthorn)",
+   "sha256": "1885785be8982bc551332b92c0c3caf5c5ed06b8668c28a8dc6eb5a18220a685",
+   "source_etag": "\"6a824dc9-1303b\"",
+   "source_path": "assets/characters/tft18_lux/hud/splashes/t_18_lux_blackthorn_teamplanner.png",
+   "width": 128
+  },
+  "DA_Lux18_Blossom": {
+   "cost": 5,
+   "file": "champions/DA_Lux18_Blossom.png",
+   "height": 128,
+   "name": "Lux (Blossom)",
+   "sha256": "f591f67aae39d2af2f26a3edf0e314ff6792c1428e1fcf2c2f6f1252017b1b2a",
+   "source_etag": "\"6a824dc2-1296b\"",
+   "source_path": "assets/characters/tft18_lux/hud/splashes/t_18_lux_blossom_teamplanner.png",
+   "width": 128
+  },
+  "DA_Murkwolf18": {
+   "cost": 2,
+   "file": "champions/DA_Murkwolf18.png",
+   "height": 128,
+   "name": "Murkwolf",
+   "sha256": "e0ea9d7232236d50c2d5994b650a07ef709f0b90987730f95088cb7dd020cf7d",
+   "source_etag": "\"6a824dc8-125a9\"",
+   "source_path": "assets/characters/tft18_murkwolf/skins/base/images/t_18_murkwolf_teamplannersplash.png",
+   "width": 128
+  },
+  "DA_Nidalee18_AP": {
+   "cost": 4,
+   "file": "champions/DA_Nidalee18_AP.png",
+   "height": 128,
+   "name": "Nidalee",
+   "sha256": "f5eb119d759317276036e86239b2e8f138f3b0a3a283d795ca7ed71f2932a60e",
+   "source_etag": "\"6a824dc0-1389e\"",
+   "source_path": "assets/characters/tft18_nidalee/skins/base/images/tft18_nidalee_splash_tile_0.png",
+   "width": 128
+  },
+  "DA_Scuttlecrab18": {
+   "cost": 2,
+   "file": "champions/DA_Scuttlecrab18.png",
+   "height": 128,
+   "name": "Scuttlecrab",
+   "sha256": "1197d4f4c0d4b6ca9859089f847ccdd8fb257319a1ed2473616d4c2b38d68323",
+   "source_etag": "\"6a824dbb-1603f\"",
+   "source_path": "assets/characters/tft18_scuttlecrab/skins/base/images/t_18_scuttlecrab_teamplannersplash.png",
+   "width": 128
+  },
+  "DA_Sentinel18": {
+   "cost": 4,
+   "file": "champions/DA_Sentinel18.png",
+   "height": 128,
+   "name": "Sentinel",
+   "sha256": "9bc36ed5b60fceca8e0847c576fb0bcfb387bbd204d5412dc6d63d1a4d0a2d44",
+   "source_etag": "\"6a824dc4-13c17\"",
+   "source_path": "assets/characters/tft18_sentinel/skins/base/images/t_18_sentinel_teamplannersplash.png",
+   "width": 128
+  },
+  "DA_Taric18": {
+   "cost": 5,
+   "file": "champions/DA_Taric18.png",
+   "height": 128,
+   "name": "Taric",
+   "sha256": "ef225d020ac011b99ee47b6deccbd22a2178ae48c6e930340cfd256232748542",
+   "source_etag": "\"6a824dc3-15da4\"",
+   "source_path": "assets/characters/tft18_taric/skins/base/images/tft18_taric_splash_tile_1.png",
+   "width": 128
+  },
+  "DA_Vi18": {
+   "cost": 3,
+   "file": "champions/DA_Vi18.png",
+   "height": 128,
+   "name": "Vi",
+   "sha256": "70e07aa46070e233a83091b7cb8793731acc9bc953545d41cd024e49abf3feb6",
+   "source_etag": "\"6a824dc4-15b7d\"",
+   "source_path": "assets/characters/tft18_vi/skins/base/images/tft18_vi_splash_tile_39.png",
+   "width": 128
+  }
+ },
+ "items": {
+  "TFT_Item_AdaptiveHelm": {
+   "component": false,
+   "file": "items/TFT_Item_AdaptiveHelm.png",
+   "height": 64,
+   "name": "Adaptive Helm",
+   "sha256": "aedfb4627210ac87886094a87388ee32efe2a7dfb654b3e420dd1c57d4e1f6d8",
+   "source_etag": "\"6a614955-556f\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_adaptivehelm.png",
+   "width": 64
+  },
+  "TFT_Item_ArchangelsStaff": {
+   "component": false,
+   "file": "items/TFT_Item_ArchangelsStaff.png",
+   "height": 64,
+   "name": "Archangel's Staff",
+   "sha256": "20690dc1e075885fef925f48fd89032e3f37d83fe6d49b55f0b89e5a88265f8a",
+   "source_etag": "\"6a6149a6-4ba2\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_archangelsstaff.png",
+   "width": 64
+  },
+  "TFT_Item_BFSword": {
+   "component": true,
+   "file": "items/TFT_Item_BFSword.png",
+   "height": 64,
+   "name": "B.F. Sword",
+   "sha256": "c229d7a26256915892eca5515734edd6986a51578da8edb7e93d96530503c050",
+   "source_etag": "\"6a61499b-47fa\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_bfsword.png",
+   "width": 64
+  },
+  "TFT_Item_Bloodthirster": {
+   "component": false,
+   "file": "items/TFT_Item_Bloodthirster.png",
+   "height": 64,
+   "name": "Bloodthirster",
+   "sha256": "3a98531959f4e40c9294e938ff25bb5a37f433608a774c62c6efd9813385c3c8",
+   "source_etag": "\"6a61496f-50a5\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_bloodthirster.png",
+   "width": 64
+  },
+  "TFT_Item_BlueBuff": {
+   "component": false,
+   "file": "items/TFT_Item_BlueBuff.png",
+   "height": 64,
+   "name": "Blue Buff",
+   "sha256": "d1744de88aeb777262e7c901a0f645d76ad8833e1a3231763a32d37c4777b03e",
+   "source_etag": "\"6a614967-47dd\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_bluebuff.png",
+   "width": 64
+  },
+  "TFT_Item_BrambleVest": {
+   "component": false,
+   "file": "items/TFT_Item_BrambleVest.png",
+   "height": 64,
+   "name": "Bramble Vest",
+   "sha256": "2d94be6f9bb8bceea4fb13df2cee7de94638ea1835d61d10bb4c66516034ba12",
+   "source_etag": "\"6a61498a-5827\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_bramblevest.png",
+   "width": 64
+  },
+  "TFT_Item_ChainVest": {
+   "component": true,
+   "file": "items/TFT_Item_ChainVest.png",
+   "height": 64,
+   "name": "Chain Vest",
+   "sha256": "c92bbdd38c97b44e96822cfe7c9627e3e200ae18cf0225e82349e3b7f08d12ce",
+   "source_etag": "\"6a614994-4499\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_chainvest.png",
+   "width": 64
+  },
+  "TFT_Item_Crownguard": {
+   "component": false,
+   "file": "items/TFT_Item_Crownguard.png",
+   "height": 64,
+   "name": "Crownguard",
+   "sha256": "be0ef86edbee38e33dc51a6c4cfa8f0574a5b7d8e0ed29878b00f047d96c4a53",
+   "source_etag": "\"6a6149a8-4d02\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_crownguard.png",
+   "width": 64
+  },
+  "TFT_Item_Deathblade": {
+   "component": false,
+   "file": "items/TFT_Item_Deathblade.png",
+   "height": 64,
+   "name": "Deathblade",
+   "sha256": "251db99b53a49aec3b68c78f9aebb2026f988a50e2cc8aec43b468f152ff0185",
+   "source_etag": "\"6a614966-484c\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_deathblade.png",
+   "width": 64
+  },
+  "TFT_Item_DragonsClaw": {
+   "component": false,
+   "file": "items/TFT_Item_DragonsClaw.png",
+   "height": 64,
+   "name": "Dragon's Claw",
+   "sha256": "fb1144ea2e7e2d349a47da98cc4941e4928c43c2a5a6fa318974b359910b1746",
+   "source_etag": "\"6a614997-4b74\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_dragonsclaw.png",
+   "width": 64
+  },
+  "TFT_Item_ForceOfNature": {
+   "component": false,
+   "file": "items/TFT_Item_ForceOfNature.png",
+   "height": 64,
+   "name": "Tactician's Crown",
+   "sha256": "20bdf52b3d86e3e27c4212098a921be48d47968e8457d67f4efe988061a345c8",
+   "source_etag": "\"6a614958-5bf3\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_forceofnature.png",
+   "width": 64
+  },
+  "TFT_Item_FrozenHeart": {
+   "component": false,
+   "file": "items/TFT_Item_FrozenHeart.png",
+   "height": 64,
+   "name": "Protector's Vow",
+   "sha256": "dbc3433651b8970ae287f1ec5bbb2ffe0e595e8626166437db63dc7f1d9fe6ad",
+   "source_etag": "\"6a6149a7-5340\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_frozenheart.png",
+   "width": 64
+  },
+  "TFT_Item_FryingPan": {
+   "component": true,
+   "file": "items/TFT_Item_FryingPan.png",
+   "height": 64,
+   "name": "Frying Pan",
+   "sha256": "0df1c0a601d6de909262d4316be453f651fa4bcb6ba756f8dcdd2aef3f0462e8",
+   "source_etag": "\"6a614966-4763\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_fryingpan.png",
+   "width": 64
+  },
+  "TFT_Item_GargoyleStoneplate": {
+   "component": false,
+   "file": "items/TFT_Item_GargoyleStoneplate.png",
+   "height": 64,
+   "name": "Gargoyle Stoneplate",
+   "sha256": "6b3fa06afa38e1aa135cee34f4d815de953d3d1a8fb3399f3b30700e23bc9033",
+   "source_etag": "\"6a614969-4fc7\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_gargoylestoneplate.png",
+   "width": 64
+  },
+  "TFT_Item_GiantsBelt": {
+   "component": true,
+   "file": "items/TFT_Item_GiantsBelt.png",
+   "height": 64,
+   "name": "Giant's Belt",
+   "sha256": "a94f3d8364637f03fc676996d3da8f127b4c5585740b418a5e02b4aeb3ff8afe",
+   "source_etag": "\"6a61498f-4739\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_giantsbelt.png",
+   "width": 64
+  },
+  "TFT_Item_GuardianAngel": {
+   "component": false,
+   "file": "items/TFT_Item_GuardianAngel.png",
+   "height": 64,
+   "name": "Edge of Night",
+   "sha256": "6552aebe10f791a1f59411381b793f53b35c9642ad6a58424337b1704611f042",
+   "source_etag": "\"6a614978-552f\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_guardianangel.png",
+   "width": 64
+  },
+  "TFT_Item_GuinsoosRageblade": {
+   "component": false,
+   "file": "items/TFT_Item_GuinsoosRageblade.png",
+   "height": 64,
+   "name": "Guinsoo's Rageblade",
+   "sha256": "678bf9a50cb0ebf006bdaa42cc8ed46ff04356efe588fed227f35431e266dd85",
+   "source_etag": "\"6a61499d-4ce9\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_guinsoosrageblade.png",
+   "width": 64
+  },
+  "TFT_Item_HextechGunblade": {
+   "component": false,
+   "file": "items/TFT_Item_HextechGunblade.png",
+   "height": 64,
+   "name": "Hextech Gunblade",
+   "sha256": "eb2499ab66fa4ac3dde20eed7eeb6237d6bf197d9ab0a31ad2b7a8b15bf5bceb",
+   "source_etag": "\"6a61495d-5a0b\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_hextechgunblade.png",
+   "width": 64
+  },
+  "TFT_Item_InfinityEdge": {
+   "component": false,
+   "file": "items/TFT_Item_InfinityEdge.png",
+   "height": 64,
+   "name": "Infinity Edge",
+   "sha256": "1b662f63721d166d9bc6dbc9e846fc856e966606957e4d2935207d7684ff9483",
+   "source_etag": "\"6a614962-5373\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_infinityedge.png",
+   "width": 64
+  },
+  "TFT_Item_IonicSpark": {
+   "component": false,
+   "file": "items/TFT_Item_IonicSpark.png",
+   "height": 64,
+   "name": "Ionic Spark",
+   "sha256": "0ce41b9154f5057b026b1bacd6fc2179f9737854bfafe9e813aa979b4d80cf58",
+   "source_etag": "\"6a61499d-50fb\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_ionicspark.png",
+   "width": 64
+  },
+  "TFT_Item_JeweledGauntlet": {
+   "component": false,
+   "file": "items/TFT_Item_JeweledGauntlet.png",
+   "height": 64,
+   "name": "Jeweled Gauntlet",
+   "sha256": "a3c3356c6a9f7ea8bf205a3e587ec45cb34167c543b75acdba9f48d588b2c244",
+   "source_etag": "\"6a6149a1-4b6c\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_jeweledgauntlet.png",
+   "width": 64
+  },
+  "TFT_Item_LastWhisper": {
+   "component": false,
+   "file": "items/TFT_Item_LastWhisper.png",
+   "height": 64,
+   "name": "Last Whisper",
+   "sha256": "122dd7fe292f0bc1623d0b9c0d70d2b2f04f30e9d594170a6d2ad1bf1a598457",
+   "source_etag": "\"6a614956-44e0\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_lastwhisper.png",
+   "width": 64
+  },
+  "TFT_Item_Leviathan": {
+   "component": false,
+   "file": "items/TFT_Item_Leviathan.png",
+   "height": 64,
+   "name": "Nashor's Tooth",
+   "sha256": "f8b7a309a066939b7348b3d4e3aaedefa5db4834e0d855c20c38f598e58d4915",
+   "source_etag": "\"6a61499e-54b5\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_leviathan.png",
+   "width": 64
+  },
+  "TFT_Item_MadredsBloodrazor": {
+   "component": false,
+   "file": "items/TFT_Item_MadredsBloodrazor.png",
+   "height": 64,
+   "name": "Giant Slayer",
+   "sha256": "0e31bb9b6c20a971ab02bf77b94288740f099a3d4851ac000e47cc4522527418",
+   "source_etag": "\"6a61496e-50b3\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_madredsbloodrazor.png",
+   "width": 64
+  },
+  "TFT_Item_Morellonomicon": {
+   "component": false,
+   "file": "items/TFT_Item_Morellonomicon.png",
+   "height": 64,
+   "name": "Morellonomicon",
+   "sha256": "46e9b8fa250ac3896a9c2e1e6d5772d4974446d3f78e5a7b90ea49eb06cd7df3",
+   "source_etag": "\"6a614971-5c5b\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_morellonomicon.png",
+   "width": 64
+  },
+  "TFT_Item_NeedlesslyLargeRod": {
+   "component": true,
+   "file": "items/TFT_Item_NeedlesslyLargeRod.png",
+   "height": 64,
+   "name": "Needlessly Large Rod",
+   "sha256": "2bec33ad2b7b60448529951d0ba786d79614faa14789aab3d224cf7aa30f67f3",
+   "source_etag": "\"6a61499d-56a6\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_needlesslylargerod.png",
+   "width": 64
+  },
+  "TFT_Item_NegatronCloak": {
+   "component": true,
+   "file": "items/TFT_Item_NegatronCloak.png",
+   "height": 64,
+   "name": "Negatron Cloak",
+   "sha256": "888dd49400252157e6cadfa6d726153be094cd8cedc0cc2eefc8503d94ee78c6",
+   "source_etag": "\"6a614994-5343\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_negatroncloak.png",
+   "width": 64
+  },
+  "TFT_Item_NightHarvester": {
+   "component": false,
+   "file": "items/TFT_Item_NightHarvester.png",
+   "height": 64,
+   "name": "Steadfast Heart",
+   "sha256": "826b3005c4b6fd39a4c9d91d661e4b596b512aa669c4ded73c5e3e654edcb4ac",
+   "source_etag": "\"6a61499d-63e1\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_nightharvester.png",
+   "width": 64
+  },
+  "TFT_Item_PowerGauntlet": {
+   "component": false,
+   "file": "items/TFT_Item_PowerGauntlet.png",
+   "height": 64,
+   "name": "Striker's Flail",
+   "sha256": "36bbec2affa62fb42c6aa58282977754afb81ea5b2e65fb56dc0e9f4293fed1f",
+   "source_etag": "\"6a614988-5db0\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_powergauntlet.png",
+   "width": 64
+  },
+  "TFT_Item_Quicksilver": {
+   "component": false,
+   "file": "items/TFT_Item_Quicksilver.png",
+   "height": 64,
+   "name": "Quicksilver",
+   "sha256": "df396c69565be1d2363d5d495ca00cf3a48000f5fc189d835c27526d9c00db57",
+   "source_etag": "\"6a61495c-4d8d\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_quicksilver.png",
+   "width": 64
+  },
+  "TFT_Item_RabadonsDeathcap": {
+   "component": false,
+   "file": "items/TFT_Item_RabadonsDeathcap.png",
+   "height": 64,
+   "name": "Rabadon's Deathcap",
+   "sha256": "af20d8d2cb1fce7a495ec760f150b0eda381beb8f4803518f6f267542a10c400",
+   "source_etag": "\"6a61498e-568e\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_rabadonsdeathcap.png",
+   "width": 64
+  },
+  "TFT_Item_RapidFireCannon": {
+   "component": false,
+   "file": "items/TFT_Item_RapidFireCannon.png",
+   "height": 64,
+   "name": "Red Buff",
+   "sha256": "6e04ab5f1597a9546286c02ee520ee584f16d4a16b915f066298f97e82b84e6c",
+   "source_etag": "\"6a614960-4322\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_rapidfirecannon.png",
+   "width": 64
+  },
+  "TFT_Item_RecurveBow": {
+   "component": true,
+   "file": "items/TFT_Item_RecurveBow.png",
+   "height": 64,
+   "name": "Recurve Bow",
+   "sha256": "ab4134917a3c93b5af139a52c4e5d1bae226292f1ce7ea7336eb28349ad6af8f",
+   "source_etag": "\"6a614987-4256\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_recurvebow.png",
+   "width": 64
+  },
+  "TFT_Item_RedBuff": {
+   "component": false,
+   "file": "items/TFT_Item_RedBuff.png",
+   "height": 64,
+   "name": "Sunfire Cape",
+   "sha256": "12773e7dbe2f264fe798dd054c257111ff4fdfecdf3fe7753f7a4523347cd1a9",
+   "source_etag": "\"6a61497f-59f9\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_redbuff.png",
+   "width": 64
+  },
+  "TFT_Item_Redemption": {
+   "component": false,
+   "file": "items/TFT_Item_Redemption.png",
+   "height": 64,
+   "name": "Spirit Visage",
+   "sha256": "528b4ef9fd5326faf96dd62a487249c86c075fc5efa9615800dd4052d4232f6e",
+   "source_etag": "\"69fea9f2-56ed\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_spiritvisagerr.png",
+   "width": 64
+  },
+  "TFT_Item_RunaansHurricane": {
+   "component": false,
+   "file": "items/TFT_Item_RunaansHurricane.png",
+   "height": 64,
+   "name": "Kraken's Fury",
+   "sha256": "0d8a77c36886a820a7868758740622e892e675fb9b4ca7e8665cae52d8e20221",
+   "source_etag": "\"69fea9e1-1c64\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_krakenslayer.png",
+   "width": 64
+  },
+  "TFT_Item_SparringGloves": {
+   "component": true,
+   "file": "items/TFT_Item_SparringGloves.png",
+   "height": 64,
+   "name": "Sparring Gloves",
+   "sha256": "964894bf8611323f2a9e575dbd4457059f48a0feca22736933f9a6c18f9f1f5f",
+   "source_etag": "\"6a61495b-40a3\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_sparringgloves.png",
+   "width": 64
+  },
+  "TFT_Item_Spatula": {
+   "component": true,
+   "file": "items/TFT_Item_Spatula.png",
+   "height": 64,
+   "name": "Spatula",
+   "sha256": "78999db07d7d0f7abaffc4c6a00527a7d40289c8f718866ba53298914afacb47",
+   "source_etag": "\"6a61498b-3ce2\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_spatula.png",
+   "width": 64
+  },
+  "TFT_Item_SpearOfShojin": {
+   "component": false,
+   "file": "items/TFT_Item_SpearOfShojin.png",
+   "height": 64,
+   "name": "Spear of Shojin",
+   "sha256": "aba46e3590ccda0a21dadbe89668147fee087e6c4053fbcec8933007ad88aca6",
+   "source_etag": "\"6a61496e-4c82\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_spearofshojin.png",
+   "width": 64
+  },
+  "TFT_Item_SpectralGauntlet": {
+   "component": false,
+   "file": "items/TFT_Item_SpectralGauntlet.png",
+   "height": 64,
+   "name": "Evenshroud",
+   "sha256": "08a78660938c387d9564a9fe326c907b0bd7a597b7fc20864d5c7a024e770442",
+   "source_etag": "\"6a6149a4-4d1b\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_spectralgauntlet.png",
+   "width": 64
+  },
+  "TFT_Item_StatikkShiv": {
+   "component": false,
+   "file": "items/TFT_Item_StatikkShiv.png",
+   "height": 64,
+   "name": "Void Staff",
+   "sha256": "9cc3443c83bb4120eecb443848167df7e8d949f3a4e8a69eb967f334b8756abc",
+   "source_etag": "\"69fea9db-4c71\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_voidstaff.png",
+   "width": 64
+  },
+  "TFT_Item_SteraksGage": {
+   "component": false,
+   "file": "items/TFT_Item_SteraksGage.png",
+   "height": 64,
+   "name": "Sterak's Gage",
+   "sha256": "24339ae12896a77433bb347c4b400d6cd912a3a226a03df99844cea53de075d1",
+   "source_etag": "\"6a6149a4-5e22\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_steraksgage.png",
+   "width": 64
+  },
+  "TFT_Item_TacticiansRing": {
+   "component": false,
+   "file": "items/TFT_Item_TacticiansRing.png",
+   "height": 64,
+   "name": "Tactician's Cape",
+   "sha256": "b04534c997faf4807c00097d4ffa06f21d275f562f70c91adc71295b42ea1374",
+   "source_etag": "\"6a6149a6-5530\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_tacticiansring.png",
+   "width": 64
+  },
+  "TFT_Item_TacticiansScepter": {
+   "component": false,
+   "file": "items/TFT_Item_TacticiansScepter.png",
+   "height": 64,
+   "name": "Tactician's Shield",
+   "sha256": "166b12a409bf13597a8e230f0b87cf2ea6881398658abc74816c7e75f3fecda3",
+   "source_etag": "\"6a61499f-56d8\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_tacticiansscepter.png",
+   "width": 64
+  },
+  "TFT_Item_TearOfTheGoddess": {
+   "component": true,
+   "file": "items/TFT_Item_TearOfTheGoddess.png",
+   "height": 64,
+   "name": "Tear of the Goddess",
+   "sha256": "8684585d9a13d5a4d9375be77854d4bb06a0a7790ed9d0e7a594794d1b3077e0",
+   "source_etag": "\"6a61499a-3dd3\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_tearofthegoddess.png",
+   "width": 64
+  },
+  "TFT_Item_ThiefsGloves": {
+   "component": false,
+   "file": "items/TFT_Item_ThiefsGloves.png",
+   "height": 64,
+   "name": "Thief's Gloves",
+   "sha256": "b51b1397f54c4deb9d4e05f6b9591cacee3cd7a9f927655725784dbf8a68d6c0",
+   "source_etag": "\"6a614979-4822\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_thiefsgloves.png",
+   "width": 64
+  },
+  "TFT_Item_TitansResolve": {
+   "component": false,
+   "file": "items/TFT_Item_TitansResolve.png",
+   "height": 64,
+   "name": "Titan's Resolve",
+   "sha256": "59e03050f838c7931c3093b80fc50137e49e2a3ae3f8ba686c08163cbabefc18",
+   "source_etag": "\"6a6149a9-5b58\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_titansresolve.png",
+   "width": 64
+  },
+  "TFT_Item_UnstableConcoction": {
+   "component": false,
+   "file": "items/TFT_Item_UnstableConcoction.png",
+   "height": 64,
+   "name": "Hand Of Justice",
+   "sha256": "56797095cc583df1ea7eed306c581b0598c4eca96ed406b84dada0ac5a8631e7",
+   "source_etag": "\"6a6149a0-4c05\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_unstableconcoction.png",
+   "width": 64
+  },
+  "TFT_Item_WarmogsArmor": {
+   "component": false,
+   "file": "items/TFT_Item_WarmogsArmor.png",
+   "height": 64,
+   "name": "Warmog's Armor",
+   "sha256": "b0213fbda539fd26012b46749c2e398de33252f0cbefcbdeecea129fa8f70b43",
+   "source_etag": "\"6a61498b-62d0\"",
+   "source_path": "assets/maps/tft/icons/items/hexcore/tft_item_warmogsarmor.png",
+   "width": 64
+  }
+ },
+ "manifest_version": 1,
+ "max_size": {
+  "champions": 128,
+  "items": 64,
+  "traits": 64
+ },
+ "missing": {},
+ "set_number": 18,
+ "source": "CommunityDragon latest cdragon/tft/en_us.json (via tftlab refresh-game-art)",
+ "traits": {
+  "DA_18_Adaptor": {
+   "file": "traits/DA_18_Adaptor.png",
+   "height": 32,
+   "name": "Adaptor",
+   "sha256": "6be4a4ae08f3e7620902e884e1b499e4699d222262abe3ab69191b550e4bcd16",
+   "source_etag": "\"6a824dbc-1c4\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_adaptor.png",
+   "width": 32
+  },
+  "DA_18_ApexPredator": {
+   "file": "traits/DA_18_ApexPredator.png",
+   "height": 32,
+   "name": "Apex Predator",
+   "sha256": "4724a2cd7990c270ec854f5877f5d2789c92d64af50af6228d571d72e4197d9b",
+   "source_etag": "\"6a824dbe-236\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_apexpredator.png",
+   "width": 32
+  },
+  "DA_18_Battlemage": {
+   "file": "traits/DA_18_Battlemage.png",
+   "height": 32,
+   "name": "Monolith",
+   "sha256": "61f5d05000a2f2f89c1b5788f88a2bcbc39bc39b7e81189a238d0c6c796826f5",
+   "source_etag": "\"6a824dcb-1ee\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_monolith.png",
+   "width": 32
+  },
+  "DA_18_Blackthorn": {
+   "file": "traits/DA_18_Blackthorn.png",
+   "height": 32,
+   "name": "Blackthorn",
+   "sha256": "4ef477d8d3c12543801a529400d41cc546001dd44d84a9718142aec757855169",
+   "source_etag": "\"6a824dc0-20f\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_oldgod.png",
+   "width": 32
+  },
+  "DA_18_Blossom": {
+   "file": "traits/DA_18_Blossom.png",
+   "height": 32,
+   "name": "Blossom",
+   "sha256": "e5306b8522d6f3ebbfac9d8e0ec58396ebf7d39f821867bd42b73359743e1dce",
+   "source_etag": "\"6a824dc2-1e0\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_blossom.png",
+   "width": 32
+  },
+  "DA_18_Brawler": {
+   "file": "traits/DA_18_Brawler.png",
+   "height": 32,
+   "name": "Brawler",
+   "sha256": "5159f5369624b306c4891fd371875179fa99c856a720049fbdb06aabeb756f2f",
+   "source_etag": "\"6a824dca-202\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_brawler.png",
+   "width": 32
+  },
+  "DA_18_Caustic": {
+   "file": "traits/DA_18_Caustic.png",
+   "height": 32,
+   "name": "Caustic",
+   "sha256": "34205ed671173a0c2e1627fc43a8ff0fbc485b0145f64b184dbe0c33c71a84c8",
+   "source_etag": "\"6a824dcb-1bf\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_caustic.png",
+   "width": 32
+  },
+  "DA_18_Coven": {
+   "file": "traits/DA_18_Coven.png",
+   "height": 32,
+   "name": "Coven",
+   "sha256": "0e39cb9769751ea806006f40d3adb77cff49dcf36eb7d66fef37b579b7016480",
+   "source_etag": "\"6a824dc1-237\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_coven.png",
+   "width": 32
+  },
+  "DA_18_Defender": {
+   "file": "traits/DA_18_Defender.png",
+   "height": 32,
+   "name": "Defender",
+   "sha256": "18beffffd34a75952ebd7683dea52d72c1a0d88b61b806e53991ca61a2376889",
+   "source_etag": "\"6a824dbf-18c\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_defender.png",
+   "width": 32
+  },
+  "DA_18_Eclipse": {
+   "file": "traits/DA_18_Eclipse.png",
+   "height": 32,
+   "name": "Eclipse",
+   "sha256": "52faf043a3f8d7486da5c33f6a940b085e87e959f6e6b88063b4e14fdd4d34ab",
+   "source_etag": "\"6a824dc9-1f6\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_eclipse.png",
+   "width": 32
+  },
+  "DA_18_Elderwood": {
+   "file": "traits/DA_18_Elderwood.png",
+   "height": 32,
+   "name": "Elderwood",
+   "sha256": "02c2c8e85905e6062310c3bd7b98496e1ac0e3e9f74199248401024813cc97ec",
+   "source_etag": "\"6a824dca-1e6\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_elderwood.png",
+   "width": 32
+  },
+  "DA_18_Executioner": {
+   "file": "traits/DA_18_Executioner.png",
+   "height": 32,
+   "name": "Executioner",
+   "sha256": "30552c09ffe6f36e8ea59bd78f78971ce9c98e7d7930509634413ff64dad59da",
+   "source_etag": "\"6a824dc2-1ed\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_executioner.png",
+   "width": 32
+  },
+  "DA_18_Fae": {
+   "file": "traits/DA_18_Fae.png",
+   "height": 32,
+   "name": "Fae",
+   "sha256": "69fa3fc93134fad4de3973fee76b3cb9c918a9786129cbad5c0e8c32c0862e19",
+   "source_etag": "\"6a824dbb-22e\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_fae.png",
+   "width": 32
+  },
+  "DA_18_Greenfather": {
+   "file": "traits/DA_18_Greenfather.png",
+   "height": 32,
+   "name": "Greenfather",
+   "sha256": "de0cd26f9782f5f0a7a2a07d7d3c0c55787e99271e1aa311b59b4e408ca6e118",
+   "source_etag": "\"6a824dc4-21b\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_greenfather.png",
+   "width": 32
+  },
+  "DA_18_Hunter": {
+   "file": "traits/DA_18_Hunter.png",
+   "height": 32,
+   "name": "Hunter",
+   "sha256": "31dd0473f5cb597bda898f23d46a0776656e6c825ceffde859521a687bec0e1d",
+   "source_etag": "\"6a824dc6-1fa\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_hunter.png",
+   "width": 32
+  },
+  "DA_18_Inferno": {
+   "file": "traits/DA_18_Inferno.png",
+   "height": 32,
+   "name": "Inferno",
+   "sha256": "13f239e11ca5f80f85fadf5790dfc76bbee0034bb3b0810418f5ad6371749fe0",
+   "source_etag": "\"6a824dc9-1e2\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_inferno.png",
+   "width": 32
+  },
+  "DA_18_Invoker": {
+   "file": "traits/DA_18_Invoker.png",
+   "height": 32,
+   "name": "Invoker",
+   "sha256": "5b7741f0edce9607721add04dddb6aed4c461302f313cd199a8ec0c03b1d7f09",
+   "source_etag": "\"6a824dc9-1de\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_invoker.png",
+   "width": 32
+  },
+  "DA_18_Lunar": {
+   "file": "traits/DA_18_Lunar.png",
+   "height": 32,
+   "name": "Lunar",
+   "sha256": "9ee1f9f2c52905c3d67e0847de55597030b85ee5c9474de7ea61882d00438fa9",
+   "source_etag": "\"6a824dc3-21a\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_lunar.png",
+   "width": 32
+  },
+  "DA_18_LuxUniqueTrait": {
+   "file": "traits/DA_18_LuxUniqueTrait.png",
+   "height": 32,
+   "name": "Avatar",
+   "sha256": "b2663e89df30281e78a5faa7f771a5d545b4507932fc6d1a9dde08979bd62571",
+   "source_etag": "\"6a824dc6-1b9\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_avatar.png",
+   "width": 32
+  },
+  "DA_18_Maokai_UniqueTrait": {
+   "file": "traits/DA_18_Maokai_UniqueTrait.png",
+   "height": 32,
+   "name": "Old Growth",
+   "sha256": "cb3744a4309b91b9e62dd158a1d3088306c968e69ea469e8ff58f4db3be4ab6d",
+   "source_etag": "\"6a824dc4-204\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_oldgrowth.png",
+   "width": 32
+  },
+  "DA_18_Rapidfire": {
+   "file": "traits/DA_18_Rapidfire.png",
+   "height": 32,
+   "name": "Rapidfire",
+   "sha256": "b1ca0a9be8f0a952fc1516935dd99208de2f51d80b6649fd2e35bbd41e2f62fa",
+   "source_etag": "\"6a824dc7-23b\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_rapidfire.png",
+   "width": 32
+  },
+  "DA_18_Rival": {
+   "file": "traits/DA_18_Rival.png",
+   "height": 32,
+   "name": "Rival",
+   "sha256": "f9688b4073a0085d2cd44e8b1418bedd21ae08fecf55bce648279f5604512132",
+   "source_etag": "\"6a824dbd-1e6\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_rival.png",
+   "width": 32
+  },
+  "DA_18_Slayer": {
+   "file": "traits/DA_18_Slayer.png",
+   "height": 32,
+   "name": "Ravager",
+   "sha256": "81c28591ed38e168feee19f30c11c3371bbfb362694bd39a6d72a3387d5a37e6",
+   "source_etag": "\"6a824dbb-246\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_ravager.png",
+   "width": 32
+  },
+  "DA_18_Solar": {
+   "file": "traits/DA_18_Solar.png",
+   "height": 32,
+   "name": "Solar",
+   "sha256": "9854e80f3844b3e18e347bb4d739f40376527f5a7ead9100d72b7b7771d0e231",
+   "source_etag": "\"6a824dbf-278\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_solar.png",
+   "width": 32
+  },
+  "DA_18_Spellweaver": {
+   "file": "traits/DA_18_Spellweaver.png",
+   "height": 32,
+   "name": "Spellweaver",
+   "sha256": "f8ef5d6232bf3c61445bc762c4e56bcba81fd9eef352d0f7d4497c81d2ed2c9f",
+   "source_etag": "\"6a824dbf-199\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_spellweaver.png",
+   "width": 32
+  },
+  "DA_18_Sprykin": {
+   "file": "traits/DA_18_Sprykin.png",
+   "height": 32,
+   "name": "Sprykin",
+   "sha256": "6c5c9011f9d3a0ed39f12adf99eee0f9544713c2368bb09a558adc376df525f8",
+   "source_etag": "\"6a824dc6-1f5\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_sprykin.png",
+   "width": 32
+  },
+  "DA_18_Summoner": {
+   "file": "traits/DA_18_Summoner.png",
+   "height": 32,
+   "name": "Summoner",
+   "sha256": "393eea9b88cefefd8ac2a0617570282daa53ab09f65410f0a95027f273d6179d",
+   "source_etag": "\"6a824dbd-1f3\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_summoner.png",
+   "width": 32
+  },
+  "DA_18_Vanguard": {
+   "file": "traits/DA_18_Vanguard.png",
+   "height": 32,
+   "name": "Vanguard",
+   "sha256": "348ef5a0f9aa7cac8b1b2f2d35584e83a1416685550eb200ff56f7d54953fc9f",
+   "source_etag": "\"6a824dca-1ef\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_vanguard.png",
+   "width": 32
+  },
+  "DA_18_ZyraUniqueTrait": {
+   "file": "traits/DA_18_ZyraUniqueTrait.png",
+   "height": 32,
+   "name": "Thornmaiden",
+   "sha256": "29277288ca0d42ded9005e6fa34cf57a1c5d5861c79c9b0e70954f38f73b99ee",
+   "source_etag": "\"6a824dba-239\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_zyraorigin.png",
+   "width": 32
+  },
+  "DA_AluneUniqueTrait18": {
+   "file": "traits/DA_AluneUniqueTrait18.png",
+   "height": 32,
+   "name": "Attuned",
+   "sha256": "15df0268dd0492ad73a2ce64ee4552f60dad101fc3838f11db1d489ea67d7f3f",
+   "source_etag": "\"6a824dbe-1d8\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_attuned.png",
+   "width": 32
+  },
+  "DA_DravenUniqueTrait18": {
+   "file": "traits/DA_DravenUniqueTrait18.png",
+   "height": 32,
+   "name": "Bounty Seeker",
+   "sha256": "d8977ddbc91b255ce02918deea71b7afe7166004dab9eaf20c99ee4fafebf5d9",
+   "source_etag": "\"6a824dc8-1bd\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_bountyseeker.png",
+   "width": 32
+  },
+  "DA_Emerald18": {
+   "file": "traits/DA_Emerald18.png",
+   "height": 32,
+   "name": "Emerald Aspect",
+   "sha256": "89c3e715c96e22bdd2f71f9f41ac79808f07acb38bc9eeff21b50491039c44ab",
+   "source_etag": "\"6a824dbb-1f5\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_emeraldaspect.png",
+   "width": 32
+  },
+  "DA_FloraFatalis18": {
+   "file": "traits/DA_FloraFatalis18.png",
+   "height": 32,
+   "name": "Flora Fatalis",
+   "sha256": "00beb17450e120aabaa36edae82a9fbb30561bc1afa0fe8c745e1450d55a7d77",
+   "source_etag": "\"6a824dbd-1f5\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_florafatalis.png",
+   "width": 32
+  },
+  "DA_Juggernaut18": {
+   "file": "traits/DA_Juggernaut18.png",
+   "height": 32,
+   "name": "Juggernaut",
+   "sha256": "be15fbb6b2b7671875162f355aab532e92e7a52a210719d67ba7980315db4710",
+   "source_etag": "\"6a824dbf-19a\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_juggernaut.png",
+   "width": 32
+  },
+  "DA_Primal18": {
+   "file": "traits/DA_Primal18.png",
+   "height": 32,
+   "name": "Primal",
+   "sha256": "fe28b93c1d1bd57b50fb483b08298793a70d16feb91a803fa84ee44b03429969",
+   "source_etag": "\"6a824dc3-213\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_primal.png",
+   "width": 32
+  },
+  "DA_Riftbeast18": {
+   "file": "traits/DA_Riftbeast18.png",
+   "height": 32,
+   "name": "Riftbeast",
+   "sha256": "913e2291654bc5c3e38ae02af5086b31084118d12a3fa5cca5ee0194bba19dac",
+   "source_etag": "\"6a824dc2-215\"",
+   "source_path": "assets/ux/traiticons/trait_icon_18_riftbeast.png",
+   "width": 32
+  }
+ }
+}

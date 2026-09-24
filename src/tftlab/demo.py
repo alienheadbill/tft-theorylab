@@ -42,7 +42,7 @@ def generate_demo_matches(count: int = 120, seed: int = 7) -> list[dict[str, Any
             hit = committed and rng.random() < (0.58 if cost <= 2 else 0.45)
             placement = _placement(rng, top4_prob if committed else 0.47)
             carry_items = (
-                ["TFT_Item_BlueBuff", "TFT_Item_JeweledGauntlet", "TFT_Item_Deathcap"]
+                ["TFT_Item_BlueBuff", "TFT_Item_JeweledGauntlet", "TFT_Item_RabadonsDeathcap"]
                 if committed
                 else ["TFT_Item_TearOfTheGoddess"]
             )

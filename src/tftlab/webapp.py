@@ -23,6 +23,7 @@ from .analytics import (
 )
 from .demo import generate_demo_matches
 from .experiments import ExperimentNotFound, get_experiment, list_experiments, seed_demo_experiments
+from .game_art import enrich_candidate, experiment_art, field_note_art
 from .storage import Database
 from .scout import comp_fingerprint
 from .sources import scout_checklist
@@ -204,6 +205,19 @@ def carry_item_sets(db: Database, character_id: str, balance_window: str) -> lis
     )
 
 
+def _experiment_with_art(entry, *, include_field_notes: bool = False) -> dict[str, Any]:
+    """An experiment's API body plus local game-art URLs (additive keys;
+    every URL is under /static/game/ or None)."""
+    body = entry.to_api(include_field_notes=include_field_notes)
+    art = experiment_art(entry)
+    body["art"] = art
+    if body["carry"] is not None:
+        body["carry"]["art_url"] = art["carry"]
+    for note in body.get("field_notes") or []:
+        note["art"] = field_note_art(note)
+    return body
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="TFT Theory Lab", version="0.2.0")
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -247,7 +261,7 @@ def create_app() -> FastAPI:
         db, demo = _resolve_database()
         with db:
             entries = list_experiments(db, evidence_status=status, lifecycle=lifecycle, carry=carry, tag=tag)
-        return {"demo": demo, "count": len(entries), "experiments": [e.to_api() for e in entries]}
+        return {"demo": demo, "count": len(entries), "experiments": [_experiment_with_art(e) for e in entries]}
 
     @app.get("/api/experiments/{key}")
     def experiment_detail(key: str) -> dict[str, object]:
@@ -257,7 +271,7 @@ def create_app() -> FastAPI:
                 entry = get_experiment(db, key)
             except ExperimentNotFound:
                 raise HTTPException(status_code=404, detail="Experiment not found") from None
-        body = entry.to_api(include_field_notes=True)
+        body = _experiment_with_art(entry, include_field_notes=True)
         # Read-only extras for the page: the normalized fingerprint and which
         # sources the research log actually has notes from.
         body["fingerprint"] = comp_fingerprint(entry)
@@ -482,7 +496,7 @@ def create_app() -> FastAPI:
             "demo": demo,
             "backend": db.dialect,
             "balance_window": resolved_window,
-            "candidates": [asdict(c) for c in candidates],
+            "candidates": [enrich_candidate(asdict(c)) for c in candidates],
         }
 
     @app.get("/api/discovery/{character_id}")
@@ -505,7 +519,7 @@ def create_app() -> FastAPI:
             "demo": demo,
             "backend": db.dialect,
             "balance_window": resolved_window,
-            "candidate": asdict(candidate),
+            "candidate": enrich_candidate(asdict(candidate)),
         }
 
     return app

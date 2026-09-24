@@ -35,22 +35,34 @@ function stamp(status) {
 const PAPERCLIP =
   '<svg class="paperclip" viewBox="0 0 24 60" aria-hidden="true" focusable="false"><path d="M8 20 V 46 C 8 54, 20 54, 20 46 V 12 C 20 3, 5 3, 5 12 V 42 C 5 46, 13 46, 13 42 V 20"/></svg>';
 
-const carryPortrait = (e, size = '') =>
-  `<figure class="portrait portrait-neutral ${size}" aria-hidden="true"><span class="portrait-fallback">${esc(
-    initials(e.carry?.name || e.title)
-  )}</span></figure>`;
+// Local art for the entry, index-aligned with its comp lists (see the API's
+// `art` key); anything missing just means text only.
+const artOf = (e, key, i) => (i == null ? e.art?.[key] : e.art?.[key]?.[i]) ?? null;
 
-const unitLabel = u =>
-  `${esc(u.name)}${u.star ? ` <span class="star">${u.star}★</span>` : ''}${u.note ? ` <span class="aside">(${esc(u.note)})</span>` : ''}`;
+const carryPortrait = (e, size = '') => {
+  const url = e.carry?.art_url;
+  return `<figure class="portrait portrait-neutral ${size}${artUrl(url) ? ' has-art' : ''}" aria-hidden="true"><span class="portrait-fallback">${esc(
+    initials(e.carry?.name || e.title)
+  )}</span>${artImg(url, size ? 48 : 80)}</figure>`;
+};
+
+const unitLabel = (u, url) =>
+  `${artChip(url, 'chip-unit')}${esc(u.name)}${u.star ? ` <span class="star">${u.star}★</span>` : ''}${u.note ? ` <span class="aside">(${esc(u.note)})</span>` : ''}`;
+const unitLabels = (e, key) => e.comp[key].map((u, i) => unitLabel(u, artOf(e, key, i)));
 
 // Hand-circled breakpoint number; shape alternates by position, never randomly.
-const traitLabel = (t, i) =>
-  `${t.breakpoint ? `<span class="bp bp-${i % 3}">${t.breakpoint}</span> ` : ''}${esc(t.name)}${t.note ? ` <span class="aside">(${esc(t.note)})</span>` : ''}`;
+const traitLabel = (t, i, url) =>
+  `${t.breakpoint ? `<span class="bp bp-${i % 3}">${t.breakpoint}</span> ` : ''}${artChip(url, 'chip-trait')}${esc(t.name)}${t.note ? ` <span class="aside">(${esc(t.note)})</span>` : ''}`;
+const traitLabels = e => e.comp.target_traits.map((t, i) => traitLabel(t, i, artOf(e, 'target_traits', i)));
 
-function itemsLine(comp) {
+const itemList = (names, urls = []) =>
+  names.map((name, i) => `<span class="item-ref">${artChip(urls[i], 'chip-item')}${esc(name)}</span>`).join(', ');
+
+function itemsLine(e) {
+  const comp = e.comp;
   const parts = [];
-  if (comp.carry_items.length) parts.push(esc(comp.carry_items.join(', ')));
-  if (comp.tank_items.length) parts.push(`<span class="aside">tank:</span> ${esc(comp.tank_items.join(', '))}`);
+  if (comp.carry_items.length) parts.push(itemList(comp.carry_items, e.art?.carry_items));
+  if (comp.tank_items.length) parts.push(`<span class="aside">tank:</span> ${itemList(comp.tank_items, e.art?.tank_items)}`);
   return parts.join(' · ');
 }
 
@@ -67,9 +79,9 @@ function rollLine(comp) {
 function sheetHtml(e, i) {
   const c = e.comp;
   const rows = [
-    ['core', c.core_units.map(unitLabel).join(', ')],
-    ['trait target', c.target_traits.map(traitLabel).join(', ')],
-    ['items', itemsLine(c)],
+    ['core', unitLabels(e, 'core_units').join(', ')],
+    ['trait target', traitLabels(e).join(', ')],
+    ['items', itemsLine(e)],
     ['roll', rollLine(c)],
   ].filter(([, v]) => v);
   const sketchy = !rows.length;
@@ -157,14 +169,16 @@ function sectionRows(sections) {
 
 const bulletList = items => `<ul class="scrawl-list">${items.map(x => `<li>${x}</li>`).join('')}</ul>`;
 
-function itemsBlock(c) {
+function itemsBlock(e) {
+  const c = e.comp;
   const parts = [];
-  if (c.carry_items.length) parts.push(`<p><span class="aside">carry:</span> ${esc(c.carry_items.join(', '))}</p>`);
-  if (c.tank_items.length) parts.push(`<p><span class="aside">tank:</span> ${esc(c.tank_items.join(', '))}</p>`);
+  if (c.carry_items.length) parts.push(`<p><span class="aside">carry:</span> ${itemList(c.carry_items, e.art?.carry_items)}</p>`);
+  if (c.tank_items.length) parts.push(`<p><span class="aside">tank:</span> ${itemList(c.tank_items, e.art?.tank_items)}</p>`);
   if (c.secondary_carry) {
     const s = c.secondary_carry;
+    const who = s.unit ? ` (${artChip(artOf(e, 'secondary_carry'), 'chip-unit')}${esc(s.unit)})` : '';
     parts.push(
-      `<p><span class="aside">secondary${s.unit ? ` (${esc(s.unit)})` : ''}:</span> ${esc((s.items || []).join(', ')) || '—'}</p>`
+      `<p><span class="aside">secondary${who}:</span> ${itemList(s.items || [], e.art?.secondary_items) || '—'}</p>`
     );
   }
   return parts.join('');
@@ -191,13 +205,40 @@ const researchStamp = n =>
   n.research_label ? `<span class="stamp stamp-research">${esc(n.research_label_text || n.research_label)}</span>` : '';
 
 // The "our data" note, laid out as a small stats slip clipped into the log.
-function riotSlip(d) {
+// `art` is the note's local art (index-aligned with the evidence lists).
+function riotSlip(d, art) {
   if (!d || d.status !== 'ok') return '';
+  const a = art || {};
   const extras = [
-    ...(d.core_units || []).map(u => `with ${esc(u.name)}: ${u.games} of ${d.commitment_games} games`),
-    ...(d.trait_targets || []).map(t => `${t.breakpoint ? `${t.breakpoint} ` : ''}${esc(t.name)} active: ${t.games} of ${d.commitment_games} games`),
+    ...(d.core_units || []).map(
+      (u, i) => `with ${artChip(a.core_units?.[i], 'chip-unit')}${esc(u.name)}: ${u.games} of ${d.commitment_games} games`
+    ),
+    ...(d.trait_targets || []).map(
+      (t, i) =>
+        `${t.breakpoint ? `${t.breakpoint} ` : ''}${artChip(a.trait_targets?.[i], 'chip-trait')}${esc(t.name)} active: ${t.games} of ${d.commitment_games} games`
+    ),
   ];
-  const best = d.best_partners && d.best_partners.length ? `strongest partner: ${esc(readable(d.best_partners[0].label))} (${d.best_partners[0].games} g)` : '';
+  const partner = d.best_partners?.[0];
+  const pkg = d.best_item_packages?.[0];
+  const pkgRefs = a.best_item_packages?.[0] || [];
+  const trait = d.best_trait_breakpoints?.[0];
+  const traitArt = a.best_trait_breakpoints?.[0] || {};
+  const tier = trait ? (String(trait.label).match(/\((\d+)\)$/) || [])[1] : null;
+  const best = [
+    partner ? `strongest partner: ${artChip(a.best_partners?.[0], 'chip-unit')}${esc(readable(partner.label))} (${partner.games} g)` : '',
+    pkg
+      ? `best items: ${
+          pkgRefs.length
+            ? pkgRefs.map(r => `<span class="item-ref">${artChip(r.art_url, 'chip-item')}${esc(r.name || readable(r.id))}</span>`).join(' + ')
+            : esc(readable(pkg.label))
+        } (${pkg.games} g)`
+      : '',
+    trait
+      ? `best trait: ${artChip(traitArt.art_url, 'chip-trait')}${
+          traitArt.trait_name && tier ? `${esc(traitArt.trait_name)} (${tier})` : esc(readable(trait.label))
+        } (${trait.games} g)`
+      : '',
+  ].filter(Boolean).join(' · ');
   return `
     <div class="stat-slip">
       <p class="slip-head">window ${esc(d.balance_window)} · n = <b>${d.commitment_games}</b> committed games
@@ -234,7 +275,7 @@ function fieldNotesBlock(notes) {
             ${source ? `<span class="log-source">${source}</span>` : ''}
             ${n.evidence_status ? stamp(n.evidence_status) : ''}${researchStamp(n)}
           </p>
-          ${n.kind === 'riot_evidence' && riotSlip(n.data) ? riotSlip(n.data) : `<p class="log-body">${esc(n.body)}</p>`}
+          ${n.kind === 'riot_evidence' && riotSlip(n.data) ? riotSlip(n.data, n.art) : `<p class="log-body">${esc(n.body)}</p>`}
           ${url && n.source_name ? `<p class="log-url">${esc(url)}</p>` : ''}
         </div>
       </li>`;
@@ -291,10 +332,10 @@ async function renderDetail(key) {
         </div>
       </div>
       ${sectionRows([
-        { label: 'Core', body: c.core_units.length ? bulletList(c.core_units.map(unitLabel)) : '', margin: 'the units the idea lives or dies on' },
-        { label: 'Flex', body: c.optional_units.length ? bulletList(c.optional_units.map(unitLabel)) : '' },
-        { label: 'Trait targets', body: c.target_traits.length ? bulletList(c.target_traits.map(traitLabel)) : '' },
-        { label: 'Items', body: itemsBlock(c) },
+        { label: 'Core', body: c.core_units.length ? bulletList(unitLabels(e, 'core_units')) : '', margin: 'the units the idea lives or dies on' },
+        { label: 'Flex', body: c.optional_units.length ? bulletList(unitLabels(e, 'optional_units')) : '' },
+        { label: 'Trait targets', body: c.target_traits.length ? bulletList(traitLabels(e)) : '' },
+        { label: 'Items', body: itemsBlock(e) },
         { label: 'Levels & rolling', body: levelsBlock(c) },
         { label: 'Positioning', body: c.positioning_notes ? `<p>${esc(c.positioning_notes)}</p>` : '' },
         { label: 'Augments', body: c.augment_notes ? `<p>${esc(c.augment_notes)}</p>` : '' },

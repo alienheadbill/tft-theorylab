@@ -7,9 +7,8 @@ const pad2 = n => String(n).padStart(2, '0');
 const esc = s =>
   String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 
-// Champion/item/trait art isn't exposed by any existing API (it would need a
-// live CommunityDragon fetch on every page load, deliberately not added
-// yet). These helpers only reformat identifiers the backend already returns.
+// Readable names for raw ids when the API has no display name for them
+// (names and art come from the cached manifest; see art.js).
 const humanizeId = id =>
   String(id)
     .replace(/^TFT_Item_/, '')
@@ -21,8 +20,19 @@ const humanizeTraitLabel = label => {
   const m = label.match(/^(.*)\s\((\d+)\)$/);
   return m ? `${humanizeId(m[1])} (${m[2]})` : humanizeId(label);
 };
-const labelFor = (assoc, kind) =>
-  kind === 'item' ? humanizeItemLabel(assoc.label) : kind === 'trait' ? humanizeTraitLabel(assoc.label) : assoc.label;
+const traitTier = label => (String(label).match(/\((\d+)\)$/) || [])[1];
+const labelFor = (assoc, kind) => {
+  if (kind === 'item') {
+    return assoc.items?.length
+      ? assoc.items.map(i => i.name || humanizeId(i.id)).join(' + ')
+      : humanizeItemLabel(assoc.label);
+  }
+  if (kind === 'trait') {
+    const tier = traitTier(assoc.label);
+    return assoc.trait_name && tier ? `${assoc.trait_name} (${tier})` : humanizeTraitLabel(assoc.label);
+  }
+  return assoc.label;
+};
 
 // Matches `_LOW_SAMPLE_COMMITMENT_GAMES` in tftlab.cli's discovery-smoke.
 const LOW_SAMPLE_COMMITMENT_GAMES = 30;
@@ -85,12 +95,20 @@ function scoreMark(score, variant) {
     </div>`;
 }
 
-// Future art drops in as an <img> inside the same taped frame.
-const portrait = (name, cost) =>
-  `<figure class="portrait" style="--c:${costAccent(cost)}" aria-hidden="true"><span class="portrait-fallback">${esc(initials(name))}</span></figure>`;
+// The taped reference photo: cached portrait over the initials fallback.
+const portrait = (name, cost, url) =>
+  `<figure class="portrait${artUrl(url) ? ' has-art' : ''}" style="--c:${costAccent(cost)}" aria-hidden="true"><span class="portrait-fallback">${esc(initials(name))}</span>${artImg(url, 64)}</figure>`;
 
-const refIcon = (text, cost) =>
-  `<span class="ref-icon"${cost ? ` style="--c:${costAccent(cost)}"` : ''} aria-hidden="true">${esc(String(text).charAt(0).toUpperCase())}</span>`;
+const refIcon = (text, cost, url, kind = '') =>
+  `<span class="ref-icon${kind ? ` ref-${kind}` : ''}${artUrl(url) ? ' has-art' : ''}"${cost ? ` style="--c:${costAccent(cost)}"` : ''} aria-hidden="true"><span class="ref-letter">${esc(String(text).charAt(0).toUpperCase())}</span>${artImg(url, 24)}</span>`;
+
+// Partner portrait, trait icon, or the package's item icons (fanned).
+function evidenceIcons(assoc, kind, label) {
+  if (kind === 'item' && assoc.items?.length) {
+    return `<span class="ref-stack">${assoc.items.map(i => refIcon(i.name || humanizeId(i.id), null, i.art_url)).join('')}</span>`;
+  }
+  return refIcon(label, kind === 'partner' ? assoc.cost : null, assoc.art_url, kind);
+}
 
 const lowSampleNote = () =>
   `<p class="low-sample"><span class="stamp stamp-low">Low sample</span><span class="pencil">tiny sample — don't trust this yet</span></p>`;
@@ -189,7 +207,7 @@ function evidenceNote(kindLabel, assoc, kind) {
   return `
     <li>
       <span class="ev-kind">${kindLabel}</span>
-      ${refIcon(label, kind === 'partner' ? assoc.cost : null)}
+      <span class="ev-icons">${evidenceIcons(assoc, kind, label)}</span>
       <span class="ev-what">${esc(label)}</span>
       <span class="ev-num">${fmtNum(assoc.games)} g${delta}</span>
     </li>`;
@@ -207,7 +225,7 @@ function entryHtml(c, i, isLead) {
         ${isLead ? `<span class="lead-note">top of the list, by ${SORT_LABELS[state.sortBy]}</span>` : ''}
       </div>
       <div class="entry-head">
-        ${portrait(c.name, c.cost)}
+        ${portrait(c.name, c.cost, c.art_url)}
         <div class="entry-title">
           <h3>${esc(c.name)}</h3>
           <p class="sample">n = <b>${fmtNum(n)}</b> committed games</p>
@@ -283,7 +301,7 @@ function ledgerList(items, kind) {
           : ` · <span class="${a.top4_delta >= 0 ? 'delta-pos' : 'delta-neg'}">Δ ${fmtDelta(a.top4_delta)}</span>`;
       return `
         <li>
-          ${refIcon(label, kind === 'partner' ? a.cost : null)}
+          ${evidenceIcons(a, kind, label)}
           <span class="ll-name">${esc(label)}</span>
           <span class="ll-dots" aria-hidden="true"></span>
           <span class="ll-num"><span class="t4">${fmtPct(a.top4_rate)}</span> T4${delta} · ${fmtNum(a.games)} g</span>
