@@ -85,7 +85,7 @@ def test_live_game_art_refresh_integrity(tmp_path) -> None:
     committed art is stale: run the "Game art refresh" workflow)."""
     import warnings
 
-    from tftlab.game_art import MANIFEST_PATH, refresh_game_art
+    from tftlab.game_art_refresh import MANIFEST_PATH, refresh_game_art
 
     with CommunityDragonClient(cache_dir=tmp_path / "cache") as client:
         report = refresh_game_art(client, art_dir=tmp_path / "game", manifest_path=tmp_path / "manifest.json")

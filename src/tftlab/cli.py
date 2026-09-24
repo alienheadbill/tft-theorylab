@@ -956,7 +956,7 @@ def refresh_game_art_command(
         except ImportError:
             console.print('[red]Pillow is required: pip install -e ".[art]"[/red]')
             raise typer.Exit(code=1)
-    from .game_art import GameArtError, refresh_game_art
+    from .game_art_refresh import GameArtError, refresh_game_art
 
     try:
         with CommunityDragonClient() as cdragon:

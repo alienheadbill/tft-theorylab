@@ -8,9 +8,9 @@ import pytest
 from PIL import Image
 from typer.testing import CliRunner
 
-from tftlab import cli, game_art
+from tftlab import cli, game_art_refresh
 from tftlab.cdragon import CDRAGON_BASE, CommunityDragonClient
-from tftlab.game_art import GameArtError, normalize_image, refresh_game_art, select_assets
+from tftlab.game_art_refresh import GameArtError, normalize_image, refresh_game_art, select_assets
 
 
 def _png(size: int = 256, color=(200, 40, 40, 128)) -> bytes:
@@ -233,8 +233,8 @@ def test_normalize_image_rejects_non_images_and_never_upscales() -> None:
 
 def _cli_with(monkeypatch, tmp_path, fake: FakeCDragon):
     monkeypatch.setattr(cli, "CommunityDragonClient", fake.client)
-    monkeypatch.setattr(game_art, "ART_DIR", tmp_path / "game")
-    monkeypatch.setattr(game_art, "MANIFEST_PATH", tmp_path / "manifest.json")
+    monkeypatch.setattr(game_art_refresh, "ART_DIR", tmp_path / "game")
+    monkeypatch.setattr(game_art_refresh, "MANIFEST_PATH", tmp_path / "manifest.json")
     return CliRunner().invoke(cli.app, ["refresh-game-art"])
 
 
