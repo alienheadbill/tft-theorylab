@@ -314,7 +314,7 @@ h2 { margin: 0 0 6px; font: 700 clamp(28px, 3.4vw, 36px)/1.15 var(--serif); disp
 .spread .entry:nth-child(even) .entry-evidence { border-top: 3px double var(--rule-soft); }
 .evidence-head { display: flex; align-items: center; gap: 10px; margin: 0 0 6px; font-style: italic; font-size: 14.5px; color: var(--graphite); }
 .evidence-notes { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
-.evidence-notes li { display: grid; grid-template-columns: 62px 54px minmax(0, 1fr) auto; align-items: baseline; gap: 8px; font-size: 15px; }
+.evidence-notes li { display: grid; grid-template-columns: 62px 64px minmax(0, 1fr) auto; align-items: baseline; gap: 8px; font-size: 15px; }
 .ev-icons { align-self: center; display: flex; }
 .evidence-notes li.none { grid-template-columns: 62px minmax(0, 1fr); }
 .ev-kind { font-style: italic; font-size: 14px; color: var(--ink-blue); }
@@ -338,7 +338,7 @@ li:nth-child(even) .ref-icon { rotate: 1.5deg; }
 .ref-icon.ref-trait > img { inset: 3px; width: calc(100% - 6px); height: calc(100% - 6px); object-fit: contain; }
 /* an item package: the chips fanned out like clipped cards */
 .ref-stack { display: inline-flex; align-self: center; flex: none; }
-.ref-stack .ref-icon + .ref-icon { margin-left: -9px; box-shadow: -2px 0 0 rgba(0, 0, 0, 0.35); }
+.ref-stack .ref-icon + .ref-icon { margin-left: -4px; box-shadow: -2px 0 0 rgba(0, 0, 0, 0.35); }
 .ref-stack .ref-icon:nth-child(2) { rotate: 3deg; translate: 0 1px; }
 .ref-stack .ref-icon:nth-child(3) { rotate: -1deg; }
 .ledger-list .ref-stack .ref-icon + .ref-icon { margin-left: 3px; box-shadow: none; }
@@ -684,7 +684,7 @@ li:nth-child(even) .art-chip, .item-ref:nth-child(even) .art-chip { rotate: 1.5d
   .score-mark { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; text-align: left; min-width: 0; }
   .score-label { display: inline; }
   .results { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
-  .evidence-notes li { grid-template-columns: 58px 54px minmax(0, 1fr); }
+  .evidence-notes li { grid-template-columns: 58px 64px minmax(0, 1fr); }
   .evidence-notes li .ev-num { grid-column: 3; }
   .entry.lead .lead-note { display: none; }
 
