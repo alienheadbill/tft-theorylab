@@ -16,6 +16,9 @@ class ChampionMeta:
     name: str
     cost: int
     icon_url: str | None
+    #: Traits as CommunityDragon lists them. Real shop champions have at least one; summons,
+    #: camps and other special units usually have none.
+    traits: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -23,6 +26,9 @@ class ItemMeta:
     item_id: str
     name: str
     icon_url: str | None
+    #: Component apiNames this item is built from (empty for components
+    #: and uncraftable items).
+    composition: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -50,7 +56,13 @@ class SetMetadata:
 def _icon_url(patch: str, relative_path: str | None) -> str | None:
     if not relative_path:
         return None
-    return f"{CDRAGON_BASE}/{patch}/game/{relative_path.lower()}"
+    path = relative_path.lower()
+    # Game textures are listed by their packed names (.tex/.dds); the raw
+    # CommunityDragon mirror serves them converted to .png.
+    for ext in (".tex", ".dds"):
+        if path.endswith(ext):
+            path = path[: -len(ext)] + ".png"
+    return f"{CDRAGON_BASE}/{patch}/game/{path}"
 
 
 def _set_number_of(entry: dict[str, Any]) -> int:
@@ -86,6 +98,7 @@ def parse_set_metadata(
             name=str(c.get("name") or c["apiName"]),
             cost=int(c.get("cost") or 0),
             icon_url=_icon_url(patch, c.get("squareIcon") or c.get("icon")),
+            traits=tuple(str(t) for t in (c.get("traits") or []) if t),
         )
         for c in chosen.get("champions", [])
         if c.get("apiName")
@@ -104,6 +117,7 @@ def parse_set_metadata(
             item_id=str(i["apiName"]),
             name=str(i.get("name") or i["apiName"]),
             icon_url=_icon_url(patch, i.get("icon")),
+            composition=tuple(str(x) for x in (i.get("composition") or []) if x),
         )
         for i in payload.get("items", [])
         if i.get("apiName")
