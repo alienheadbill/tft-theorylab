@@ -16,8 +16,8 @@ class ChampionMeta:
     name: str
     cost: int
     icon_url: str | None
-    #: Traits as CommunityDragon lists them. Real shop champions have at least one; summons,
-    #: camps and other special units usually have none.
+    #: Traits as CommunityDragon lists them (display names). Shop champions have at least
+    #: one; some special units have none, others (with a cost) have traits too.
     traits: tuple[str, ...] = ()
 
 
