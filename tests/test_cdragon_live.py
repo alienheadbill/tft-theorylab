@@ -75,3 +75,41 @@ def test_committed_roster_fixture_matches_live_set(tmp_path) -> None:
         "src/tftlab/data/set_roster.json is out of date. Live roster:\n"
         + json.dumps(live, indent=1, ensure_ascii=False)
     )
+
+
+@requires_live_network
+def test_live_game_art_refresh_integrity(tmp_path) -> None:
+    """Runs the real `refresh-game-art` download into a temp dir: every
+    selected image must pass the status/content/format checks. When cached
+    art is committed, the live result must match it (a mismatch means the
+    committed art is stale: run the "Game art refresh" workflow)."""
+    import warnings
+
+    from tftlab.game_art_refresh import MANIFEST_PATH, refresh_game_art
+
+    with CommunityDragonClient(cache_dir=tmp_path / "cache") as client:
+        report = refresh_game_art(client, art_dir=tmp_path / "game", manifest_path=tmp_path / "manifest.json")
+
+    sizes = sorted(p.stat().st_size for p in (tmp_path / "game").rglob("*.png"))
+    summary = {
+        "set_number": report.set_number,
+        "cached": dict(report.cached),
+        "missing": report.missing,
+        "failures": report.failures[:20],
+        "bytes_written": report.bytes_written,
+        "largest_files": sizes[-3:],
+        "shape": report.shape,
+        "selected": report.planned,
+    }
+    # Surfaced in the pytest warnings summary so a passing run still logs it.
+    warnings.warn("game art refresh summary: " + json.dumps(summary, ensure_ascii=False))
+    assert report.ok, f"game art refresh failed: {report.failures[:20]}"
+    assert not report.shape["duplicate_item_names"], "two cached items share a display name"
+
+    if MANIFEST_PATH.exists():
+        live = json.loads((tmp_path / "manifest.json").read_text())
+        committed = json.loads(MANIFEST_PATH.read_text())
+        for kind in ("champions", "items", "traits"):
+            live_hashes = {k: v["sha256"] for k, v in live[kind].items()}
+            committed_hashes = {k: v["sha256"] for k, v in committed[kind].items()}
+            assert live_hashes == committed_hashes, f"committed {kind} art is stale; run the Game art refresh workflow"

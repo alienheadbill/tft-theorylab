@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -936,6 +937,55 @@ def scout_sources() -> None:
     console.print("")
     for key_, (text, meaning) in RESEARCH_LABELS.items():
         console.print(f"[bold]{text.upper()}[/bold] ({key_}): {meaning}")
+
+
+@app.command("refresh-game-art")
+def refresh_game_art_command(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Fetch metadata only and report what would be cached."),
+) -> None:
+    """Cache the current set's champion, item and trait art from CommunityDragon.
+
+    Writes deterministic PNGs under src/tftlab/web/static/game/ and the
+    manifest at src/tftlab/data/game_art_manifest.json. The source is fixed
+    (CommunityDragon's latest TFT bundle); no URL can be passed in. Exits 1
+    if any download fails integrity checks or a kind ends up empty.
+    """
+    if not dry_run:
+        try:
+            import PIL  # noqa: F401
+        except ImportError:
+            console.print('[red]Pillow is required: pip install -e ".[art]"[/red]')
+            raise typer.Exit(code=1)
+    from .game_art_refresh import GameArtError, refresh_game_art
+
+    try:
+        with CommunityDragonClient() as cdragon:
+            report = refresh_game_art(cdragon, dry_run=dry_run)
+    except (GameArtError, httpx.HTTPError, ValueError) as exc:
+        console.print(f"[red]Game art refresh failed:[/red] {exc}")
+        raise typer.Exit(code=1)
+
+    console.print(f"Set {report.set_number}{' (dry run)' if dry_run else ''}")
+    for key_, value in report.shape.items():
+        console.print(f"  {key_}: {value}")
+    for kind in ("champions", "items", "traits"):
+        console.print(f"{kind} selected: {', '.join(report.planned[kind])}", soft_wrap=True)
+        console.print(
+            f"{kind}: {report.cached[kind]} cached"
+            f" ({report.fetched[kind]} downloaded, {report.unchanged[kind]} unchanged),"
+            f" {len(report.missing[kind])} without an icon"
+        )
+        for asset_id in report.missing[kind]:
+            console.print(f"  missing icon: {kind}/{asset_id}")
+    for line in report.pruned:
+        console.print(f"removed stale file: {line}")
+    if report.bytes_written:
+        console.print(f"bytes written: {report.bytes_written}")
+    for failure in report.failures:
+        console.print(f"[red]failure:[/red] {failure}")
+    if not report.ok:
+        console.print("[red]Integrity check failed; previous assets and manifest left untouched.[/red]")
+        raise typer.Exit(code=1)
 
 
 @app.command()

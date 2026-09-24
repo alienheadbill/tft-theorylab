@@ -17,7 +17,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9"]
+dev = ["pytest>=8,<9", "Pillow>=10"]
+# Only needed to run `tftlab refresh-game-art`; serving the cached art needs nothing extra.
+art = ["Pillow>=10"]
 postgres = ["psycopg[binary]>=3.1,<4"]
 
 [project.scripts]
@@ -27,7 +29,7 @@ tftlab = "tftlab.cli:app"
 where = ["src"]
 
 [tool.setuptools.package-data]
-tftlab = ["web/*.html", "web/static/*", "data/*.json"]
+tftlab = ["web/*.html", "web/static/*", "web/static/game/*/*.png", "data/*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
