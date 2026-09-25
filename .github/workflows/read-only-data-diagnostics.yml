@@ -1,0 +1,66 @@
+name: Read-only data diagnostics
+
+# Manually-triggered, SELECT-only diagnostics against the production
+# database. It exists because DATABASE_URL lives only in this repository's
+# Actions secrets. It runs one fixed script
+# (scripts/diagnostics/participants_without_units.py): no SQL input, no
+# tftlab.storage.Database (whose constructor creates schema and runs
+# migrations/backfills), no Riot, no CommunityDragon, no ingest.
+#
+# Read-only is enforced by the database, not by convention: the session is
+# opened with default_transaction_read_only=on, the script runs
+# BEGIN TRANSACTION READ ONLY and aborts unless the server reports
+# transaction_read_only = on, every statement must be a SELECT/SHOW, and the
+# transaction always ends with ROLLBACK.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: read-only-data-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  participants-without-units:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Before checkout and before any database access. Static messages
+      # only -- never echoes DATABASE_URL.
+      - name: Validate production configuration
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This workflow must be run with 'main' explicitly selected as the branch (got ${GITHUB_REF})." >&2
+            exit 1
+          fi
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "::error::DATABASE_URL repository secret is not set." >&2
+            exit 1
+          fi
+          case "${DATABASE_URL}" in
+            postgres://*|postgresql://*) ;;
+            *)
+              echo "::error::DATABASE_URL must start with postgres:// or postgresql://." >&2
+              exit 1
+              ;;
+          esac
+          echo "Production configuration looks valid."
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Only the Postgres driver -- the tftlab package is not installed.
+      - name: Install psycopg
+        run: pip install "psycopg[binary]>=3.1,<4"
+
+      - name: Participants without stored units (read-only)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python scripts/diagnostics/participants_without_units.py
