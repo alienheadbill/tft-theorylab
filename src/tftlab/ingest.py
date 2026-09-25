@@ -39,6 +39,17 @@ class IngestResult:
     match_id_references: int = 0
     #: Seed history requests that failed; that seed is skipped, the run goes on.
     failed_history_requests: int = 0
+    #: History bounds sent to Riot (epoch seconds), or None for ordinary
+    #: recent history. Riot filtering by time narrows what is requested;
+    #: each match's own classification still decides its patch/window.
+    history_start_time: int | None = None
+    history_end_time: int | None = None
+    #: Seeds whose (successful) history request returned no match IDs --
+    #: with a time bound, players who haven't played in that window.
+    seeds_with_empty_history: int = 0
+    #: `game_datetime` (epoch ms) range of the matches actually inserted.
+    earliest_inserted_game_datetime: int | None = None
+    latest_inserted_game_datetime: int | None = None
 
     @property
     def in_run_overlap_rate(self) -> float | None:
@@ -71,6 +82,8 @@ def ingest_ladder(
     matches_per_player: int = 10,
     sampling_mode: str = "challenger",
     cost_lookup: CostLookup | None = None,
+    history_start_time: int | None = None,
+    history_end_time: int | None = None,
 ) -> IngestResult:
     """Seed from high-Elo TFT ladder PUUIDs and deduplicate overlapping matches.
 
@@ -99,18 +112,31 @@ def ingest_ladder(
     counted in `non_target_matches_skipped` (not `failed_requests` -- Riot
     answered fine, it's just out of scope for this project's dataset) and
     never stored.
+
+    `history_start_time`/`history_end_time` (epoch seconds) bound each
+    seed's match-history request (Riot's `startTime`/`endTime`); a seed
+    with no games in that range returns an empty list, which is counted in
+    `seeds_with_empty_history` -- not a failure.
     """
     selection = select_seeds(lambda tier: getattr(client, tier)(), total=player_limit, mode=sampling_mode)
     ids: list[str] = []
     seen: set[str] = set()
     references = 0
     failed_histories = 0
+    empty_histories = 0
+    bounds = {}
+    if history_start_time is not None:
+        bounds["start_time"] = history_start_time
+    if history_end_time is not None:
+        bounds["end_time"] = history_end_time
     for puuid in selection.puuids:
         try:
-            history = client.match_ids(puuid, count=matches_per_player)
+            history = client.match_ids(puuid, count=matches_per_player, **bounds)
         except RiotApiError:
             failed_histories += 1
             continue
+        if not history:
+            empty_histories += 1
         references += len(history)
         for match_id in history:
             if match_id not in seen:
@@ -122,6 +148,7 @@ def ingest_ladder(
     duplicates = 0
     failed = 0
     non_target = 0
+    inserted_times: list[int] = []
     for match_id in ids:
         if db.has_match(match_id):
             duplicates += 1
@@ -135,7 +162,11 @@ def ingest_ladder(
         if payload.get("info", {}).get("queue_id") != RANKED_TFT_QUEUE_ID:
             non_target += 1
             continue
-        inserted += int(db.ingest_match(payload, cost_lookup=cost_lookup))
+        if db.ingest_match(payload, cost_lookup=cost_lookup):
+            inserted += 1
+            game_datetime = payload.get("info", {}).get("game_datetime")
+            if isinstance(game_datetime, int):
+                inserted_times.append(game_datetime)
 
     return IngestResult(
         seed_players=len(selection.puuids),
@@ -152,4 +183,9 @@ def ingest_ladder(
         histories_per_seed=matches_per_player,
         match_id_references=references,
         failed_history_requests=failed_histories,
+        history_start_time=history_start_time,
+        history_end_time=history_end_time,
+        seeds_with_empty_history=empty_histories,
+        earliest_inserted_game_datetime=min(inserted_times) if inserted_times else None,
+        latest_inserted_game_datetime=max(inserted_times) if inserted_times else None,
     )

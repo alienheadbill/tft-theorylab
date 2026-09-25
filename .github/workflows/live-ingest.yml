@@ -141,6 +141,11 @@ jobs:
           MATCHES_PER_PLAYER: ${{ inputs.matches_per_player }}
           EXPANDED_HIGH_ELO: ${{ inputs.expanded_high_elo }}
         # Sizes were bounds-checked in "Validate production configuration".
+        # --current-trusted-window: each seed's history request is bounded to
+        # the current verified+sourced patch window in
+        # tftlab.unreal_patch.UNREAL_PATCH_REGISTRY (Riot startTime/endTime),
+        # so the run doesn't spend requests on older patches; the step fails
+        # rather than crawling unbounded history if no such window is current.
         # Seeds are chosen deterministically by ladder tier and League
         # Points (tftlab.sampling), never by champion or comp. No
         # --allow-degraded-costs: if CommunityDragon can't be reached, this
@@ -152,7 +157,7 @@ jobs:
           else
             SAMPLING=challenger
           fi
-          tftlab ingest-riot --players "${PLAYERS}" --matches-per-player "${MATCHES_PER_PLAYER}" --sampling "${SAMPLING}"
+          tftlab ingest-riot --players "${PLAYERS}" --matches-per-player "${MATCHES_PER_PLAYER}" --sampling "${SAMPLING}" --current-trusted-window
 
       - name: Validate ingested data
         env:

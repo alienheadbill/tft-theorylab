@@ -68,6 +68,8 @@ class IntegrityReport:
     unexpected_missing_balance_window: int
     malformed_placements: int
     duplicate_match_ids: int
+    #: Every stored participant with no stored unit rows (store-wide) --
+    #: the sum of the two fields below, kept for backward compatibility.
     participants_without_units: int
     #: How many matches, store-wide, have a masked-Unreal `game_version`
     #: that `resolve_unreal_patch` couldn't place in any registered cutover
@@ -103,6 +105,16 @@ class IntegrityReport:
     balance_window_distribution: dict[str | None, int]
     earliest_game_datetime: int | None
     latest_game_datetime: int | None
+    #: Participants without units whose own raw Riot payload entry (same
+    #: position in `info.participants`, same placement) has a `units` field
+    #: that is missing or `[]`: ingestion stored exactly what Riot sent.
+    #: A visible warning, never severe on its own. The rows stay stored.
+    source_empty_participants: int = 0
+    #: Participants without units where the raw payload lists at least one
+    #: unit, or the raw/stored mapping can't be trusted (payload unreadable,
+    #: no raw participant at that index, placement or participant count
+    #: mismatch, `units` not a list). This is lost data -- severe.
+    unexpected_participants_without_units: int = 0
 
     @property
     def is_severe(self) -> bool:
@@ -115,8 +127,11 @@ class IntegrityReport:
         duplicate primary key, a participant with no board at all, or a
         match missing its balance window for anything other than the
         intentional, documented Unreal rollout-gap exclusion
-        (`unexpected_missing_balance_window`) indicate the ingest pipeline
-        itself is broken.
+        (`unexpected_missing_balance_window`), or a participant whose units
+        were lost between Riot's payload and storage
+        (`unexpected_participants_without_units`) indicate the ingest
+        pipeline itself is broken. A participant Riot itself sent with no
+        units (`source_empty_participants`) is a warning, not corruption.
 
         Deliberately checks `unexpected_missing_balance_window`, NOT
         `matches_missing_balance_window`: a production database can have
@@ -132,8 +147,58 @@ class IntegrityReport:
             self.unexpected_missing_balance_window
             or self.malformed_placements
             or self.duplicate_match_ids
-            or self.participants_without_units
+            or self.unexpected_participants_without_units
         )
+
+
+def _is_source_empty(payload_json: str, participant_index: int, placement: int, stored_participants: int) -> bool:
+    """Whether a stored participant with no units was sent that way by Riot.
+
+    `normalize_match` assigns `participant_index` by position in
+    `info.participants`, so the raw entry is at that index; placement and
+    participant count must agree for the mapping to be trusted. Anything
+    that can't be confirmed counts as unexpected (returns False).
+    """
+    try:
+        raw = json.loads(payload_json)["info"]["participants"]
+    except (TypeError, ValueError, KeyError):
+        return False
+    if not isinstance(raw, list) or len(raw) != stored_participants or not 0 <= participant_index < len(raw):
+        return False
+    entry = raw[participant_index]
+    if not isinstance(entry, dict) or entry.get("placement") != placement:
+        return False
+    return "units" not in entry or entry["units"] == []
+
+
+def classify_participants_without_units(db: Database) -> tuple[int, int]:
+    """(source-empty, unexpected) counts for participants with no stored
+    units. Reads raw payloads only for the matches involved."""
+    rows = db.query_all(
+        """
+        SELECT p.match_id, p.participant_index, p.placement
+        FROM participants p
+        WHERE NOT EXISTS (
+            SELECT 1 FROM units u
+            WHERE u.match_id = p.match_id AND u.participant_index = p.participant_index
+        )
+        ORDER BY p.match_id, p.participant_index
+        """
+    )
+    source_empty = 0
+    unexpected = 0
+    matches: dict[str, tuple[str, int]] = {}
+    for match_id, participant_index, placement in rows:
+        if match_id not in matches:
+            payload = db.query_one("SELECT payload_json FROM matches WHERE match_id = ?", (match_id,))
+            stored = db.query_one("SELECT COUNT(*) FROM participants WHERE match_id = ?", (match_id,))[0]
+            matches[match_id] = (payload[0] if payload else None, int(stored))
+        payload_json, stored_participants = matches[match_id]
+        if _is_source_empty(payload_json, int(participant_index), int(placement), stored_participants):
+            source_empty += 1
+        else:
+            unexpected += 1
+    return source_empty, unexpected
 
 
 def validate_live_data(
@@ -285,15 +350,8 @@ def validate_live_data(
     duplicate_match_ids = db.query_one(
         "SELECT COUNT(*) FROM (SELECT match_id FROM matches GROUP BY match_id HAVING COUNT(*) > 1) dupes"
     )[0]
-    participants_without_units = db.query_one(
-        """
-        SELECT COUNT(*) FROM participants p
-        WHERE NOT EXISTS (
-            SELECT 1 FROM units u
-            WHERE u.match_id = p.match_id AND u.participant_index = p.participant_index
-        )
-        """
-    )[0]
+    source_empty_participants, unexpected_participants_without_units = classify_participants_without_units(db)
+    participants_without_units = source_empty_participants + unexpected_participants_without_units
 
     return IntegrityReport(
         balance_window=resolved_window,
@@ -321,4 +379,6 @@ def validate_live_data(
         balance_window_distribution=balance_window_distribution,
         earliest_game_datetime=earliest_game_datetime,
         latest_game_datetime=latest_game_datetime,
+        source_empty_participants=source_empty_participants,
+        unexpected_participants_without_units=unexpected_participants_without_units,
     )

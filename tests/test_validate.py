@@ -145,13 +145,16 @@ def test_matches_missing_balance_window_is_severe(tmp_path: Path) -> None:
     assert report.is_severe is True
 
 
-def test_participants_without_units_is_severe(tmp_path: Path) -> None:
+def test_source_empty_participant_is_a_warning_not_severe(tmp_path: Path) -> None:
+    """Riot itself sent `units: []`: storage is faithful, so this warns."""
     with Database(tmp_path / "no_units.sqlite3") as db:
         db.ingest_match(make_match("NO_UNITS", units=[]))
         report = validate_live_data(db)
 
     assert report.participants_without_units == 1
-    assert report.is_severe is True
+    assert report.source_empty_participants == 1
+    assert report.unexpected_participants_without_units == 0
+    assert report.is_severe is False
 
 
 def test_reports_none_data_when_no_balance_window_resolvable(tmp_path: Path) -> None:

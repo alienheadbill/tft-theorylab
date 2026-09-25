@@ -125,10 +125,32 @@ class RiotClient:
             f"https://{self.platform}.api.riotgames.com/tft/league/v1/master"
         )
 
-    def match_ids(self, puuid: str, *, count: int = 20, start: int = 0) -> list[str]:
+    def match_ids(
+        self,
+        puuid: str,
+        *,
+        count: int = 20,
+        start: int = 0,
+        start_time: int | None = None,
+        end_time: int | None = None,
+    ) -> list[str]:
+        """Recent match IDs for `puuid`, newest first.
+
+        `start_time`/`end_time` optionally bound the history by match time.
+        They are epoch **seconds**, as Riot documents for TFT-MATCH-V1
+        `GET /tft/match/v1/matches/by-puuid/{puuid}/ids` (`startTime` /
+        `endTime`: "Epoch timestamp in seconds"; `game_datetime` in match
+        bodies is milliseconds, so callers convert). Omitted when `None`, so
+        existing callers still get ordinary recent history.
+        """
+        params: dict[str, Any] = {"start": start, "count": count}
+        if start_time is not None:
+            params["startTime"] = int(start_time)
+        if end_time is not None:
+            params["endTime"] = int(end_time)
         return self._get(
             f"https://{self.region}.api.riotgames.com/tft/match/v1/matches/by-puuid/{puuid}/ids",
-            params={"start": start, "count": count},
+            params=params,
         )
 
     def match(self, match_id: str) -> dict[str, Any]:
