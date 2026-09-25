@@ -218,3 +218,39 @@ def resolve_unreal_patch(
         if window.starts_at <= game_datetime < window.ends_at:
             return window.client_patch
     return UNRESOLVED_UNREAL_PATCH
+
+
+class NoCurrentTrustedWindow(RuntimeError):
+    """No verified+sourced registry window covers the current time."""
+
+
+def current_trusted_window(
+    now_ms: int,
+    *,
+    registry: tuple[UnrealPatchWindow, ...] | None = None,
+) -> UnrealPatchWindow:
+    """The trusted classification window ingestion should collect for now.
+
+    The chronologically latest usable (verified + sourced) window that has
+    already started (`starts_at <= now_ms`), and only if it hasn't ended
+    (`now_ms < ends_at`). Used to bound Riot match-history requests to the
+    current patch; it never changes how any match is classified.
+
+    Raises `NoCurrentTrustedWindow` rather than guessing when there is no
+    usable window, when none has started, or when the latest one has
+    already ended (the next patch's window must be registered first) --
+    a crawl in "current trusted window" mode must never fall back to
+    unbounded history or treat an expired window as open-ended.
+    """
+    if registry is None:
+        registry = UNREAL_PATCH_REGISTRY
+    started = [w for w in registry if w.is_usable and w.starts_at <= now_ms]
+    if not started:
+        raise NoCurrentTrustedWindow("no verified and sourced trusted window has started yet")
+    latest = max(started, key=lambda w: w.starts_at)
+    if now_ms >= latest.ends_at:
+        raise NoCurrentTrustedWindow(
+            f"the latest trusted window ({latest.client_patch}) ended at {latest.ends_at} ms; "
+            "register the next patch's window before collecting in this mode"
+        )
+    return latest

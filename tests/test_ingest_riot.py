@@ -50,6 +50,7 @@ class _StubRiotClient:
         self._failing_histories = failing_histories
         self.ladder_calls: list[str] = []
         self.history_calls: list[str] = []
+        self.history_bounds: list[tuple] = []
         self.match_calls: list[str] = []
 
     def _ladder(self, tier):
@@ -65,8 +66,9 @@ class _StubRiotClient:
     def master(self):
         return self._ladder("master")
 
-    def match_ids(self, puuid, *, count=20, start=0):
+    def match_ids(self, puuid, *, count=20, start=0, start_time=None, end_time=None):
         self.history_calls.append(puuid)
+        self.history_bounds.append((start_time, end_time))
         if puuid in self._failing_histories:
             raise RiotApiError(f"Riot API returned 503 for fake/history/{puuid}: busy")
         return list(self._match_ids_by_puuid.get(puuid, []))[:count]

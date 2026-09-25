@@ -19,12 +19,13 @@ class CarryStat:
     #: treating this single number as "the" rarity measure -- see those
     #: fields' docstrings below for why they're not interchangeable.
     usage_rate: float
-    #: Champion pick/presence rate: appearances / total participants. How
-    #: often this champion shows up on a board at all, regardless of build.
+    #: Champion pick/presence rate: appearances / unit-observable
+    #: participants (see `carry_commitment_stats`). How often this champion
+    #: shows up on a board at all, regardless of build.
     appearance_rate: float
-    #: Carry-commitment rate: commitment_games / total participants. How
-    #: often a board features THIS unit built as a >=2-item carry. This is
-    #: what `usage_rate` has always actually measured.
+    #: Carry-commitment rate: commitment_games / unit-observable
+    #: participants. How often a board features THIS unit built as a
+    #: >=2-item carry. This is what `usage_rate` has always actually measured.
     commitment_rate: float
     #: Of the games this champion appeared in at all, how often it was
     #: built as a committed carry: commitment_games / appearances. Distinct
@@ -116,12 +117,22 @@ def carry_commitment_stats(
     if resolved_window is None:
         return []
 
+    # Denominator: UNIT-OBSERVABLE participants -- those with at least one
+    # stored unit. A participant Riot sent with no units at all (a
+    # "source-empty" board, see `tftlab.validate`) has no observable board,
+    # so it can never contribute an appearance; counting it would quietly
+    # deflate every champion's appearance/commitment rate. Its match,
+    # placement and row stay stored and count everywhere else.
     total_participants_row = db.query_one(
         """
         SELECT COUNT(*)
         FROM participants p
         JOIN matches m ON m.match_id = p.match_id
         WHERE m.balance_window = ?
+          AND EXISTS (
+              SELECT 1 FROM units u
+              WHERE u.match_id = p.match_id AND u.participant_index = p.participant_index
+          )
         """,
         (resolved_window,),
     )

@@ -29,6 +29,8 @@ from .experiments import (
 )
 from .ingest import ingest_ladder
 from .sampling import SAMPLING_MODES
+from .unreal_patch import NoCurrentTrustedWindow
+from .unreal_patch import current_trusted_window as current_trusted_window_for
 from .normalize import CostLookup
 from .riot import RiotApiError, RiotClient, classify_riot_error
 from .storage import Database
@@ -171,6 +173,20 @@ def ingest_riot(
         ),
     ),
     include_master: bool = typer.Option(False, help="Same as --sampling high_elo"),
+    current_trusted_window: bool = typer.Option(
+        False,
+        "--current-trusted-window",
+        help=(
+            "Only request match history inside the current trusted patch window (the latest "
+            "verified+sourced tftlab.unreal_patch window that has started and not ended). "
+            "Fails if there is none."
+        ),
+    ),
+    start_time: str | None = typer.Option(
+        None,
+        "--start-time",
+        help="Only request match history from this UTC time on, e.g. 2026-09-24T07:00:00Z",
+    ),
     use_static_costs: bool = typer.Option(
         True, help="Resolve champion shop costs from CommunityDragon instead of rarity+1"
     ),
@@ -202,6 +218,8 @@ def ingest_riot(
         raise typer.BadParameter(
             f"--sampling must be one of: {', '.join(SAMPLING_MODES)}", param_hint="--sampling"
         )
+    # Resolved before any network or database access.
+    history_start, history_end, window_label = _history_bounds(current_trusted_window, start_time)
 
     try:
         cost_lookup, degraded, set_number = _resolve_cost_lookup(
@@ -231,6 +249,8 @@ def ingest_riot(
             matches_per_player=matches_per_player,
             sampling_mode=sampling_mode,
             cost_lookup=cost_lookup,
+            history_start_time=history_start,
+            history_end_time=history_end,
         )
         windows = available_balance_windows(db)
         total_participants = db.query_one("SELECT COUNT(*) FROM participants")[0]
@@ -248,6 +268,10 @@ def ingest_riot(
     for tier, count in result.seeds_by_tier.items():
         console.print(f"    {tier}: {count} (of {result.ladder_sizes.get(tier, 0)} on the ladder)")
     console.print(f"  Requested histories per seed: {result.histories_per_seed}")
+    console.print(f"  Trusted window: {window_label or 'none (ordinary recent history)'}")
+    console.print(f"  History lower bound (startTime): {_format_epoch_s(result.history_start_time)}")
+    console.print(f"  History upper bound (endTime): {_format_epoch_s(result.history_end_time)}")
+    console.print(f"  Seeds with no matches in the requested history: {result.seeds_with_empty_history}")
     console.print(f"  Failed history requests: {result.failed_history_requests}")
     console.print(f"  Match-ID references (before dedupe): {result.match_id_references}")
     console.print(f"  Unique match IDs discovered: {result.match_ids_seen}")
@@ -260,6 +284,13 @@ def ingest_riot(
     console.print(f"  Already-stored duplicate rate: {_rate(result.known_duplicate_rate)}")
     console.print(f"  Inserted matches per seed: {_ratio(result.inserted_per_seed)}")
     console.print(f"  New-match yield (inserted / references): {_rate(result.new_match_yield)}")
+    console.print(f"  Earliest inserted match: {_format_epoch_ms(result.earliest_inserted_game_datetime)}")
+    console.print(f"  Latest inserted match: {_format_epoch_ms(result.latest_inserted_game_datetime)}")
+    if history_start is not None:
+        console.print(
+            "  Note: startTime narrows what Riot returns; each match's patch and balance window "
+            "still come from normal classification -- see validate-live-data."
+        )
     console.print(f"  Balance windows found: {', '.join(w for w, _, _ in windows) or 'none'}")
     console.print(f"  Total participants now stored: {total_participants}")
     if degraded:
@@ -301,6 +332,36 @@ def verify_riot() -> None:
     console.print(
         f"[green]RIOT_API_KEY is valid.[/green] platform={settings.platform} challenger entries={entries}"
     )
+
+
+def _format_epoch_s(seconds: int | None) -> str:
+    if seconds is None:
+        return "none"
+    return f"{seconds} ({datetime.fromtimestamp(seconds, tz=timezone.utc).isoformat()})"
+
+
+def _history_bounds(current_trusted_window: bool, start_time: str | None) -> tuple[int | None, int | None, str | None]:
+    """(startTime, endTime, label) for Riot match-history requests, in
+    epoch seconds (Riot's unit for these parameters)."""
+    if current_trusted_window and start_time:
+        raise typer.BadParameter("use either --current-trusted-window or --start-time, not both")
+    if current_trusted_window:
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        try:
+            window = current_trusted_window_for(now_ms)
+        except NoCurrentTrustedWindow as exc:
+            console.print(f"[red]No current trusted window: {exc}[/red]")
+            raise typer.Exit(code=1)
+        return window.starts_at // 1000, window.ends_at // 1000, f"{window.client_patch} (verified: {window.source})"
+    if start_time:
+        try:
+            parsed = datetime.fromisoformat(start_time)
+        except ValueError:
+            raise typer.BadParameter("must be an ISO-8601 time such as 2026-09-24T07:00:00Z", param_hint="--start-time")
+        if parsed.tzinfo is None:
+            raise typer.BadParameter("include a timezone, e.g. a trailing Z for UTC", param_hint="--start-time")
+        return int(parsed.timestamp()), None, None
+    return None, None, None
 
 
 def _format_epoch_ms(ms: int | None) -> str:
@@ -373,6 +434,14 @@ def validate_live_data_command(
     console.print(f"Malformed placements: {report.malformed_placements}")
     console.print(f"Duplicate match IDs: {report.duplicate_match_ids}")
     console.print(f"Participants without units: {report.participants_without_units}")
+    console.print(f"  Source-empty participants: {report.source_empty_participants}")
+    console.print(f"  Unexpected participants without units: {report.unexpected_participants_without_units}")
+    if report.source_empty_participants:
+        console.print(
+            f"[bold yellow]  {report.source_empty_participants} participant(s) were sent by Riot with an empty "
+            "or missing `units` list. They are kept as stored (placement intact) and excluded only from "
+            "unit-observable denominators; a warning, not corruption.[/bold yellow]"
+        )
 
     if report.unresolved_unreal_matches:
         console.print(

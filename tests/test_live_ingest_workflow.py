@@ -42,6 +42,8 @@ def test_ingest_is_sized_by_inputs_and_never_degraded() -> None:
     assert '--players "${PLAYERS}"' in ingest_line
     assert '--matches-per-player "${MATCHES_PER_PLAYER}"' in ingest_line
     assert '--sampling "${SAMPLING}"' in ingest_line
+    assert "--current-trusted-window" in ingest_line  # production never crawls unbounded history
+    assert "--start-time" not in ingest_line
     commands = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
     assert not any("--allow-degraded-costs" in line for line in commands)
     assert "SAMPLING=high_elo" in text and "SAMPLING=challenger" in text
