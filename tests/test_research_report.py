@@ -312,6 +312,13 @@ def test_workflow_runs_only_the_report_and_uploads_it() -> None:
     assert "secrets.RIOT_API_KEY" not in text and "RIOT_API_KEY:" not in text
 
 
+def test_workflow_installs_the_postgres_driver() -> None:
+    """Regression (run 36250725485): `pip install -e .` omits the optional
+    psycopg driver, so the report failed before connecting."""
+    install = next(line for line in _text().splitlines() if "pip install" in line)
+    assert '".[postgres]"' in install or ".[dev,postgres]" in install
+
+
 def test_workflow_never_prints_the_database_url() -> None:
     for line in _text().splitlines():
         if "echo" in line.lower():
