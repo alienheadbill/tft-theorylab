@@ -27,7 +27,7 @@ from .experiments import (
     list_experiments,
     update_experiment,
 )
-from .ingest import DEFAULT_MAX_LADDER_PAGES, MAX_LADDER_PAGES, ingest_ladder
+from .ingest import DEFAULT_MAX_LADDER_PAGES, MAX_LADDER_PAGES, default_run_id, ingest_ladder
 from .sampling import SAMPLING_MODES
 from .unreal_patch import NoCurrentTrustedWindow
 from .unreal_patch import current_trusted_window as current_trusted_window_for
@@ -275,21 +275,33 @@ def ingest_riot(
         console.print(f"Using CommunityDragon costs for set {set_number}")
 
     target = settings.database_url or settings.db_path
+    run_id = default_run_id(int(datetime.now(timezone.utc).timestamp() * 1000))
     with Database(target) as db, RiotClient(
         settings.riot_api_key, platform=settings.platform, region=settings.region
     ) as client:
-        result = ingest_ladder(
-            client,
-            db,
-            player_limit=players or 25,
-            matches_per_player=matches_per_player,
-            sampling_mode=sampling_mode,
-            seed_allocation=seed_allocation,
-            max_ladder_pages=max_ladder_pages,
-            cost_lookup=cost_lookup,
-            history_start_time=history_start,
-            history_end_time=history_end,
-        )
+        try:
+            result = ingest_ladder(
+                client,
+                db,
+                player_limit=players or 25,
+                matches_per_player=matches_per_player,
+                sampling_mode=sampling_mode,
+                seed_allocation=seed_allocation,
+                max_ladder_pages=max_ladder_pages,
+                cost_lookup=cost_lookup,
+                history_start_time=history_start,
+                history_end_time=history_end,
+                run_id=run_id,
+            )
+        except Exception as exc:
+            # Not swallowed: the traceback follows. Matches stored before the
+            # failure stay stored; the seed ledger/provenance for this run was
+            # never finalized, so the next run's rotation ignores it.
+            console.print(
+                f"[red]Ingest run {run_id} failed ({type(exc).__name__}); the run remains incomplete "
+                "and seed rotation will ignore it on the next run.[/red]"
+            )
+            raise
         windows = available_balance_windows(db)
         total_participants = db.query_one("SELECT COUNT(*) FROM participants")[0]
 
@@ -303,6 +315,7 @@ def ingest_riot(
     console.print(f"  Sampling mode: {result.sampling_mode}")
     console.print(f"  Requested seed players: {result.requested_seeds}")
     console.print(f"  Run id: {result.run_id}")
+    console.print(f"  Ingest run status: {result.run_status}")
     console.print(f"  Seed players: {result.seed_players}")
     console.print(
         "  Seed cohorts (sampling provenance: how lobbies were discovered, not every player's rank):"
@@ -357,9 +370,14 @@ def ingest_riot(
             "  Note: startTime narrows what Riot returns; each match's patch and balance window "
             "still come from normal classification -- see validate-live-data."
         )
-    console.print(f"  Seeds recorded in the sampling ledger: {result.seed_ledger_rows}")
     console.print(
-        f"  Discovery provenance rows: {result.discovery_rows} "
+        f"  Database deadlock retries: {result.deadlock_retries} "
+        f"(matches needing a retry: {result.matches_with_deadlock_retry}, "
+        f"recovered: {result.deadlocks_recovered})"
+    )
+    console.print(f"  Seed ledger rows finalized: {result.seed_ledger_rows}")
+    console.print(
+        f"  Provenance rows finalized: {result.discovery_rows} "
         f"(for {result.matches_with_provenance} stored matches, each stored once)"
     )
     console.print(f"  Balance windows found: {', '.join(w for w, _, _ in windows) or 'none'}")

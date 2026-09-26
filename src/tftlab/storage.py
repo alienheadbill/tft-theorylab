@@ -120,6 +120,45 @@ CREATE TABLE IF NOT EXISTS match_discoveries (
 );
 """
 
+# Run completion. `seed_samples` rows only count for seed rotation once
+# their run is `completed` here (see `Database.seed_last_sampled`), so an
+# interrupted run -- or ledger rows written before this table existed --
+# never advances rotation. Nothing is ever deleted: incomplete runs stay as
+# audit evidence.
+INGEST_RUNS_SQL = """
+CREATE TABLE IF NOT EXISTS ingest_runs (
+    run_id TEXT PRIMARY KEY,
+    started_at BIGINT NOT NULL,
+    completed_at BIGINT,
+    status TEXT NOT NULL,
+    failure TEXT
+);
+"""
+
+#: `ingest_runs.status` values. Only COMPLETED counts for rotation.
+RUN_STARTED = "started"
+RUN_COMPLETED = "completed"
+RUN_FAILED = "failed"
+
+#: What a read-only consumer (the web app) needs to exist, table -> columns
+#: it relies on (including every column added by a migration). Checked by
+#: `Database.open_existing`, which never creates or migrates anything.
+REQUIRED_READ_SCHEMA: dict[str, tuple[str, ...]] = {
+    "matches": ("match_id", "game_datetime", "patch", "balance_window", "queue_id", "payload_json"),
+    "participants": ("match_id", "participant_index", "placement", "level"),
+    "units": ("match_id", "participant_index", "unit_index", "character_id", "cost", "items_json"),
+    "traits": ("match_id", "participant_index", "trait_name"),
+    "experiments": ("experiment_id", "slug"),
+    "experiment_tags": ("experiment_id", "tag"),
+    "experiment_field_notes": ("note_id", "experiment_id", *(c for c, _ in FIELD_NOTE_COLUMN_MIGRATIONS)),
+}
+
+
+class SchemaUnavailable(RuntimeError):
+    """An existing database is missing tables/columns a read-only consumer
+    needs. Raised instead of creating or migrating anything."""
+
+
 SAMPLING_INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_seed_samples_puuid ON seed_samples(puuid, sampled_at);
 CREATE INDEX IF NOT EXISTS idx_match_discoveries_cohort ON match_discoveries(cohort);
@@ -162,20 +201,58 @@ class Database:
     analytics code never has to know which backend it's talking to.
     """
 
-    def __init__(self, target: Path | str) -> None:
+    def __init__(self, target: Path | str, *, initialize_schema: bool = True) -> None:
+        """Open `target` and, by default, create/migrate its schema.
+
+        `initialize_schema=True` is for CLI/ingest/admin and local SQLite:
+        it runs CREATE TABLE / ALTER TABLE / backfills / CREATE INDEX. Code
+        serving requests against an existing database uses
+        `Database.open_existing` instead, which never does.
+        """
         target_str = str(target)
+        self.read_only = not initialize_schema
         if _is_postgres_url(target_str):
             self.dialect = "postgres"
             self.path: Path | None = None
-            self.conn = self._connect_postgres(target_str)
+            self.conn = self._connect_postgres(target_str, read_only=self.read_only)
         else:
             self.dialect = "sqlite"
             self.path = Path(target)
-            self.conn = self._connect_sqlite(self.path)
-        self._init_schema()
+            self.conn = self._connect_sqlite(self.path, read_only=self.read_only)
+        if initialize_schema:
+            self._init_schema()
+
+    @classmethod
+    def open_existing(cls, target: Path | str) -> "Database":
+        """Connect to an already-initialized database for reading only.
+
+        Runs no CREATE / ALTER / CREATE INDEX / backfill / migration and no
+        other write. Postgres sessions are opened with
+        `default_transaction_read_only=on` and SQLite files in read-only
+        mode, so an accidental write fails loudly instead of happening. A
+        missing or incompatible schema raises `SchemaUnavailable` rather
+        than being created.
+        """
+        db = cls(target, initialize_schema=False)
+        try:
+            db.verify_read_schema()
+        except Exception:
+            db.close()
+            raise
+        return db
+
+    def verify_read_schema(self) -> None:
+        for table, columns in REQUIRED_READ_SCHEMA.items():
+            try:
+                self.query_all(f"SELECT {', '.join(columns)} FROM {table} WHERE 1 = 0")
+            except Exception as exc:
+                raise SchemaUnavailable(f"required table/columns missing: {table}") from exc
 
     @staticmethod
-    def _connect_sqlite(path: Path) -> sqlite3.Connection:
+    def _connect_sqlite(path: Path, *, read_only: bool = False) -> sqlite3.Connection:
+        if read_only:
+            # Never creates the file (or its directory) and refuses writes.
+            return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
         path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(path)
         conn.execute("PRAGMA journal_mode=WAL")
@@ -183,9 +260,11 @@ class Database:
         return conn
 
     @staticmethod
-    def _connect_postgres(url: str) -> Any:
+    def _connect_postgres(url: str, *, read_only: bool = False) -> Any:
         import psycopg  # optional dependency; only required in production
 
+        if read_only:
+            return psycopg.connect(url, options="-c default_transaction_read_only=on")
         return psycopg.connect(url)
 
     def _init_schema(self) -> None:
@@ -199,6 +278,7 @@ class Database:
         # idempotent and never touches match data.
         self._execute_script(EXPERIMENT_TABLES_SQL)
         self._execute_script(SAMPLING_TABLES_SQL)
+        self._execute_script(INGEST_RUNS_SQL)
         self._run_migrations()
         self._execute_script(INDEXES_SQL)
         self._execute_script(EXPERIMENT_INDEXES_SQL)
@@ -458,27 +538,99 @@ class Database:
         self.close()
 
     def seed_last_sampled(self) -> dict[str, int]:
-        """Sampling ledger: PUUID -> when it was last sampled (epoch ms)."""
-        return {p: int(t) for p, t in self.query_all("SELECT puuid, MAX(sampled_at) FROM seed_samples GROUP BY puuid")}
+        """Sampling ledger: PUUID -> when it was last sampled (epoch ms),
+        counting only runs that completed (`ingest_runs.status =
+        'completed'`). Rows from an interrupted run, or with no
+        `ingest_runs` row at all, are kept but ignored."""
+        rows = self.query_all(
+            "SELECT s.puuid, MAX(s.sampled_at) FROM seed_samples s "
+            "JOIN ingest_runs r ON r.run_id = s.run_id "
+            "WHERE r.status = ? AND r.completed_at IS NOT NULL GROUP BY s.puuid",
+            (RUN_COMPLETED,),
+        )
+        return {p: int(t) for p, t in rows}
 
-    def record_seed_samples(self, run_id: str, seeds: Sequence[tuple[str, str]], sampled_at: int) -> None:
-        """Ledger rows for `(puuid, cohort)` seeds sampled in `run_id`."""
+    def start_ingest_run(self, run_id: str, started_at: int) -> None:
+        """Register `run_id` as started (not yet counted for rotation). A
+        run id is used once; reusing one is an error."""
+        if self.query_one("SELECT 1 FROM ingest_runs WHERE run_id = ?", (run_id,)) is not None:
+            raise ValueError(f"ingest run {run_id!r} already exists")
+        self.execute(
+            "INSERT INTO ingest_runs (run_id, started_at, status) VALUES (?, ?, ?)",
+            (run_id, started_at, RUN_STARTED),
+        )
+        self.commit()
+
+    def finalize_ingest_run(
+        self,
+        run_id: str,
+        seeds: Sequence[tuple[str, str]],
+        discoveries: Sequence[tuple[str, str, str]],
+        *,
+        sampled_at: int,
+        completed_at: int,
+    ) -> None:
+        """Atomically write the run's ledger rows and provenance rows and
+        mark it completed -- one transaction, so either all of it is
+        visible to seed rotation or none of it is."""
+        try:
+            self._insert_seed_samples(run_id, seeds, sampled_at)
+            self._insert_match_discoveries(run_id, discoveries, sampled_at)
+            updated = self.execute(
+                "UPDATE ingest_runs SET status = ?, completed_at = ? WHERE run_id = ? AND status = ?",
+                (RUN_COMPLETED, completed_at, run_id, RUN_STARTED),
+            ).rowcount
+            if updated != 1:
+                raise RuntimeError(f"ingest run {run_id!r} is not in the started state")
+        except Exception:
+            self.conn.rollback()
+            raise
+        self.commit()
+
+    def mark_ingest_run_failed(self, run_id: str, failure: str) -> None:
+        """Best effort: record that `run_id` failed (exception type only).
+        It stays incomplete either way; this never raises."""
+        try:
+            self.conn.rollback()
+            self.execute(
+                "UPDATE ingest_runs SET status = ?, failure = ? WHERE run_id = ? AND status = ?",
+                (RUN_FAILED, failure[:200], run_id, RUN_STARTED),
+            )
+            self.commit()
+        except Exception:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+
+    def _insert_seed_samples(self, run_id: str, seeds: Sequence[tuple[str, str]], sampled_at: int) -> None:
         self.executemany(
             "INSERT INTO seed_samples (run_id, puuid, cohort, sampled_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
             [(run_id, puuid, cohort, sampled_at) for puuid, cohort in seeds],
         )
+
+    def _insert_match_discoveries(
+        self, run_id: str, discoveries: Sequence[tuple[str, str, str]], discovered_at: int
+    ) -> None:
+        self.executemany(
+            "INSERT INTO match_discoveries (match_id, run_id, puuid, cohort, discovered_at) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+            [(match_id, run_id, puuid, cohort, discovered_at) for match_id, puuid, cohort in discoveries],
+        )
+
+    def record_seed_samples(self, run_id: str, seeds: Sequence[tuple[str, str]], sampled_at: int) -> None:
+        """Ledger rows for `(puuid, cohort)` seeds sampled in `run_id`
+        (standalone; ingest uses `finalize_ingest_run`)."""
+        self._insert_seed_samples(run_id, seeds, sampled_at)
         self.commit()
 
     def record_match_discoveries(
         self, run_id: str, discoveries: Sequence[tuple[str, str, str]], discovered_at: int
     ) -> None:
         """Provenance rows for `(match_id, puuid, cohort)`: which seed (and
-        its cohort) surfaced which stored match in `run_id`."""
-        self.executemany(
-            "INSERT INTO match_discoveries (match_id, run_id, puuid, cohort, discovered_at) "
-            "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-            [(match_id, run_id, puuid, cohort, discovered_at) for match_id, puuid, cohort in discoveries],
-        )
+        its cohort) surfaced which stored match in `run_id` (standalone;
+        ingest uses `finalize_ingest_run`)."""
+        self._insert_match_discoveries(run_id, discoveries, discovered_at)
         self.commit()
 
     def has_match(self, match_id: str) -> bool:

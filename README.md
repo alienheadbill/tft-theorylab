@@ -168,10 +168,21 @@ Match IDs are then deduplicated across all seed histories and cohorts before any
 
 ### Sampling ledger and discovery provenance (additive tables)
 
-- `seed_samples(run_id, puuid, cohort, sampled_at)` -- one row per seed whose history request succeeded in a run (an empty in-window history counts; a failed request does not, so that player stays eligible). Only the PUUID is stored: no Riot ID, name or summoner id. This is what rotation reads.
+- `seed_samples(run_id, puuid, cohort, sampled_at)` -- one row per seed whose history request succeeded in a run (an empty in-window history counts; a failed request does not, so that player stays eligible). Only the PUUID is stored: no Riot ID, name or summoner id. Rotation reads only rows whose run is **completed** in `ingest_runs` (below).
 - `match_discoveries(match_id, run_id, puuid, cohort, discovered_at)` -- many-to-many provenance: one row per stored match per seed that surfaced it in a run. The match itself stays one canonical row in `matches`. Rows are written only for matches that are stored (inserted this run or already present), not for failed fetches or non-ranked queues.
 
 Run ids are `gh-<GITHUB_RUN_ID>-<attempt>` in Actions and `local-<epoch ms>` otherwise.
+
+### Ingest runs: completion, resume and deadlock retry
+
+- `ingest_runs(run_id, started_at, completed_at, status, failure)` -- every ingest registers its run as `started` before touching Riot. **A run is completed only when `status = 'completed'` and `completed_at` is set**, which happens in one final transaction together with that run's `seed_samples` and `match_discoveries` rows. If anything fails before or during that transaction, none of the three is visible as completed; the run is marked `failed` (best effort, exception type only) or simply stays `started` if the process died.
+- `seed_last_sampled()` (what rotation reads) joins `seed_samples` to `ingest_runs` and counts only completed runs. Ledger rows with no completed run -- an interrupted run, or rows written by the pre-`ingest_runs` build (e.g. the first five-cohort run that failed on a deadlock) -- are ignored automatically and never deleted; they remain audit evidence.
+- **Resume:** matches are still stored one transaction each, so a run that dies after storing N matches keeps those N. Because it never completed, the next run selects the same eligible seeds, their histories return the same IDs, the N stored matches are skipped by `has_match` (never duplicated), the missing ones are fetched, and the new run records provenance for both before completing -- only then do those seeds advance rotation.
+- **Deadlocks:** a PostgreSQL deadlock (SQLSTATE `40P01`, psycopg `DeadlockDetected`) while storing one match rolls that match's transaction back and retries the same match after 0.5 s, then 1 s (3 attempts in all). If it still deadlocks, the run fails. No other database error is retried. The report shows `Database deadlock retries` (and how many matches needed one / recovered); a failed run prints its run id and that seed rotation will ignore it.
+
+### Database access: the web app never runs schema setup
+
+`Database(target)` (CLI, ingest, admin, local SQLite, demo) creates and migrates the schema: CREATE TABLE, ALTER TABLE, backfills, CREATE INDEX. Web requests against a configured `DATABASE_URL` use `Database.open_existing(target)` instead, which runs none of that: Postgres sessions are opened with `default_transaction_read_only=on` (SQLite in `mode=ro`), so any accidental write fails loudly, and the tables/columns the app reads are checked first. A missing or incompatible schema returns the existing 503 "production database unavailable" response -- it is never created from a request. The web app is read-only; no API request writes anything.
 
 ## Comp-discovery engine (carry + partners + items + traits)
 
@@ -440,6 +451,8 @@ Both URLs point at the same database; only the host/network path differs. Gettin
 - `DATABASE_URL` -- the production Postgres database's **External** Connection String (from the Render Postgres dashboard, not the Internal one used by the web service).
 
 Neither secret is ever printed in the workflow's logs.
+
+**Operating rule:** after merging anything that deploys (especially schema changes), wait for the Render deployment to finish before starting a production ingest. This is defense in depth only: web requests no longer run schema maintenance, and a transient deadlock on one match is retried, so correctness does not depend on that timing.
 
 **Running it:** GitHub → **Actions** tab → **Live ingest** in the left-hand workflow list → **Run workflow** button → **explicitly select `main`** as the branch (this repository's GitHub default branch is not `main`, so the dropdown will not default to it -- picking anything else fails immediately, see below) → **Run workflow**.
 
