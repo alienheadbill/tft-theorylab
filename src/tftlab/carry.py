@@ -13,7 +13,11 @@ emblem + Guinsoo's), which is exactly what lets off-meta carries surface.
 
 Item classes come from CommunityDragon stat metadata (`ItemMeta.stat_effects`
 and readable `tags`, committed as `data/item_stats.json` so analytics never
-calls the network):
+calls the network), keyed by the exact item ids Match-V1 boards store. For
+Set 18 those are `DA_*` ids (`DA_GargoyleStoneplate`, `DA_GuinsoosRageblade`,
+...) whose own CommunityDragon entries have no named effects; each carries
+the stats of its `TFT_Item_*` counterpart only when that alias is verified
+unambiguous (see `tftlab.cdragon.item_stats_snapshot`):
 
 - OFFENSIVE: any stat that raises the holder's own damage (see
   `OFFENSIVE_EFFECTS` / `OFFENSIVE_TAGS`). An item with offensive *and*
