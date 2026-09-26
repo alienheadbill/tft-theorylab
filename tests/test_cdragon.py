@@ -99,3 +99,47 @@ def test_cost_from_unit_falls_back_to_rarity_when_unknown_to_cdragon() -> None:
     # never heard of; the rarity+1 fallback must still apply.
     unit = {"character_id": "TFT99_NotReal", "rarity": 2}
     assert cost_from_unit(unit, cost_lookup=meta.cost_for_champion) == 3
+
+
+# Shapes copied from the live Set 18 bundle (cdragon-live inventory, 2026-09-26).
+SET18_PAYLOAD = {
+    "setData": [
+        {
+            "number": 18,
+            "champions": [
+                {"apiName": "DA_18_Elise", "name": "Elise", "cost": 2, "role": None, "traits": ["Coven", "Vanguard"]},
+                {"apiName": "DA_18_Kobuko", "name": "Kobuko", "cost": 1, "role": "APTank", "traits": ["Sprykin", "Brawler"]},
+            ],
+            "traits": [],
+        }
+    ],
+    "items": [
+        {
+            "apiName": "TFT_Item_WarmogsArmor", "name": "Warmog's Armor",
+            "composition": ["TFT_Item_GiantsBelt", "TFT_Item_GiantsBelt"],
+            "effects": {"BonusPercentHP": 0.18, "Health": 500.0}, "tags": ["{7ea41d13}", "Health"],
+            "associatedTraits": [],
+        },
+        {
+            "apiName": "TFT_Item_RabadonsDeathcap", "name": "Rabadon's Deathcap",
+            "composition": ["TFT_Item_NeedlesslyLargeRod", "TFT_Item_NeedlesslyLargeRod"],
+            "effects": {"AP": 55.0, "BonusDamage": 0.15, "{1543aa48}": 1.0}, "tags": ["{7ea41d13}", "AbilityPower"],
+            "associatedTraits": [],
+        },
+    ],
+}
+
+
+def test_champion_role_is_preserved_exactly_and_null_stays_none() -> None:
+    meta = parse_set_metadata(SET18_PAYLOAD, patch="latest")
+    assert meta.champions["DA_18_Kobuko"].role == "APTank"
+    assert meta.champions["DA_18_Elise"].role is None  # never guessed
+
+
+def test_item_stat_effects_and_tags_drop_unresolved_hashes() -> None:
+    items = parse_set_metadata(SET18_PAYLOAD, patch="latest").items
+    assert items["TFT_Item_WarmogsArmor"].stat_effects == ("BonusPercentHP", "Health")
+    assert items["TFT_Item_WarmogsArmor"].tags == ("Health",)
+    assert items["TFT_Item_RabadonsDeathcap"].stat_effects == ("AP", "BonusDamage")
+    assert items["TFT_Item_RabadonsDeathcap"].tags == ("AbilityPower",)
+    assert items["TFT_Item_RabadonsDeathcap"].associated_traits == ()

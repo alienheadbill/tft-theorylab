@@ -63,6 +63,15 @@ Riot development keys expire periodically, so a 401/403 after the key worked pre
 
 By default, `ingest-riot` resolves champion shop costs from CommunityDragon and **aborts** (not silently falls back to `rarity + 1`) if that fetch fails, printing exactly why. Pass `--allow-degraded-costs` to proceed anyway; the run and its printed report are then clearly marked `DEGRADED INGEST`.
 
+### Carry eligibility and champion roles (status)
+
+A carry observation is still a champion finishing a board with **>= 2 completed items** (2-star misses included). A role-aware refinement -- so that a normal Tank with Warmog's / Gargoyle / Dragon's Claw stops counting as a carry, while an off-meta tank built with offensive items still does -- is **not implemented yet**, because the metadata it needs is not there:
+
+- CommunityDragon's `cdragon/tft/en_us.json` has a champion **`role`** field (values like `APTank`, `ADTank`, `APCaster`), and every Set 18 champion has the key -- but on 2026-09-26 only **2 of 74 shop champions** had a value (`DA_18_Kobuko` = `APTank`, `DA_18_Alune` = `APCaster`); Elise, Ornn, Malphite, Caitlyn, Ahri and the rest are `null`. The other non-null roles are PvE units (Krug, Murkwolf, Rift Herald, ...). Per-champion character files were not found at CommunityDragon's known paths.
+- Item metadata **is** usable: each item's `effects` names its stats (`AD`, `AP`, `AS`, `CritChance` vs `Health`, `Armor`, `MagicResist`), and some items carry readable `tags` (`AbilityPower`, `AttackDamage`, `CritChance`, `AttackSpeed`, `Health`, `Mana`, `Heal`).
+
+`tftlab.cdragon` now preserves both (`ChampionMeta.role`, exactly as served or `None`; `ItemMeta.stat_effects` / `tags` / `associated_traits`), and the opt-in live test prints the full role/item inventory so it is visible when the role field gets populated. No role is ever guessed from a name or trait.
+
 ## Current scoring
 
 `carry_commitment_stats` (`tftlab/analytics/commitment.py`) still exposes a simple, Bayesian-shrunk `opportunity_score` per carry, combining Top4/win strength, rarity, and confidence -- this backs the existing `/api/carries` leaderboard and CLI `leaderboard` command unchanged. It deliberately does **not** reward 3-star hit rate; hit and miss performance are shown separately so a powerful-but-fragile reroll isn't confused with a reliable line.
@@ -451,6 +460,38 @@ Both URLs point at the same database; only the host/network path differs. Gettin
 - `DATABASE_URL` -- the production Postgres database's **External** Connection String (from the Render Postgres dashboard, not the Internal one used by the web service).
 
 Neither secret is ever printed in the workflow's logs.
+
+### Patch-wide collection plan (18.3)
+
+**Goal: broad sampling across the whole 18.3 window** (2026-09-24T07:00:00Z to 2026-10-06T00:00:00Z) -- chronological coverage of the patch through many different ladder players. It is **not** exhaustive capture of every NA ranked game, and not longitudinal capture of every game each selected player plays.
+
+**Recommendation: two runs per day, about 12 hours apart (e.g. ~08:00 and ~20:00 UTC), each with the five-cohort allocation `challenger=15 grandmaster=15 master=20 diamond=25 platinum=25`, `matches_per_player=10`, until the window closes.** Manual `workflow_dispatch` only; nothing is scheduled.
+
+Why, from the first successful five-cohort run (100 seeds: 589 history references, 560 unique IDs, 458 new ranked matches, 13 zero-window seeds, 4.9% in-run overlap):
+
+- **History depth.** The 87 active seeds averaged ~6.8 window games each after ~2 days of the patch, i.e. roughly 3-5 ranked games per day for a typical sampled player. A 10-game request therefore reaches back about 2-3 days for a typical seed and about 1 day for a heavy grinder. Runs 12 hours apart leave no chronological gap even for players well above average; once a day would still cover most seeds but would drop part of the heaviest grinders' days. Raising `matches_per_player` would mostly re-read the same players' older games -- breadth beats depth because high-Elo lobbies overlap.
+- **Breadth and rotation.** Each run takes 100 seeds, never-sampled first. Challenger (221 players at 15/run) runs out of never-sampled players after ~15 runs (~7.5 days at this cadence) and then re-samples the least recently sampled -- a week later, almost entirely new games. Grandmaster (331), Master (1,471) and the Diamond/Platinum candidate pools last longer.
+- **Request volume.** About 690 Riot requests per run (≈27 ladder + 100 histories + ≈560 match bodies), ~13-15 minutes at development-key rate limits (100 requests / 2 minutes). Two runs a day is ~1,400 requests -- far inside the limits; the real constraint is the manual key refresh below.
+- **Duplicates.** In-run overlap was 4.9%; cross-run duplicates will rise as more lobbies are already stored (the 14.3% seen during the resume run was inflated by the resume itself). Stored matches are skipped without being re-fetched, so duplicates cost only history references.
+- **Remaining days.** From 2026-09-26 to 2026-10-06 there are ~9.5 days, so ~19 runs. If yields stay near the first run and decline gradually, expect roughly **6,000-8,000 more 18.3 matches** -- an estimate, not a promise.
+
+**When to back off:** the ingest report prints `Collection value (is another run worth it?)` -- never-sampled, previously-sampled and zero-history seed percentages -- next to the already-stored duplicate rate, inserted-per-seed and new-match yield. If never-sampled seeds fall below ~50% or new-match yield stays below ~40% for two consecutive runs, drop to one run per day.
+
+**Limitations:** seeds are ladder players, so the population is what they played (see "Data population and seed cohorts"); a heavy grinder's games older than their last 10 are not requested; Diamond/Platinum candidates come from the first pages of each division (reported as capped when so).
+
+**Patch end is strict.** Production always runs `--current-trusted-window`. At 2026-10-06T00:00:00Z (end exclusive) there is no current trusted window unless 18.4's real verified window has been registered, so the ingest step fails instead of crawling another patch or going unbounded. 18.4 is added only when its real window is known.
+
+### Riot development key operations
+
+Riot's Developer Portal says development API keys deactivate every 24 hours. Before a collection day (and whenever `verify-riot` fails with 401):
+
+1. Open the Riot Developer Portal (developer.riotgames.com) and sign in.
+2. Reset / regenerate the development API key and copy it.
+3. In GitHub: **Settings → Secrets and variables → Actions → `RIOT_API_KEY` → Update**, paste, save.
+4. Start the run; its `Verify Riot API` step confirms the new key before anything is ingested.
+5. Never paste the key into logs, issues, PRs, the README or chat.
+
+With an expired key, `Verify Riot API` exits 1 with: *"401 Unauthorized -- RIOT_API_KEY is invalid or expired. Reset the development key in the Riot Developer Portal and replace the GitHub Actions RIOT_API_KEY secret."* and the ingest step never runs. If a key expires mid-run, the ingest prints the same guidance, the run stays incomplete, and seed rotation ignores it. The key is never printed. Logging in to Riot or regenerating keys is not automated.
 
 **Operating rule:** after merging anything that deploys (especially schema changes), wait for the Render deployment to finish before starting a production ingest. This is defense in depth only: web requests no longer run schema maintenance, and a transient deadlock on one match is retried, so correctness does not depend on that timing.
 

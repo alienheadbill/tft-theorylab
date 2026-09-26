@@ -113,3 +113,59 @@ def test_live_game_art_refresh_integrity(tmp_path) -> None:
             live_hashes = {k: v["sha256"] for k, v in live[kind].items()}
             committed_hashes = {k: v["sha256"] for k, v in committed[kind].items()}
             assert live_hashes == committed_hashes, f"committed {kind} art is stale; run the Game art refresh workflow"
+
+
+def metadata_inventory(raw: dict) -> dict:
+    """What CommunityDragon exposes about champion roles and item stats for
+    the current set -- printed by the live test below so carry-eligibility
+    metadata can be checked against the real feed (field names, raw values,
+    coverage, special units). On 2026-09-26 (Set 18) every champion had a
+    `role` key but only 2 of 74 shop champions had a non-null value, so a
+    role-based carry rule could not be built on it; this test's output shows
+    when that changes."""
+    from collections import Counter
+
+    sets = raw.get("setData") or raw.get("sets") or []
+    current = max(sets, key=lambda s: int(s.get("number") or 0))
+    champions = current.get("champions", [])
+    champion_keys = Counter(k for c in champions for k in c)
+    role_like = sorted(k for k in champion_keys if "role" in k.lower() or "class" in k.lower() or "archetype" in k.lower())
+    shop = [c for c in champions if 1 <= int(c.get("cost") or 0) <= 5 and c.get("traits")]
+    items = [i for i in raw.get("items", []) if str(i.get("apiName", "")).startswith(("TFT_Item_", f"TFT{current.get('number')}_Item"))]
+    effect_keys = Counter(k for i in items for k in (i.get("effects") or {}))
+    tag_values = Counter(t for i in items for t in (i.get("tags") or []))
+    samples = [i for i in items if any(s in str(i.get("apiName")) for s in (
+        "Warmog", "Gargoyle", "DragonsClaw", "Rabadon", "InfinityEdge", "GuinsoosRageblade", "BrambleVest", "JeweledGauntlet",
+    ))] + [i for i in items if i.get("associatedTraits")][:4]
+    return {
+        "set_number": current.get("number"),
+        "champion_keys": dict(champion_keys),
+        "role_like_fields": {k: dict(Counter(str(c.get(k)) for c in champions)) for k in role_like},
+        "shop_champions": [
+            {k: c.get(k) for k in ("apiName", "name", "cost", *role_like, "traits")} for c in shop
+        ],
+        "non_shop_units": [
+            {k: c.get(k) for k in ("apiName", "name", "cost", *role_like, "traits")} for c in champions if c not in shop
+        ],
+        "shop_champions_missing_role_fields": [c.get("apiName") for c in shop if role_like and not all(c.get(k) for k in role_like)],
+        "item_keys": dict(Counter(k for i in items for k in i)),
+        "item_effect_keys": dict(effect_keys.most_common()),
+        "item_tag_values": dict(tag_values.most_common(40)),
+        "sample_items": [
+            {k: i.get(k) for k in ("apiName", "name", "composition", "effects", "tags", "associatedTraits", "incompatibleTraits", "unique")}
+            for i in samples
+        ],
+        "elise": [c for c in champions if "Elise" in str(c.get("apiName"))],
+    }
+
+
+@requires_live_network
+def test_print_role_and_item_metadata_inventory(tmp_path, capsys) -> None:
+    with CommunityDragonClient(cache_dir=tmp_path) as client:
+        raw = client.fetch_raw("latest", use_cache=False)
+    inventory = metadata_inventory(raw)
+    with capsys.disabled():
+        print("\nCDRAGON METADATA INVENTORY")
+        print(json.dumps(inventory, indent=1, ensure_ascii=False, default=str))
+    assert inventory["shop_champions"]
+

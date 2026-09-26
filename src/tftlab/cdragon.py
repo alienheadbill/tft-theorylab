@@ -19,6 +19,11 @@ class ChampionMeta:
     #: Traits as CommunityDragon lists them (display names). Shop champions have at least
     #: one; some special units have none, others (with a cost) have traits too.
     traits: tuple[str, ...] = ()
+    #: CommunityDragon's champion `role` (e.g. "APTank", "ADTank", "APCaster")
+    #: exactly as served, or None when it is null. For Set 18 (checked
+    #: 2026-09-26) only 2 of 74 shop champions have a value, so nothing may
+    #: treat a missing role as meaning anything.
+    role: str | None = None
 
 
 @dataclass(frozen=True)
@@ -29,6 +34,15 @@ class ItemMeta:
     #: Component apiNames this item is built from (empty for components
     #: and uncraftable items).
     composition: tuple[str, ...] = ()
+    #: Named stat keys from CommunityDragon's `effects` (e.g. "AD", "AP",
+    #: "AS", "CritChance", "Health", "Armor", "MagicResist"); hashed
+    #: `{xxxxxxxx}` keys are dropped because their meaning is unknown.
+    stat_effects: tuple[str, ...] = ()
+    #: Readable `tags` (e.g. "AbilityPower", "AttackDamage", "Health");
+    #: hashed tags are dropped for the same reason.
+    tags: tuple[str, ...] = ()
+    #: Trait apiNames the item is tied to (`associatedTraits`, e.g. emblems).
+    associated_traits: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -65,6 +79,11 @@ def _icon_url(patch: str, relative_path: str | None) -> str | None:
     return f"{CDRAGON_BASE}/{patch}/game/{path}"
 
 
+def _readable(values: Any) -> tuple[str, ...]:
+    """Drop CommunityDragon's unresolved `{hash}` names, keep order."""
+    return tuple(str(v) for v in (values or []) if v and not str(v).startswith("{"))
+
+
 def _set_number_of(entry: dict[str, Any]) -> int:
     return int(entry.get("number") or 0)
 
@@ -99,6 +118,7 @@ def parse_set_metadata(
             cost=int(c.get("cost") or 0),
             icon_url=_icon_url(patch, c.get("squareIcon") or c.get("icon")),
             traits=tuple(str(t) for t in (c.get("traits") or []) if t),
+            role=str(c["role"]) if c.get("role") else None,
         )
         for c in chosen.get("champions", [])
         if c.get("apiName")
@@ -118,6 +138,9 @@ def parse_set_metadata(
             name=str(i.get("name") or i["apiName"]),
             icon_url=_icon_url(patch, i.get("icon")),
             composition=tuple(str(x) for x in (i.get("composition") or []) if x),
+            stat_effects=_readable(sorted((i.get("effects") or {}).keys())),
+            tags=_readable(i.get("tags")),
+            associated_traits=tuple(str(t) for t in (i.get("associatedTraits") or []) if t),
         )
         for i in payload.get("items", [])
         if i.get("apiName")
