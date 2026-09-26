@@ -34,33 +34,48 @@ def test_runs_the_four_cli_steps_in_order() -> None:
     assert positions == sorted(positions), "CLI steps must run in the documented order"
 
 
-def test_ingest_is_sized_by_inputs_and_never_degraded() -> None:
-    """The ingest command takes its sizes from the validated inputs (via
-    env vars), and never falls back to unauthoritative rarity+1 costs."""
+COHORT_INPUTS = ("challenger_seeds", "grandmaster_seeds", "master_seeds", "diamond_seeds", "platinum_seeds")
+
+
+def test_ingest_is_sized_by_per_cohort_inputs_and_never_degraded() -> None:
+    """The ingest command takes one seed count per cohort (via env vars)
+    plus the history depth, and never falls back to rarity+1 costs."""
     text = _text()
     ingest_line = next(line for line in text.splitlines() if "tftlab ingest-riot" in line)
-    assert '--players "${PLAYERS}"' in ingest_line
+    for cohort in ("challenger", "grandmaster", "master", "diamond", "platinum"):
+        assert f'--{cohort}-seeds "${{{cohort.upper()}_SEEDS}}"' in ingest_line
     assert '--matches-per-player "${MATCHES_PER_PLAYER}"' in ingest_line
-    assert '--sampling "${SAMPLING}"' in ingest_line
     assert "--current-trusted-window" in ingest_line  # production never crawls unbounded history
     assert "--start-time" not in ingest_line
+    for legacy in ("--players", "--sampling", "--include-master"):
+        assert legacy not in ingest_line  # no legacy weighted mode, no combined cohort
     commands = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
     assert not any("--allow-degraded-costs" in line for line in commands)
-    assert "SAMPLING=high_elo" in text and "SAMPLING=challenger" in text
+
+
+def test_no_combined_elite_cohort_anywhere() -> None:
+    lowered = _text().lower()
+    assert "elite" not in lowered
+    assert "expanded_high_elo" not in lowered
 
 
 def test_inputs_have_conservative_defaults() -> None:
-    """Defaults reproduce the original 10 x 5 Challenger-only run."""
+    """Defaults reproduce the original 10 x 5 Challenger-only run; every
+    cohort is its own visible input."""
     text = _text()
     inputs = text[text.index("inputs:") : text.index("permissions:")]
     for name, kind, default in (
-        ("players", "number", "10"),
+        ("challenger_seeds", "number", "10"),
+        ("grandmaster_seeds", "number", "0"),
+        ("master_seeds", "number", "0"),
+        ("diamond_seeds", "number", "0"),
+        ("platinum_seeds", "number", "0"),
         ("matches_per_player", "number", "5"),
-        ("expanded_high_elo", "boolean", "false"),
     ):
-        block = inputs[inputs.index(f"{name}:") :]
+        block = inputs[inputs.index(f"      {name}:") :]
         assert f"type: {kind}" in block.split("default:")[0]
         assert block.split("default:", 1)[1].split("\n", 1)[0].strip() == default
+    assert "players:" not in inputs.replace("_seeds:", "").replace("matches_per_player:", "")
 
 
 def test_inputs_reach_shell_only_through_env_vars() -> None:
@@ -83,21 +98,29 @@ def _run_preflight(**env: str) -> subprocess.CompletedProcess:
         "GITHUB_REF": "refs/heads/main",
         "RIOT_API_KEY": "fake-riot-key-value",
         "DATABASE_URL": "postgresql://user:fake-password@example.invalid/db",
-        "PLAYERS": "10",
+        "CHALLENGER_SEEDS": "10",
+        "GRANDMASTER_SEEDS": "0",
+        "MASTER_SEEDS": "0",
+        "DIAMOND_SEEDS": "0",
+        "PLATINUM_SEEDS": "0",
         "MATCHES_PER_PLAYER": "5",
-        "EXPANDED_HIGH_ELO": "false",
     }
     return subprocess.run(
         ["bash", "-e", "-c", _preflight_script()], env={**base, **env}, capture_output=True, text=True
     )
 
 
+_TWENTY_EACH = {f"{c.upper()}": "20" for c in COHORT_INPUTS}
+
+
 @pytest.mark.parametrize(
     "env",
     [
-        {"PLAYERS": "50", "MATCHES_PER_PLAYER": "5", "EXPANDED_HIGH_ELO": "true"},
-        {"PLAYERS": "1", "MATCHES_PER_PLAYER": "1"},
-        {"PLAYERS": "100", "MATCHES_PER_PLAYER": "10"},
+        _TWENTY_EACH,  # 20 per cohort = 100 total
+        {"CHALLENGER_SEEDS": "0", "DIAMOND_SEEDS": "1", "MATCHES_PER_PLAYER": "1"},
+        {"CHALLENGER_SEEDS": "100", "MATCHES_PER_PLAYER": "10"},
+        {"CHALLENGER_SEEDS": "0", "PLATINUM_SEEDS": "100"},
+        {"CHALLENGER_SEEDS": "0", "GRANDMASTER_SEEDS": "30", "MASTER_SEEDS": "30"},
         {},
     ],
 )
@@ -106,21 +129,30 @@ def test_preflight_accepts_in_bounds_inputs(env: dict) -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_preflight_prints_every_cohort_and_the_total() -> None:
+    result = _run_preflight(**_TWENTY_EACH)
+    assert (
+        "Planned seed cohorts: challenger=20 grandmaster=20 master=20 diamond=20 platinum=20 (total 100)"
+        in result.stdout
+    )
+
+
 @pytest.mark.parametrize(
     "env",
     [
-        {"PLAYERS": "0"},
-        {"PLAYERS": "101"},
-        {"PLAYERS": "-5"},
-        {"PLAYERS": "12.5"},
-        {"PLAYERS": ""},
-        {"PLAYERS": "50; echo hacked"},
+        {"CHALLENGER_SEEDS": "0"},  # total 0
+        {**_TWENTY_EACH, "PLATINUM_SEEDS": "21"},  # total 101
+        {"CHALLENGER_SEEDS": "101"},
+        {"DIAMOND_SEEDS": "-5"},
+        {"MASTER_SEEDS": "12.5"},
+        {"GRANDMASTER_SEEDS": ""},
+        {"PLATINUM_SEEDS": "5; echo hacked"},
+        {"DIAMOND_SEEDS": "010"},  # leading zero: would be octal in shell arithmetic
+        {"DIAMOND_SEEDS": "99999999999999999999"},
         {"MATCHES_PER_PLAYER": "0"},
         {"MATCHES_PER_PLAYER": "11"},
         {"MATCHES_PER_PLAYER": "100"},  # the CLI allows 100; production does not
         {"MATCHES_PER_PLAYER": "abc"},
-        {"EXPANDED_HIGH_ELO": "yes"},
-        {"EXPANDED_HIGH_ELO": ""},
         {"GITHUB_REF": "refs/heads/claude/some-feature"},
         {"RIOT_API_KEY": ""},
         {"DATABASE_URL": ""},
@@ -138,7 +170,7 @@ def test_preflight_rejects_bad_inputs_without_echoing_secrets(env: dict) -> None
 def test_preflight_validates_inputs_before_checkout() -> None:
     text = _text()
     preflight = text[text.index("Validate production configuration") : text.index("actions/checkout")]
-    for needle in ("PLAYERS", "MATCHES_PER_PLAYER", "EXPANDED_HIGH_ELO", "-gt 100", "-gt 10"):
+    for needle in (*(c.upper() for c in COHORT_INPUTS), "TOTAL_SEEDS", "MATCHES_PER_PLAYER", "-gt 100", "-gt 10"):
         assert needle in preflight
 
 

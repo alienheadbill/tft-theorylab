@@ -175,3 +175,12 @@ def test_sampling_and_ingest_code_names_no_champion_item_or_trait() -> None:
             line for line in (root / name).read_text().splitlines() if not line.lstrip().startswith("#")
         )
         assert not pattern.search(code), name
+
+
+def test_legacy_modes_rotate_through_the_ledger_and_report_each_tier() -> None:
+    fresh = select_seeds(_fetcher(FULL), total=10, mode="high_elo")
+    rotated = select_seeds(_fetcher(FULL), total=10, mode="high_elo", last_sampled={p: 1 for p in fresh.puuids})
+    assert set(fresh.puuids).isdisjoint(rotated.puuids)
+    assert rotated.by_tier == fresh.by_tier == {"challenger": 4, "grandmaster": 3, "master": 3}
+    assert all(r.never_sampled_selected == r.selected for r in rotated.reports.values())
+    assert "elite" not in rotated.reports

@@ -27,7 +27,7 @@ from .experiments import (
     list_experiments,
     update_experiment,
 )
-from .ingest import ingest_ladder
+from .ingest import DEFAULT_MAX_LADDER_PAGES, MAX_LADDER_PAGES, ingest_ladder
 from .sampling import SAMPLING_MODES
 from .unreal_patch import NoCurrentTrustedWindow
 from .unreal_patch import current_trusted_window as current_trusted_window_for
@@ -163,16 +163,29 @@ def demo(
 
 @app.command("ingest-riot")
 def ingest_riot(
-    players: int = typer.Option(25, min=1, help="High-Elo seed players"),
+    players: int | None = typer.Option(
+        None, min=1, help="Legacy weighted sampling: total seed players (default 25). Not with --<cohort>-seeds."
+    ),
     matches_per_player: int = typer.Option(10, min=1, max=100),
-    sampling: str = typer.Option(
-        "challenger",
+    sampling: str | None = typer.Option(
+        None,
         help=(
-            "Seed sampling: 'challenger' (Challenger only) or 'high_elo' (stratified "
-            "Challenger / Grandmaster / Master, 4:3:3). See tftlab.sampling."
+            "Legacy weighted sampling: 'challenger' (default, Challenger only) or 'high_elo' "
+            "(Challenger / Grandmaster / Master, 4:3:3). Not with --<cohort>-seeds."
         ),
     ),
     include_master: bool = typer.Option(False, help="Same as --sampling high_elo"),
+    challenger_seeds: int | None = typer.Option(None, min=0, help="Seeds from the Challenger cohort"),
+    grandmaster_seeds: int | None = typer.Option(None, min=0, help="Seeds from the Grandmaster cohort"),
+    master_seeds: int | None = typer.Option(None, min=0, help="Seeds from the Master cohort"),
+    diamond_seeds: int | None = typer.Option(None, min=0, help="Seeds from the Diamond cohort (Diamond I-IV)"),
+    platinum_seeds: int | None = typer.Option(None, min=0, help="Seeds from the Platinum cohort (Platinum I-IV)"),
+    max_ladder_pages: int = typer.Option(
+        DEFAULT_MAX_LADDER_PAGES,
+        min=1,
+        max=MAX_LADDER_PAGES,
+        help="Pages read per Diamond/Platinum division (stops early at an empty page)",
+    ),
     current_trusted_window: bool = typer.Option(
         False,
         "--current-trusted-window",
@@ -198,26 +211,49 @@ def ingest_riot(
         ),
     ),
 ) -> None:
-    """Pull recent high-Elo matches from Riot into the configured database.
+    """Pull recent ranked matches from Riot into the configured database.
 
-    Challenger-only by default; `--sampling high_elo` draws seeds
-    deterministically from Challenger, Grandmaster and Master (4:3:3). A
-    safe first real ingest: `tftlab ingest-riot --players 10
-    --matches-per-player 5`.
+    Explicit cohorts: `--challenger-seeds 20 --grandmaster-seeds 20
+    --master-seeds 20 --diamond-seeds 20 --platinum-seeds 20` (each may be
+    0; a cohort left out is 0). Each cohort is selected, counted and
+    reported separately -- there is no combined cohort. Without any
+    `--<cohort>-seeds`, the legacy weighted modes apply (Challenger-only by
+    default; `--sampling high_elo` is Challenger / Grandmaster / Master
+    4:3:3). Either way seeds rotate: never-sampled players first, then the
+    least recently sampled, spread across each tier.
 
-    The population is recent high-Elo NA standard Ranked TFT matches reached
-    through those ladder players -- not all TFT games. Analytics then look at
-    every champion, item and trait in those matches.
+    The population is recent NA standard Ranked TFT matches discovered
+    through those ladder players -- not all TFT games. A seed cohort says how
+    a lobby was discovered, not every player's rank. Analytics look at every
+    champion, item and trait in those matches, all cohorts combined.
     """
     _load_dotenv()
     settings = Settings.from_env()
     if not settings.riot_api_key:
         raise typer.BadParameter("Set RIOT_API_KEY in .env or the environment")
-    sampling_mode = "high_elo" if include_master else sampling
-    if sampling_mode not in SAMPLING_MODES:
-        raise typer.BadParameter(
-            f"--sampling must be one of: {', '.join(SAMPLING_MODES)}", param_hint="--sampling"
-        )
+    cohort_options = {
+        "challenger": challenger_seeds,
+        "grandmaster": grandmaster_seeds,
+        "master": master_seeds,
+        "diamond": diamond_seeds,
+        "platinum": platinum_seeds,
+    }
+    seed_allocation = None
+    if any(v is not None for v in cohort_options.values()):
+        if players is not None or sampling is not None or include_master:
+            raise typer.BadParameter(
+                "use either --<cohort>-seeds or the legacy --players/--sampling/--include-master, not both"
+            )
+        seed_allocation = {c: v or 0 for c, v in cohort_options.items()}
+        if sum(seed_allocation.values()) < 1:
+            raise typer.BadParameter("request at least one seed across the cohorts")
+        sampling_mode = "cohorts"
+    else:
+        sampling_mode = "high_elo" if include_master else (sampling or "challenger")
+        if sampling_mode not in SAMPLING_MODES:
+            raise typer.BadParameter(
+                f"--sampling must be one of: {', '.join(SAMPLING_MODES)}", param_hint="--sampling"
+            )
     # Resolved before any network or database access.
     history_start, history_end, window_label = _history_bounds(current_trusted_window, start_time)
 
@@ -245,9 +281,11 @@ def ingest_riot(
         result = ingest_ladder(
             client,
             db,
-            player_limit=players,
+            player_limit=players or 25,
             matches_per_player=matches_per_player,
             sampling_mode=sampling_mode,
+            seed_allocation=seed_allocation,
+            max_ladder_pages=max_ladder_pages,
             cost_lookup=cost_lookup,
             history_start_time=history_start,
             history_end_time=history_end,
@@ -264,9 +302,25 @@ def ingest_riot(
     console.print("\n[bold]Ingest report[/bold]")
     console.print(f"  Sampling mode: {result.sampling_mode}")
     console.print(f"  Requested seed players: {result.requested_seeds}")
+    console.print(f"  Run id: {result.run_id}")
     console.print(f"  Seed players: {result.seed_players}")
-    for tier, count in result.seeds_by_tier.items():
-        console.print(f"    {tier}: {count} (of {result.ladder_sizes.get(tier, 0)} on the ladder)")
+    console.print(
+        "  Seed cohorts (sampling provenance: how lobbies were discovered, not every player's rank):"
+    )
+    for tier, report in result.cohort_reports.items():
+        console.print(f"    {tier}: {report.selected} (of {report.available} on the ladder); requested {report.requested}")
+        console.print(
+            f"      never sampled before: {report.never_sampled_selected}, "
+            f"previously sampled: {report.previously_sampled_selected}"
+        )
+        console.print(
+            f"      seeds with no matches in the requested history: {report.seeds_with_empty_history}, "
+            f"failed history requests: {report.failed_history_requests}"
+        )
+        console.print(
+            f"      match-ID references: {report.match_id_references}, unique match IDs: {report.unique_match_ids}, "
+            f"ladder requests: {report.ladder_requests}"
+        )
     console.print(f"  Requested histories per seed: {result.histories_per_seed}")
     console.print(f"  Trusted window: {window_label or 'none (ordinary recent history)'}")
     console.print(f"  History lower bound (startTime): {_format_epoch_s(result.history_start_time)}")
@@ -275,6 +329,7 @@ def ingest_riot(
     console.print(f"  Failed history requests: {result.failed_history_requests}")
     console.print(f"  Match-ID references (before dedupe): {result.match_id_references}")
     console.print(f"  Unique match IDs discovered: {result.match_ids_seen}")
+    console.print(f"  Unique match IDs found by more than one cohort: {result.cross_cohort_match_ids}")
     console.print(f"  Matches skipped as duplicates: {result.duplicates_skipped}")
     console.print(f"  Matches fetched: {result.matches_fetched}")
     console.print(f"  Matches inserted: {result.matches_inserted}")
@@ -291,6 +346,11 @@ def ingest_riot(
             "  Note: startTime narrows what Riot returns; each match's patch and balance window "
             "still come from normal classification -- see validate-live-data."
         )
+    console.print(f"  Seeds recorded in the sampling ledger: {result.seed_ledger_rows}")
+    console.print(
+        f"  Discovery provenance rows: {result.discovery_rows} "
+        f"(for {result.matches_with_provenance} stored matches, each stored once)"
+    )
     console.print(f"  Balance windows found: {', '.join(w for w, _, _ in windows) or 'none'}")
     console.print(f"  Total participants now stored: {total_participants}")
     if degraded:

@@ -87,6 +87,44 @@ CREATE INDEX IF NOT EXISTS idx_matches_patch ON matches(patch);
 CREATE INDEX IF NOT EXISTS idx_matches_balance_window ON matches(balance_window);
 """
 
+# Sampling provenance (additive, `CREATE ... IF NOT EXISTS`, never touches
+# match data). Rank here is *how a lobby was discovered* -- the ladder cohort
+# a seed player was on when their history was read -- never the rank of the
+# match or of its participants, which stay unlabelled.
+#
+# `seed_samples` is the rotation ledger: one row per seed whose history
+# request succeeded in a run (an empty in-window history included). Only the
+# PUUID is kept -- no Riot ID, name or summoner id.
+#
+# `match_discoveries` is many-to-many provenance: one row per (stored match,
+# run, seed) that surfaced it. The match itself stays one canonical row in
+# `matches`; a lobby found by several seeds/cohorts just has several rows
+# here. No foreign key to `matches`, so existing maintenance that clears
+# match tables is unaffected; rows are only written for stored matches.
+SAMPLING_TABLES_SQL = """
+CREATE TABLE IF NOT EXISTS seed_samples (
+    run_id TEXT NOT NULL,
+    puuid TEXT NOT NULL,
+    cohort TEXT NOT NULL,
+    sampled_at BIGINT NOT NULL,
+    PRIMARY KEY (run_id, puuid)
+);
+
+CREATE TABLE IF NOT EXISTS match_discoveries (
+    match_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    puuid TEXT NOT NULL,
+    cohort TEXT NOT NULL,
+    discovered_at BIGINT NOT NULL,
+    PRIMARY KEY (match_id, run_id, puuid)
+);
+"""
+
+SAMPLING_INDEXES_SQL = """
+CREATE INDEX IF NOT EXISTS idx_seed_samples_puuid ON seed_samples(puuid, sampled_at);
+CREATE INDEX IF NOT EXISTS idx_match_discoveries_cohort ON match_discoveries(cohort);
+"""
+
 # Columns added to `matches` after its initial release. A fresh database
 # already has these via SCHEMA_SQL above; this only matters for upgrading an
 # older database in place (see `_run_migrations`).
@@ -160,9 +198,11 @@ class Database:
         # EXISTS), so creating them on connect is the whole migration: it's
         # idempotent and never touches match data.
         self._execute_script(EXPERIMENT_TABLES_SQL)
+        self._execute_script(SAMPLING_TABLES_SQL)
         self._run_migrations()
         self._execute_script(INDEXES_SQL)
         self._execute_script(EXPERIMENT_INDEXES_SQL)
+        self._execute_script(SAMPLING_INDEXES_SQL)
 
     def _execute_script(self, sql: str) -> None:
         if self.dialect == "sqlite":
@@ -416,6 +456,30 @@ class Database:
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+    def seed_last_sampled(self) -> dict[str, int]:
+        """Sampling ledger: PUUID -> when it was last sampled (epoch ms)."""
+        return {p: int(t) for p, t in self.query_all("SELECT puuid, MAX(sampled_at) FROM seed_samples GROUP BY puuid")}
+
+    def record_seed_samples(self, run_id: str, seeds: Sequence[tuple[str, str]], sampled_at: int) -> None:
+        """Ledger rows for `(puuid, cohort)` seeds sampled in `run_id`."""
+        self.executemany(
+            "INSERT INTO seed_samples (run_id, puuid, cohort, sampled_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
+            [(run_id, puuid, cohort, sampled_at) for puuid, cohort in seeds],
+        )
+        self.commit()
+
+    def record_match_discoveries(
+        self, run_id: str, discoveries: Sequence[tuple[str, str, str]], discovered_at: int
+    ) -> None:
+        """Provenance rows for `(match_id, puuid, cohort)`: which seed (and
+        its cohort) surfaced which stored match in `run_id`."""
+        self.executemany(
+            "INSERT INTO match_discoveries (match_id, run_id, puuid, cohort, discovered_at) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+            [(match_id, run_id, puuid, cohort, discovered_at) for match_id, puuid, cohort in discoveries],
+        )
+        self.commit()
 
     def has_match(self, match_id: str) -> bool:
         return self.query_one("SELECT 1 FROM matches WHERE match_id = ?", (match_id,)) is not None

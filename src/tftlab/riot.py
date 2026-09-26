@@ -24,6 +24,15 @@ class RiotApiError(RuntimeError):
 #: ingest before trusting this beyond that scope.
 RANKED_TFT_QUEUE_ID = 1100
 
+#: TFT-LEAGUE-V1 `queue` query value for standard ranked (league endpoints
+#: take the queue name, Match-V1 bodies carry the numeric id above).
+RANKED_TFT_QUEUE = "RANKED_TFT"
+
+#: Tiers served by `/tft/league/v1/entries/{tier}/{division}` (every tier
+#: below Master; the apex tiers have their own league-list endpoints).
+DIVISIONAL_TIERS: tuple[str, ...] = ("DIAMOND", "EMERALD", "PLATINUM", "GOLD", "SILVER", "BRONZE", "IRON")
+LEAGUE_DIVISIONS: tuple[str, ...] = ("I", "II", "III", "IV")
+
 
 _STATUS_RE = re.compile(r"returned (\d+)")
 
@@ -123,6 +132,32 @@ class RiotClient:
     def master(self) -> dict[str, Any]:
         return self._get(
             f"https://{self.platform}.api.riotgames.com/tft/league/v1/master"
+        )
+
+    def league_entries(
+        self, tier: str, division: str, *, page: int = 1, queue: str = RANKED_TFT_QUEUE
+    ) -> list[dict[str, Any]]:
+        """One page of a divisional tier's league entries.
+
+        TFT-LEAGUE-V1 `GET /tft/league/v1/entries/{tier}/{division}` on the
+        platform route: `tier` is e.g. `DIAMOND` or `PLATINUM`, `division`
+        is `I`-`IV`, and the optional query parameters are `queue` (default
+        `RANKED_TFT`) and `page` (default 1, starting at 1). Returns a list
+        of LeagueEntryDTO (`puuid`, `tier`, `rank` = division,
+        `leaguePoints`, ...). Riot does not document the page size or a
+        last-page marker, so callers stop on an empty page or their own
+        page cap. The apex tiers are not served here -- they have their own
+        league-list endpoints (`challenger()` etc.).
+        """
+        if tier not in DIVISIONAL_TIERS:
+            raise ValueError(f"tier must be one of {', '.join(DIVISIONAL_TIERS)}")
+        if division not in LEAGUE_DIVISIONS:
+            raise ValueError(f"division must be one of {', '.join(LEAGUE_DIVISIONS)}")
+        if page < 1:
+            raise ValueError("page starts at 1")
+        return self._get(
+            f"https://{self.platform}.api.riotgames.com/tft/league/v1/entries/{tier}/{division}",
+            params={"queue": queue, "page": page},
         )
 
     def match_ids(
