@@ -172,6 +172,85 @@ def test_ingest_side_initialization_creates_the_full_schema(tmp_path: Path) -> N
     assert run_columns == ["run_id", "started_at", "completed_at", "status", "failure"]
 
 
+# ---------------------------------------------------------------- web: full read-schema check
+
+
+def _drop_column(path: Path, table: str, column: str) -> None:
+    """Remove one column from an otherwise complete, initialized database
+    (dropping the table's indexes first, which SQLite requires)."""
+    conn = sqlite3.connect(path)
+    for (index,) in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL", (table,)
+    ).fetchall():
+        conn.execute(f"DROP INDEX {index}")
+    conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.parametrize(
+    "table, column",
+    [
+        ("units", "completed_item_count"),
+        ("units", "unit_name"),
+        ("units", "tier"),
+        ("experiments", "title"),
+        ("experiments", "comp_json"),
+        ("experiments", "updated_at"),
+        ("traits", "tier_current"),
+        ("traits", "style"),
+        ("traits", "num_units"),
+        ("experiment_field_notes", "created_at"),
+        ("experiment_field_notes", "data_json"),
+        ("matches", "game_datetime"),
+        ("participants", "placement"),
+    ],
+)
+def test_open_existing_rejects_a_missing_web_used_column(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, table: str, column: str
+) -> None:
+    path = _live_sqlite(tmp_path)
+    _drop_column(path, table, column)
+    with pytest.raises(SchemaUnavailable, match=table):
+        Database.open_existing(path)
+
+    # The web app fails up front with its 503, before any route query runs.
+    from tftlab import analytics, webapp
+
+    def must_not_run(*_a, **_k):
+        raise AssertionError("a route query ran against an incompatible schema")
+
+    for name in ("carry_commitment_stats", "discover_candidates", "available_balance_windows"):
+        monkeypatch.setattr(webapp, name, must_not_run)
+    monkeypatch.setattr(webapp, "list_experiments", must_not_run)
+    client = _web(monkeypatch, tmp_path, str(path))
+    for url in ("/api/health", "/api/carries", "/api/discovery", "/api/experiments"):
+        response = client.get(url)
+        assert response.status_code == 503, (url, response.status_code)
+        assert response.json()["demo"] is False
+
+
+def _selected_columns(sql: str) -> set[str]:
+    select = re.search(r"SELECT(.*?)FROM", sql, re.S | re.I).group(1)
+    return {c.strip() for c in select.split(",")}
+
+
+def test_read_schema_covers_every_experiment_and_field_note_column_the_web_selects() -> None:
+    import inspect
+
+    from tftlab import experiments
+    from tftlab.storage import REQUIRED_READ_SCHEMA
+
+    assert _selected_columns(experiments._SELECT) <= set(REQUIRED_READ_SCHEMA["experiments"])
+    source = inspect.getsource(experiments.list_field_notes)
+    assert _selected_columns(source) | {"experiment_id", "created_at"} <= set(REQUIRED_READ_SCHEMA["experiment_field_notes"])
+    assert set(REQUIRED_READ_SCHEMA["units"]) == {
+        "match_id", "participant_index", "unit_index", "character_id", "unit_name",
+        "cost", "tier", "items_json", "completed_item_count",
+    }
+    assert {"trait_name", "num_units", "style", "tier_current", "tier_total"} <= set(REQUIRED_READ_SCHEMA["traits"])
+
+
 # ---------------------------------------------------------------- deadlock retry
 
 

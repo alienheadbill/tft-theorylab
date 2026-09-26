@@ -140,17 +140,36 @@ RUN_STARTED = "started"
 RUN_COMPLETED = "completed"
 RUN_FAILED = "failed"
 
-#: What a read-only consumer (the web app) needs to exist, table -> columns
-#: it relies on (including every column added by a migration). Checked by
-#: `Database.open_existing`, which never creates or migrates anything.
+#: Every table/column the read-only web application can SELECT -- the routes
+#: in `tftlab.webapp`, the `tftlab.analytics` helpers they call, and the
+#: experiment reads (`experiments._SELECT`, tags, `list_field_notes`).
+#: `Database.open_existing` verifies all of them before returning, so an
+#: incompatible schema fails up front (503) instead of mid-request. Columns
+#: only written by ingest/admin code (e.g. `matches.payload_json`,
+#: `participants.augments_json`) are deliberately not required. Keep this in
+#: sync when a web read path starts selecting a new column.
 REQUIRED_READ_SCHEMA: dict[str, tuple[str, ...]] = {
-    "matches": ("match_id", "game_datetime", "patch", "balance_window", "queue_id", "payload_json"),
-    "participants": ("match_id", "participant_index", "placement", "level"),
-    "units": ("match_id", "participant_index", "unit_index", "character_id", "cost", "items_json"),
-    "traits": ("match_id", "participant_index", "trait_name"),
-    "experiments": ("experiment_id", "slug"),
+    # balance-window listing (game_datetime), health (patch), analytics joins.
+    "matches": ("match_id", "game_datetime", "patch", "balance_window"),
+    "participants": ("match_id", "participant_index", "placement"),
+    # commitment/partners/items/traits analytics and the canonical-unit
+    # tiebreak (completed_item_count, tier, unit_index).
+    "units": (
+        "match_id", "participant_index", "unit_index", "character_id", "unit_name",
+        "cost", "tier", "items_json", "completed_item_count",
+    ),
+    "traits": ("match_id", "participant_index", "trait_name", "num_units", "style", "tier_current", "tier_total"),
+    # experiments._SELECT, exactly.
+    "experiments": (
+        "experiment_id", "slug", "title", "carry_character_id", "carry_name", "evidence_status",
+        "lifecycle", "summary", "author_notes", "comp_json", "origin", "created_at", "updated_at",
+    ),
     "experiment_tags": ("experiment_id", "tag"),
-    "experiment_field_notes": ("note_id", "experiment_id", *(c for c, _ in FIELD_NOTE_COLUMN_MIGRATIONS)),
+    # list_field_notes: selected columns plus its WHERE/ORDER BY columns.
+    "experiment_field_notes": (
+        "note_id", "experiment_id", "noted_at", "kind", "evidence_status", "body", "source_key",
+        "source_name", "source_url", "research_label", "data_json", "created_at",
+    ),
 }
 
 
