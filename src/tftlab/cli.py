@@ -308,7 +308,18 @@ def ingest_riot(
         "  Seed cohorts (sampling provenance: how lobbies were discovered, not every player's rank):"
     )
     for tier, report in result.cohort_reports.items():
-        console.print(f"    {tier}: {report.selected} (of {report.available} on the ladder); requested {report.requested}")
+        console.print(f"    {tier}: {report.selected} selected (requested {report.requested})")
+        if report.pagination_complete is None:
+            console.print(f"      available ladder entries: {report.fetched_candidates}")
+        else:
+            console.print(f"      fetched candidate pool: {report.fetched_candidates}")
+            if report.pagination_complete:
+                console.print("      pagination: complete (every division reached an empty page)")
+            else:
+                console.print(
+                    f"      pagination: capped at {report.max_ladder_pages} pages/division; "
+                    "additional players may exist"
+                )
         console.print(
             f"      never sampled before: {report.never_sampled_selected}, "
             f"previously sampled: {report.previously_sampled_selected}"

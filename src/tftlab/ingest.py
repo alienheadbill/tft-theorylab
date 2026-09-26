@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Mapping, NamedTuple
 
 from .normalize import CostLookup
 from .riot import RANKED_TFT_QUEUE_ID, RiotApiError, RiotClient
@@ -25,8 +25,11 @@ class CohortIngestReport:
     cohort: str
     requested: int
     selected: int
-    #: Distinct players available in the cohort (after cross-cohort dedupe).
-    available: int
+    #: Distinct candidates fetched for the cohort (after cross-cohort
+    #: dedupe). For an apex cohort this is its whole league list; for
+    #: Diamond/Platinum it is the whole ladder only when
+    #: `pagination_complete` is True.
+    fetched_candidates: int
     never_sampled_selected: int = 0
     previously_sampled_selected: int = 0
     seeds_with_empty_history: int = 0
@@ -37,8 +40,23 @@ class CohortIngestReport:
     #: cohorts counts once in each, so these can sum to more than the run's
     #: unique total; it is still fetched and stored once.
     unique_match_ids: int = 0
-    #: League requests made to build this cohort's population.
+    #: League requests made to build this cohort's candidate pool.
     ladder_requests: int = 0
+    #: Diamond/Platinum only (None for apex cohorts, which are one
+    #: unpaginated league list): True if every division reached an empty
+    #: page before the page cap; False if at least one division's last
+    #: allowed page still had entries, so more players may exist.
+    pagination_complete: bool | None = None
+    #: The per-division page cap used (Diamond/Platinum only).
+    max_ladder_pages: int | None = None
+
+
+class LadderFetch(NamedTuple):
+    entries: list[dict]
+    #: League requests made.
+    requests: int
+    #: None for apex cohorts; see `CohortIngestReport.pagination_complete`.
+    pagination_complete: bool | None
 
 
 @dataclass(frozen=True)
@@ -64,7 +82,9 @@ class IngestResult:
     requested_seeds: int = 0
     #: Seeds taken from each ladder tier (see `tftlab.sampling`).
     seeds_by_tier: dict[str, int] = field(default_factory=dict)
-    #: Distinct players each fetched tier had available.
+    #: Distinct candidates fetched per cohort (see
+    #: `CohortIngestReport.fetched_candidates` -- not necessarily the whole
+    #: ladder for a capped Diamond/Platinum fetch).
     ladder_sizes: dict[str, int] = field(default_factory=dict)
     sampling_mode: str = "challenger"
     histories_per_seed: int = 0
@@ -126,20 +146,27 @@ def default_run_id(now_ms: int) -> str:
     return f"local-{now_ms}"
 
 
-def fetch_cohort_entries(client: Any, cohort: str, *, max_pages: int = DEFAULT_MAX_LADDER_PAGES) -> tuple[list[dict], int]:
-    """(league entries, requests made) for one seed cohort.
+def fetch_cohort_entries(client: Any, cohort: str, *, max_pages: int = DEFAULT_MAX_LADDER_PAGES) -> LadderFetch:
+    """League entries for one seed cohort, with request count and (for
+    Diamond/Platinum) whether pagination was complete.
 
     Apex cohorts: one TFT-LEAGUE-V1 league list (`/tft/league/v1/challenger`
-    | `grandmaster` | `master`). Diamond/Platinum: every division I-IV of
+    | `grandmaster` | `master`) -- the whole list, no pages.
+
+    Diamond/Platinum: every division I-IV of
     `/tft/league/v1/entries/{TIER}/{DIVISION}?queue=RANKED_TFT&page=N`,
-    pages 1..`max_pages`, stopping early at the first empty page -- so the
-    population spans the whole tier (all four divisions), not its top."""
+    pages 1..`max_pages`, a division stopping early at its first empty page.
+    This always covers all four divisions, but not necessarily every page
+    or player in them: if any division's page `max_pages` still returned
+    entries, the fetch is capped (`pagination_complete=False`) and more
+    players may exist beyond what was fetched."""
     if cohort in LADDER_TIERS:
-        return list(getattr(client, cohort)().get("entries") or []), 1
+        return LadderFetch(list(getattr(client, cohort)().get("entries") or []), 1, None)
     if cohort not in DIVISION_TIERS:
         raise ValueError(f"Unknown seed cohort {cohort!r}; expected one of {', '.join(COHORTS)}")
     entries: list[dict] = []
     requests = 0
+    complete = True
     for division in DIVISIONS:
         for page in range(1, max_pages + 1):
             batch = client.league_entries(DIVISION_TIERS[cohort], division, page=page)
@@ -147,7 +174,9 @@ def fetch_cohort_entries(client: Any, cohort: str, *, max_pages: int = DEFAULT_M
             if not batch:
                 break
             entries.extend(batch)
-    return entries, requests
+        else:  # never saw an empty page: the cap stopped this division
+            complete = False
+    return LadderFetch(entries, requests, complete)
 
 
 def ingest_ladder(
@@ -210,22 +239,23 @@ def ingest_ladder(
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     run_id = run_id or default_run_id(now_ms)
     ledger = db.seed_last_sampled()
-    ladder_requests: dict[str, int] = {}
+    ladder_fetches: dict[str, LadderFetch] = {}
     if seed_allocation is not None:
         if not 1 <= max_ladder_pages <= MAX_LADDER_PAGES:
             raise ValueError(f"max_ladder_pages must be 1-{MAX_LADDER_PAGES}")
 
         def fetch(cohort: str) -> list[dict]:
-            entries, ladder_requests[cohort] = fetch_cohort_entries(client, cohort, max_pages=max_ladder_pages)
-            return entries
+            ladder_fetches[cohort] = fetch_cohort_entries(client, cohort, max_pages=max_ladder_pages)
+            return ladder_fetches[cohort].entries
 
         selection = select_cohort_seeds(fetch, seed_allocation, last_sampled=ledger)
         sampling_mode = "cohorts"
         requested_seeds = selection.requested
     else:
         def fetch_tier(tier: str) -> dict:
-            ladder_requests[tier] = 1
-            return getattr(client, tier)()
+            payload = getattr(client, tier)()
+            ladder_fetches[tier] = LadderFetch([], 1, None)
+            return payload
 
         selection = select_seeds(fetch_tier, total=player_limit, mode=sampling_mode, last_sampled=ledger)
         requested_seeds = player_limit
@@ -301,14 +331,16 @@ def ingest_ladder(
             cohort=c,
             requested=r.requested,
             selected=r.selected,
-            available=r.available,
+            fetched_candidates=r.available,
             never_sampled_selected=r.never_sampled_selected,
             previously_sampled_selected=r.previously_sampled_selected,
             seeds_with_empty_history=per_cohort[c]["empty"],
             failed_history_requests=per_cohort[c]["failed"],
             match_id_references=per_cohort[c]["refs"],
             unique_match_ids=len(per_cohort[c]["ids"]),
-            ladder_requests=ladder_requests.get(c, 0),
+            ladder_requests=ladder_fetches[c].requests if c in ladder_fetches else 0,
+            pagination_complete=ladder_fetches[c].pagination_complete if c in ladder_fetches else None,
+            max_ladder_pages=max_ladder_pages if c in DIVISION_TIERS else None,
         )
         for c, r in selection.reports.items()
     }

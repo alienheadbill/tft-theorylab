@@ -421,9 +421,10 @@ def test_cli_reports_seed_tiers_and_sampling_metrics(monkeypatch: pytest.MonkeyP
     for line in (
         "Sampling mode: high_elo",
         "Requested seed players: 50",
-        "challenger: 20 (of 30 on the ladder)",
-        "grandmaster: 15 (of 30 on the ladder)",
-        "master: 15 (of 30 on the ladder)",
+        "challenger: 20 selected (requested 20)",
+        "grandmaster: 15 selected (requested 15)",
+        "master: 15 selected (requested 15)",
+        "available ladder entries: 30",
         "Requested histories per seed: 5",
         "Match-ID references (before dedupe): 1",
         "Unique match IDs discovered: 1",

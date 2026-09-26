@@ -38,8 +38,11 @@ read, from ladder standing and the sampling ledger alone:
   least-recently sampled. Players are grouped by when they were last
   sampled, oldest group first (never-sampled is the oldest); whole groups
   are taken while they fit, and the group that doesn't fit is thinned to
-  evenly spaced ranks across the whole tier (not its top LP). With an empty
-  ledger this is exactly "evenly spaced across the tier".
+  evenly spaced ranks across the cohort's fetched candidates (not its top
+  LP). With an empty ledger this is exactly "evenly spaced across the
+  candidates". For Diamond/Platinum the candidates always span all four
+  divisions, but a page-capped fetch may not include every player in them
+  (see `tftlab.ingest.fetch_cohort_entries`).
 
 Explicit per-cohort counts (`select_cohort_seeds`) are honoured as given:
 a cohort with fewer players than requested gives what it has, and its
@@ -81,7 +84,8 @@ class CohortReport:
     requested: int
     #: Seeds actually selected from this cohort.
     selected: int
-    #: Distinct players available in this cohort (after cross-cohort dedupe).
+    #: Distinct candidates fetched for this cohort (after cross-cohort
+    #: dedupe) -- the whole ladder only if the fetch was complete.
     available: int
     never_sampled_selected: int = 0
     previously_sampled_selected: int = 0
@@ -93,7 +97,7 @@ class SeedSelection:
     requested: int
     #: Seeds actually taken from each tier, in tier order.
     by_tier: dict[str, int]
-    #: Distinct players available in each fetched tier (after cross-tier dedupe).
+    #: Distinct candidates fetched per tier (after cross-tier dedupe).
     ladder_sizes: dict[str, int] = field(default_factory=dict)
     #: The cohort each seed was selected from, parallel to `puuids`.
     cohorts: tuple[str, ...] = ()

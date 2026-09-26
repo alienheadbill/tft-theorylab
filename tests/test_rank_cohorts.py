@@ -101,7 +101,7 @@ def test_diamond_and_platinum_divisions_collapse_into_one_cohort_each() -> None:
     assert list(sel.reports) == ["diamond", "platinum"]
     assert sel.reports["diamond"].available == 80 and sel.reports["platinum"].available == 80
     assert set(sel.cohorts) == {"diamond", "platinum"}  # never "diamond_ii" etc.
-    # ...but the division spreads the seeds across the whole tier.
+    # ...but the division spreads the seeds across all four divisions.
     for prefix in ("d", "p"):
         divisions = [p.split("-")[0][1:] for p in sel.puuids if p[0] == prefix]
         assert divisions == ["I", "I", "II", "II", "III", "III", "IV", "IV"]
@@ -219,17 +219,103 @@ def test_league_entries_uses_the_documented_endpoint(monkeypatch: pytest.MonkeyP
 def test_divisional_pagination_reads_all_divisions_and_stops_at_empty_page_or_cap() -> None:
     pages = _divisions("d", 25, page_size=10)  # 3 pages per division: 10, 10, 5
     client = _CohortStub(pages=pages, match_ids_by_puuid={}, matches={})
-    entries, requests = fetch_cohort_entries(client, "diamond", max_pages=5)
+    entries, requests, complete = fetch_cohort_entries(client, "diamond", max_pages=5)
     assert len(entries) == 100 and requests == 16  # 3 pages + the empty 4th, per division
     assert [c[1] for c in client.league_calls[::4]] == ["I", "II", "III", "IV"]
 
     capped = _CohortStub(pages=pages, match_ids_by_puuid={}, matches={})
-    entries, requests = fetch_cohort_entries(capped, "diamond", max_pages=2)
+    entries, requests, complete = fetch_cohort_entries(capped, "diamond", max_pages=2)
     assert len(entries) == 80 and requests == 8
     assert {c[2] for c in capped.league_calls} == {1, 2}
 
     apex = _full_client()
     assert fetch_cohort_entries(apex, "grandmaster")[1] == 1 and apex.league_calls == []
+
+
+# ---------------------------------------------------------------- pagination completeness
+
+
+def _uneven_pages(prefix: str, pages_per_division: dict[str, int], page_size: int = 5):
+    """Divisional pages where each division has its own number of full pages."""
+    tier = {"d": "DIAMOND", "p": "PLATINUM"}[prefix]
+    out = {}
+    for division, n_pages in pages_per_division.items():
+        out[(tier, division)] = [
+            [{"puuid": f"{prefix}{division}-{pg}-{i}", "leaguePoints": 99 - i, "rank": division} for i in range(page_size)]
+            for pg in range(n_pages)
+        ]
+    return out
+
+
+@pytest.mark.parametrize("prefix, cohort", [("d", "diamond"), ("p", "platinum")])
+def test_pagination_complete_when_every_division_reaches_an_empty_page(prefix, cohort) -> None:
+    pages = _uneven_pages(prefix, {"I": 3, "II": 1, "III": 2, "IV": 0})
+    client = _CohortStub(pages=pages, match_ids_by_puuid={}, matches={})
+    fetched = fetch_cohort_entries(client, cohort, max_pages=4)
+    assert fetched.pagination_complete is True
+    assert len(fetched.entries) == 30 and fetched.requests == 4 + 2 + 3 + 1
+
+
+@pytest.mark.parametrize("prefix, cohort", [("d", "diamond"), ("p", "platinum")])
+@pytest.mark.parametrize(
+    "pages_per_division",
+    [
+        {"I": 1, "II": 1, "III": 1, "IV": 5},  # one division still had entries on the last allowed page
+        {"I": 3, "II": 3, "III": 3, "IV": 3},  # exactly max_pages full pages: no empty page seen, can't know
+    ],
+)
+def test_pagination_capped_when_any_division_hits_the_cap_with_entries(prefix, cohort, pages_per_division) -> None:
+    client = _CohortStub(pages=_uneven_pages(prefix, pages_per_division), match_ids_by_puuid={}, matches={})
+    fetched = fetch_cohort_entries(client, cohort, max_pages=3)
+    assert fetched.pagination_complete is False
+    assert max(page for _, _, page in client.league_calls) == 3  # the default cap is never exceeded
+
+
+def test_apex_cohorts_have_no_pagination_status(tmp_path: Path) -> None:
+    client = _full_client()
+    for cohort in ("challenger", "grandmaster", "master"):
+        assert fetch_cohort_entries(client, cohort).pagination_complete is None
+    with Database(tmp_path / "apex.sqlite3") as db:
+        result = ingest_ladder(
+            client, db, seed_allocation={"challenger": 2, "grandmaster": 2, "master": 2}, run_id="a", now_ms=1
+        )
+        legacy = ingest_ladder(_full_client(), db, player_limit=6, sampling_mode="high_elo", run_id="b", now_ms=2)
+    for report in (*result.cohort_reports.values(), *legacy.cohort_reports.values()):
+        assert report.pagination_complete is None and report.max_ladder_pages is None
+        assert report.ladder_requests == 1
+
+
+def test_capped_and_complete_reports_leave_sampling_unchanged(tmp_path: Path) -> None:
+    """Completeness is reporting only: the seeds are exactly what
+    select_cohort_seeds picks from the same fetched entries."""
+    pages = {**_uneven_pages("d", {"I": 4, "II": 4, "III": 4, "IV": 4}), **_uneven_pages("p", {"I": 1, "II": 1, "III": 1, "IV": 1})}
+    allocation = {"diamond": 4, "platinum": 4}
+    client = _CohortStub(pages=pages, match_ids_by_puuid={}, matches={})
+    with Database(tmp_path / "same.sqlite3") as db:
+        result = ingest_ladder(client, db, seed_allocation=allocation, max_ladder_pages=3, run_id="s", now_ms=1)
+    probe = _CohortStub(pages=pages, match_ids_by_puuid={}, matches={})
+    expected = select_cohort_seeds(_entries_fetcher(probe, max_pages=3), allocation).puuids
+    assert tuple(client.history_calls) == expected
+    # Evenly spaced over the fetched pools (60 -> ranks 7,22,37,52; 20 -> 2,7,12,17): one per division.
+    assert expected == ("dI-1-2", "dII-1-2", "dIII-1-2", "dIV-1-2", "pI-0-2", "pII-0-2", "pIII-0-2", "pIV-0-2")
+    diamond, platinum = result.cohort_reports["diamond"], result.cohort_reports["platinum"]
+    assert (diamond.pagination_complete, diamond.fetched_candidates, diamond.max_ladder_pages) == (False, 60, 3)
+    assert (platinum.pagination_complete, platinum.fetched_candidates) == (True, 20)
+
+
+def test_cli_never_calls_a_capped_pool_the_ladder_size(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    pages = {**_uneven_pages("d", {"I": 5, "II": 1, "III": 1, "IV": 1}), **_uneven_pages("p", {"I": 1, "II": 1, "III": 1, "IV": 1})}
+    client = _CohortStub(pages=pages, match_ids_by_puuid={}, matches={})
+    result = _run(monkeypatch, tmp_path, client,
+                  ["--diamond-seeds", "5", "--platinum-seeds", "2", "--max-ladder-pages", "3"])
+    assert result.exit_code == 0, result.output
+    out = result.output
+    diamond = out[out.index("    diamond:") : out.index("    platinum:")]
+    platinum = out[out.index("    platinum:") : out.index("Requested histories per seed")]
+    assert "fetched candidate pool: 30" in diamond
+    assert "pagination: capped at 3 pages/division; additional players may exist" in diamond
+    assert "fetched candidate pool: 20" in platinum and "pagination: complete" in platinum
+    assert "on the ladder" not in out and "available ladder entries" not in out
 
 
 # ---------------------------------------------------------------- ingest, ledger, provenance
@@ -371,10 +457,13 @@ def test_cli_reports_every_cohort_separately(monkeypatch: pytest.MonkeyPatch, tm
     for line in (
         "Sampling mode: cohorts",
         "Requested seed players: 14",
-        "challenger: 4 (of 30 on the ladder); requested 4",
-        "grandmaster: 3 (of 30 on the ladder); requested 3",
-        "master: 2 (of 60 on the ladder); requested 2",
-        "diamond: 5 (of 80 on the ladder); requested 5",
+        "challenger: 4 selected (requested 4)",
+        "grandmaster: 3 selected (requested 3)",
+        "master: 2 selected (requested 2)",
+        "available ladder entries: 60",
+        "diamond: 5 selected (requested 5)",
+        "fetched candidate pool: 80",
+        "pagination: complete (every division reached an empty page)",
         "never sampled before: 5, previously sampled: 0",
         "Unique match IDs found by more than one cohort: 0",
         "Seeds recorded in the sampling ledger: 14",
