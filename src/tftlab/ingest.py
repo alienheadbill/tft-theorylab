@@ -3,18 +3,68 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Mapping, NamedTuple
+from typing import Any, Mapping, NamedTuple, Sequence
 
 from .normalize import CostLookup
 from .riot import RANKED_TFT_QUEUE_ID, RiotApiError, RiotClient
 from .sampling import COHORTS, DIVISION_TIERS, DIVISIONS, LADDER_TIERS, select_cohort_seeds, select_seeds
-from .storage import Database
+from .storage import RUN_COMPLETED, Database
 
 #: Default and maximum pages read per Diamond/Platinum division. Riot
 #: documents neither the page size nor a last-page marker, so paging stops
 #: at the first empty page or at this cap, whichever comes first.
 DEFAULT_MAX_LADDER_PAGES = 3
 MAX_LADDER_PAGES = 10
+
+#: PostgreSQL "deadlock_detected". Only this error is retried: the server
+#: already aborted the transaction to break a lock cycle, so re-running the
+#: same all-or-nothing match insert is safe. Nothing else is retried.
+DEADLOCK_SQLSTATE = "40P01"
+#: Sleep before each retry of one match: 2 retries after the first attempt.
+DEADLOCK_RETRY_DELAYS: tuple[float, ...] = (0.5, 1.0)
+
+
+def is_deadlock(exc: BaseException) -> bool:
+    """psycopg's `DeadlockDetected` (SQLSTATE 40P01), and nothing else."""
+    return getattr(exc, "sqlstate", None) == DEADLOCK_SQLSTATE
+
+
+@dataclass
+class _DeadlockStats:
+    retries: int = 0
+    matches_retried: int = 0
+    recovered: int = 0
+
+
+def _ingest_with_deadlock_retry(
+    db: Database, payload: dict, cost_lookup: CostLookup | None, delays: Sequence[float], stats: _DeadlockStats
+) -> bool:
+    """`db.ingest_match` for one match, retried only on a deadlock.
+
+    `ingest_match` rolls its match transaction back on any exception, so
+    each attempt starts clean and a match is stored completely or not at
+    all. After `len(delays)` retries the deadlock is re-raised (with a note)
+    and fails the run; any other error is re-raised immediately."""
+    attempt = 0
+    while True:
+        try:
+            stored = db.ingest_match(payload, cost_lookup=cost_lookup)
+        except Exception as exc:
+            if not is_deadlock(exc):
+                raise
+            if attempt >= len(delays):
+                exc.add_note(f"deadlock persisted after {attempt + 1} attempts on one match; retries exhausted")
+                raise
+            db.conn.rollback()  # already done by ingest_match; harmless and explicit
+            stats.retries += 1
+            if attempt == 0:
+                stats.matches_retried += 1
+            time.sleep(delays[attempt])
+            attempt += 1
+            continue
+        if attempt:
+            stats.recovered += 1
+        return stored
 
 
 @dataclass(frozen=True)
@@ -108,12 +158,22 @@ class IngestResult:
     #: Unique match IDs that seeds from more than one cohort returned.
     cross_cohort_match_ids: int = 0
     run_id: str = ""
-    #: Seeds recorded in the sampling ledger (successful history requests).
+    #: `ingest_runs.status` at the end; a returned result is always
+    #: "completed" (a run that fails raises instead and stays incomplete).
+    run_status: str = ""
+    #: Seeds finalized into the sampling ledger (successful history
+    #: requests), in the same transaction that completed the run.
     seed_ledger_rows: int = 0
-    #: (match, seed) provenance rows written for stored matches.
+    #: (match, seed) provenance rows finalized for stored matches.
     discovery_rows: int = 0
     #: Stored matches (inserted now or already present) with provenance rows.
     matches_with_provenance: int = 0
+    #: Match inserts retried after a PostgreSQL deadlock (40P01), how many
+    #: matches needed one, and how many of those then succeeded. A deadlock
+    #: that outlasts the retries fails the run instead of being counted.
+    deadlock_retries: int = 0
+    matches_with_deadlock_retry: int = 0
+    deadlocks_recovered: int = 0
 
     @property
     def in_run_overlap_rate(self) -> float | None:
@@ -193,6 +253,7 @@ def ingest_ladder(
     history_end_time: int | None = None,
     run_id: str | None = None,
     now_ms: int | None = None,
+    retry_delays: Sequence[float] = DEADLOCK_RETRY_DELAYS,
 ) -> IngestResult:
     """Seed from TFT ladder PUUIDs and deduplicate overlapping matches.
 
@@ -207,10 +268,21 @@ def ingest_ladder(
     deduplicated across histories (and cohorts) before any body is fetched,
     and an ID already stored is skipped without fetching its body again.
 
-    After the run, each seed whose history request succeeded is written to
-    the ledger (`seed_samples`), and each stored match gets one provenance
-    row per seed that surfaced it (`match_discoveries`). A cohort is how a
-    lobby was discovered, never a label on the match or its participants.
+    The run is registered in `ingest_runs` as started before anything else.
+    Only when every match has been handled does one transaction write the
+    ledger (`seed_samples`: each seed whose history request succeeded), the
+    provenance (`match_discoveries`: one row per stored match per seed that
+    surfaced it) and mark the run completed. Seed rotation counts completed
+    runs only, so a run that dies part-way never advances it; matches it
+    already stored stay stored (one transaction each) and the next run
+    skips them via `has_match` while recording its own provenance for them.
+    A cohort is how a lobby was discovered, never a label on the match or
+    its participants.
+
+    A PostgreSQL deadlock (SQLSTATE 40P01) while storing one match is
+    retried for that match only, after `retry_delays` (default 0.5 s, then
+    1 s); if it persists, or any other error occurs, the run fails, is
+    marked failed (best effort) and the exception propagates.
 
     `cost_lookup` should resolve authoritative shop costs (e.g. from
     CommunityDragon static metadata); when omitted, ingested units fall back
@@ -238,6 +310,35 @@ def ingest_ladder(
     """
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     run_id = run_id or default_run_id(now_ms)
+    db.start_ingest_run(run_id, now_ms)
+    try:
+        return _ingest_run(
+            client, db, run_id=run_id, now_ms=now_ms, player_limit=player_limit,
+            matches_per_player=matches_per_player, sampling_mode=sampling_mode,
+            seed_allocation=seed_allocation, max_ladder_pages=max_ladder_pages, cost_lookup=cost_lookup,
+            history_start_time=history_start_time, history_end_time=history_end_time, retry_delays=retry_delays,
+        )
+    except BaseException as exc:
+        db.mark_ingest_run_failed(run_id, type(exc).__name__)
+        raise
+
+
+def _ingest_run(
+    client: RiotClient,
+    db: Database,
+    *,
+    run_id: str,
+    now_ms: int,
+    player_limit: int,
+    matches_per_player: int,
+    sampling_mode: str,
+    seed_allocation: Mapping[str, int] | None,
+    max_ladder_pages: int,
+    cost_lookup: CostLookup | None,
+    history_start_time: int | None,
+    history_end_time: int | None,
+    retry_delays: Sequence[float],
+) -> IngestResult:
     ledger = db.seed_last_sampled()
     ladder_fetches: dict[str, LadderFetch] = {}
     if seed_allocation is not None:
@@ -294,7 +395,6 @@ def ingest_ladder(
             if match_id not in seen:
                 seen.add(match_id)
                 ids.append(match_id)
-    db.record_seed_samples(run_id, sampled, now_ms)
 
     fetched = 0
     inserted = 0
@@ -303,6 +403,7 @@ def ingest_ladder(
     non_target = 0
     inserted_times: list[int] = []
     stored: list[str] = []
+    deadlocks = _DeadlockStats()
     for match_id in ids:
         if db.has_match(match_id):
             duplicates += 1
@@ -317,14 +418,16 @@ def ingest_ladder(
         if payload.get("info", {}).get("queue_id") != RANKED_TFT_QUEUE_ID:
             non_target += 1
             continue
-        if db.ingest_match(payload, cost_lookup=cost_lookup):
+        if _ingest_with_deadlock_retry(db, payload, cost_lookup, retry_delays, deadlocks):
             inserted += 1
             game_datetime = payload.get("info", {}).get("game_datetime")
             if isinstance(game_datetime, int):
                 inserted_times.append(game_datetime)
         stored.append(match_id)
     discoveries = [(m, puuid, cohort) for m in stored for puuid, cohort in sources[m]]
-    db.record_match_discoveries(run_id, discoveries, now_ms)
+    db.finalize_ingest_run(
+        run_id, sampled, discoveries, sampled_at=now_ms, completed_at=max(now_ms, int(time.time() * 1000))
+    )
 
     cohort_reports = {
         c: CohortIngestReport(
@@ -369,7 +472,11 @@ def ingest_ladder(
         cohort_reports=cohort_reports,
         cross_cohort_match_ids=cross_cohort,
         run_id=run_id,
+        run_status=RUN_COMPLETED,
         seed_ledger_rows=len(sampled),
         discovery_rows=len(discoveries),
         matches_with_provenance=len(stored),
+        deadlock_retries=deadlocks.retries,
+        matches_with_deadlock_retry=deadlocks.matches_retried,
+        deadlocks_recovered=deadlocks.recovered,
     )

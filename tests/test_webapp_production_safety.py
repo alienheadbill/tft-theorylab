@@ -49,11 +49,15 @@ def test_reachable_but_empty_database_url_reports_live_not_demo(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Connecting successfully with zero matches (a fresh production
-    database before first ingest) is an honest live state, not demo data."""
+    database, initialized by the CLI/ingest, before first ingest) is an
+    honest live state, not demo data."""
     # A plain filesystem path (no postgres:// scheme) is treated as SQLite by
     # Database(), so this exercises "DATABASE_URL configured, reachable,
     # empty" without needing a real Postgres server in this test.
+    from tftlab.storage import Database
+
     prod_path = tmp_path / "fresh-production.sqlite3"
+    Database(prod_path).close()  # schema set up by the CLI side, never by a request
     client = _client(monkeypatch, tmp_path, database_url=str(prod_path))
 
     response = client.get("/api/health")
@@ -63,6 +67,27 @@ def test_reachable_but_empty_database_url_reports_live_not_demo(
     assert body["demo"] is False
     assert body["matches"] == 0
     assert body["participants"] == 0
+
+
+def test_uninitialized_database_url_is_503_and_never_created_by_a_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A configured database without the schema is a production incident:
+    a request must not create tables (or even the file) to paper over it."""
+    import sqlite3
+
+    missing = tmp_path / "never-initialized.sqlite3"
+    client = _client(monkeypatch, tmp_path, database_url=str(missing))
+    response = client.get("/api/health")
+    assert response.status_code == 503 and response.json()["demo"] is False
+    assert not missing.exists()
+
+    empty = tmp_path / "empty-file.sqlite3"
+    sqlite3.connect(empty).close()  # exists, but no schema
+    client = _client(monkeypatch, tmp_path, database_url=str(empty))
+    assert client.get("/api/carries").status_code == 503
+    tables = sqlite3.connect(empty).execute("SELECT name FROM sqlite_master").fetchall()
+    assert tables == []
 
 
 def test_no_database_url_still_falls_back_to_demo_locally(

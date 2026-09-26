@@ -93,7 +93,8 @@ def _build_demo_db() -> Database:
 def _resolve_database() -> tuple[Database, bool]:
     """Pick the active data source.
 
-    When `DATABASE_URL` is set, it is *always* used -- connecting
+    When `DATABASE_URL` is set, it is *always* used, opened read-only via
+    `Database.open_existing` (no schema setup from a request) -- connecting
     successfully is enough, even with zero matches so far (a fresh
     production database before first ingest is a normal, honest state, not
     something to disguise as demo data). If it's configured but unreachable,
@@ -110,11 +111,15 @@ def _resolve_database() -> tuple[Database, bool]:
     """
     database_url = os.getenv("DATABASE_URL")
     if database_url:
+        # Read-only: a request never creates, migrates, indexes or backfills
+        # anything (schema setup belongs to the CLI/ingest, which call
+        # `Database(...)`). A missing/incompatible schema is a production
+        # incident surfaced as 503, never silently created from a request.
         try:
-            db = Database(database_url)
+            db = Database.open_existing(database_url)
         except Exception as exc:
             raise ProductionDatabaseUnavailable(
-                f"DATABASE_URL is configured but unreachable ({type(exc).__name__})"
+                f"DATABASE_URL is configured but unavailable ({type(exc).__name__})"
             ) from exc
         return db, False
 

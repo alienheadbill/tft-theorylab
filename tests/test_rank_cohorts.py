@@ -466,7 +466,9 @@ def test_cli_reports_every_cohort_separately(monkeypatch: pytest.MonkeyPatch, tm
         "pagination: complete (every division reached an empty page)",
         "never sampled before: 5, previously sampled: 0",
         "Unique match IDs found by more than one cohort: 0",
-        "Seeds recorded in the sampling ledger: 14",
+        "Seed ledger rows finalized: 14",
+        "Ingest run status: completed",
+        "Database deadlock retries: 0",
         "Run id: local-",
     ):
         assert line in result.output
@@ -503,7 +505,7 @@ POSTGRES_TEST_URL = os.environ.get("TFTLAB_TEST_DATABASE_URL")
 def test_postgres_ledger_rotation_and_multi_cohort_provenance() -> None:
     db = Database(POSTGRES_TEST_URL)
     try:
-        for table in ("match_discoveries", "seed_samples", "traits", "units", "participants", "matches"):
+        for table in ("match_discoveries", "seed_samples", "ingest_runs", "traits", "units", "participants", "matches"):
             db.execute(f"DELETE FROM {table}")
         db.commit()
         probe = _full_client()
