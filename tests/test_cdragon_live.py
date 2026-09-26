@@ -192,3 +192,45 @@ def test_committed_item_stats_match_live_set(tmp_path) -> None:
         "src/tftlab/data/item_stats.json is out of date. Live snapshot:\n"
         + "ITEM_STATS_SNAPSHOT_BEGIN\n" + json.dumps(live, indent=1, ensure_ascii=False) + "\nITEM_STATS_SNAPSHOT_END"
     )
+
+
+def da_namespace_inventory(raw: dict) -> dict:
+    """Every `DA_*` item in the bundle-wide items list (the namespace Set 18
+    Match-V1 boards store), with readable stats and any `TFT_Item_*` entry
+    sharing its display name."""
+    items = raw.get("items", [])
+    by_name: dict = {}
+    for i in items:
+        if str(i.get("apiName", "")).startswith("TFT_Item_"):
+            by_name.setdefault(i.get("name"), []).append(i["apiName"])
+
+    def readable(values):
+        return sorted(str(v) for v in (values or []) if not str(v).startswith("{"))
+
+    rows = []
+    for i in items:
+        api = str(i.get("apiName", ""))
+        if not api.startswith("DA_"):
+            continue
+        rows.append({
+            "apiName": api,
+            "name": i.get("name"),
+            "effects": readable((i.get("effects") or {}).keys()),
+            "tags": readable(i.get("tags")),
+            "hashed_tags": sum(1 for t in (i.get("tags") or []) if str(t).startswith("{")),
+            "composition": i.get("composition") or [],
+            "isAugment": i.get("isAugment"),
+            "tft_item_same_name": by_name.get(i.get("name"), []),
+        })
+    return {"count": len(rows), "items": rows}
+
+
+@requires_live_network
+def test_print_da_item_namespace(tmp_path, capsys) -> None:
+    with CommunityDragonClient(cache_dir=tmp_path) as client:
+        raw = client.fetch_raw("latest", use_cache=False)
+    inventory = da_namespace_inventory(raw)
+    with capsys.disabled():
+        print("\nDA ITEM NAMESPACE BEGIN")
+        print(json.dumps(inventory, ensure_ascii=False))
+        print("DA ITEM NAMESPACE END")
