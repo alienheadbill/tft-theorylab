@@ -59,7 +59,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install package
-        run: pip install -e .
+        run: pip install -e ".[postgres]"
 
       - name: Run discovery report (read-only)
         env:
