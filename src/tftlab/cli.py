@@ -27,7 +27,18 @@ from .experiments import (
     list_experiments,
     update_experiment,
 )
+from .collection import (
+    COLLECTION_MODES,
+    DEFAULT_MAX_DIVISION_PAGES,
+    DEFAULT_MAX_HISTORY_PAGES,
+    DEFAULT_WAVE_SIZE,
+    CollectionBudgets,
+    MaximumCollectionResult,
+    collect_maximum,
+    collection_plan,
+)
 from .ingest import DEFAULT_MAX_LADDER_PAGES, MAX_LADDER_PAGES, default_run_id, ingest_ladder
+from .riot_limits import DEFAULT_SAFETY_UTILIZATION, MalformedRateLimitHeader, RiotTelemetry, parse_rate_limits
 from .sampling import SAMPLING_MODES
 from .unreal_patch import NoCurrentTrustedWindow
 from .unreal_patch import current_trusted_window as current_trusted_window_for
@@ -166,7 +177,9 @@ def ingest_riot(
     players: int | None = typer.Option(
         None, min=1, help="Legacy weighted sampling: total seed players (default 25). Not with --<cohort>-seeds."
     ),
-    matches_per_player: int = typer.Option(10, min=1, max=100),
+    matches_per_player: int | None = typer.Option(
+        None, min=1, max=100, help="Bounded mode: recent matches read per seed (default 10)"
+    ),
     sampling: str | None = typer.Option(
         None,
         help=(
@@ -210,6 +223,51 @@ def ingest_riot(
             "ingest as degraded) instead of aborting"
         ),
     ),
+    collection_mode: str = typer.Option(
+        "bounded",
+        "--collection-mode",
+        help=(
+            "'bounded' (default): N seeds per cohort x M recent matches. 'maximum': enumerate all five "
+            "cohorts, exhaust each seed's time-bounded history, breadth-first, until a budget is reached. "
+            "Maximum needs --max-duration-minutes, --max-requests, --max-match-fetches and a time bound."
+        ),
+    ),
+    max_duration_minutes: float | None = typer.Option(
+        None, "--max-duration-minutes", min=0.1, help="Maximum mode: wall-clock budget (stops cleanly)"
+    ),
+    max_requests: int | None = typer.Option(
+        None, "--max-requests", min=1, help="Maximum mode: Riot request budget (every attempt counts)"
+    ),
+    max_match_fetches: int | None = typer.Option(
+        None, "--max-match-fetches", min=0, help="Maximum mode: match-detail fetch budget"
+    ),
+    wave_size: int = typer.Option(
+        DEFAULT_WAVE_SIZE, "--wave-size", min=1, max=500,
+        help="Maximum mode: seeds per wave (each wave is finalized as its own ingest run)",
+    ),
+    max_history_pages: int = typer.Option(
+        DEFAULT_MAX_HISTORY_PAGES, "--max-history-pages", min=1, max=500,
+        help="Maximum mode: history pages (20 IDs each) per seed before it is reported as capped",
+    ),
+    max_division_pages: int = typer.Option(
+        DEFAULT_MAX_DIVISION_PAGES, "--max-division-pages", min=1, max=5000,
+        help="Maximum mode: guard on pages per Diamond/Platinum division (enumeration stops at an empty page)",
+    ),
+    safety_utilization: float = typer.Option(
+        DEFAULT_SAFETY_UTILIZATION, "--safety-utilization", min=0.05, max=1.0,
+        help="Share of each Riot-advertised rate-limit window the client plans to use",
+    ),
+    rate_ceiling: str | None = typer.Option(
+        None, "--rate-ceiling",
+        help="Operator policy cap per routing host on top of Riot's headers, e.g. '10:10' (10 requests / 10 s)",
+    ),
+    plan: bool = typer.Option(
+        False, "--plan",
+        help="Maximum mode: print the plan and exit. Network-free: no Riot, no CommunityDragon, read-only store counts.",
+    ),
+    telemetry_out: Path | None = typer.Option(
+        None, "--telemetry-out", help="Write aggregate collection telemetry (JSON, no ids or secrets) here"
+    ),
 ) -> None:
     """Pull recent ranked matches from Riot into the configured database.
 
@@ -226,9 +284,47 @@ def ingest_riot(
     through those ladder players -- not all TFT games. A seed cohort says how
     a lobby was discovered, not every player's rank. Analytics look at every
     champion, item and trait in those matches, all cohorts combined.
+
+    `--collection-mode maximum` instead enumerates all five cohorts, reads
+    every seed's time-bounded history to exhaustion, breadth-first, and
+    stops cleanly at the first of three required budgets (see
+    `tftlab.collection`). Collection only: nothing about how stored matches
+    are analyzed changes. `--plan` prints the plan without any network call.
     """
     _load_dotenv()
     settings = Settings.from_env()
+    if collection_mode not in COLLECTION_MODES:
+        raise typer.BadParameter(f"must be one of: {', '.join(COLLECTION_MODES)}", param_hint="--collection-mode")
+    try:
+        ceilings = parse_rate_limits(rate_ceiling, "--rate-ceiling") if rate_ceiling else ()
+    except MalformedRateLimitHeader:
+        raise typer.BadParameter("use <requests>:<seconds>[,...], e.g. 10:10", param_hint="--rate-ceiling")
+    maximum = collection_mode == "maximum"
+    budgets = None
+    if maximum:
+        _check_maximum_options(
+            cohort_seeds=(challenger_seeds, grandmaster_seeds, master_seeds, diamond_seeds, platinum_seeds),
+            legacy=(players, sampling, include_master or None, matches_per_player),
+            max_ladder_pages=max_ladder_pages,
+            time_bound=current_trusted_window or bool(start_time),
+        )
+        missing = [
+            name for name, value in (("--max-duration-minutes", max_duration_minutes),
+                                     ("--max-requests", max_requests), ("--max-match-fetches", max_match_fetches))
+            if value is None
+        ]
+        if missing:
+            raise typer.BadParameter(f"maximum mode needs explicit budgets: {', '.join(missing)}")
+        budgets = CollectionBudgets(max_duration_minutes * 60, max_requests, max_match_fetches)
+    else:
+        if any(v is not None for v in (max_duration_minutes, max_requests, max_match_fetches)) or plan:
+            raise typer.BadParameter(
+                "--max-duration-minutes/--max-requests/--max-match-fetches/--plan need --collection-mode maximum"
+            )
+    if plan:
+        history_start, history_end, window_label = _history_bounds(current_trusted_window, start_time)
+        _print_plan(budgets, ceilings, safety_utilization, window_label, history_start, history_end, settings)
+        return
     if not settings.riot_api_key:
         raise typer.BadParameter("Set RIOT_API_KEY in .env or the environment")
     cohort_options = {
@@ -239,7 +335,9 @@ def ingest_riot(
         "platinum": platinum_seeds,
     }
     seed_allocation = None
-    if any(v is not None for v in cohort_options.values()):
+    if maximum:
+        sampling_mode = "maximum"
+    elif any(v is not None for v in cohort_options.values()):
         if players is not None or sampling is not None or include_master:
             raise typer.BadParameter(
                 "use either --<cohort>-seeds or the legacy --players/--sampling/--include-master, not both"
@@ -276,24 +374,38 @@ def ingest_riot(
 
     target = settings.database_url or settings.db_path
     run_id = default_run_id(int(datetime.now(timezone.utc).timestamp() * 1000))
+    telemetry: dict = {"mode": collection_mode, "run_id": run_id, "outcome": "started",
+                       "safety_utilization": safety_utilization, "rate_ceilings": [str(c) for c in ceilings]}
     with Database(target) as db, RiotClient(
-        settings.riot_api_key, platform=settings.platform, region=settings.region
+        settings.riot_api_key, platform=settings.platform, region=settings.region,
+        safety_utilization=safety_utilization, rate_ceilings=ceilings,
     ) as client:
         try:
-            result = ingest_ladder(
-                client,
-                db,
-                player_limit=players or 25,
-                matches_per_player=matches_per_player,
-                sampling_mode=sampling_mode,
-                seed_allocation=seed_allocation,
-                max_ladder_pages=max_ladder_pages,
-                cost_lookup=cost_lookup,
-                history_start_time=history_start,
-                history_end_time=history_end,
-                run_id=run_id,
-            )
+            if maximum:
+                collected = collect_maximum(
+                    client, db, budgets=budgets, history_start_time=history_start, history_end_time=history_end,
+                    cost_lookup=cost_lookup, run_id=run_id, wave_size=wave_size,
+                    max_history_pages=max_history_pages, max_division_pages=max_division_pages,
+                )
+                telemetry["collection"] = collected.as_dict()
+            else:
+                result = ingest_ladder(
+                    client,
+                    db,
+                    player_limit=players or 25,
+                    matches_per_player=matches_per_player or 10,
+                    sampling_mode=sampling_mode,
+                    seed_allocation=seed_allocation,
+                    max_ladder_pages=max_ladder_pages,
+                    cost_lookup=cost_lookup,
+                    history_start_time=history_start,
+                    history_end_time=history_end,
+                    run_id=run_id,
+                )
+                telemetry["collection"] = _bounded_summary(result)
+            telemetry["outcome"] = "completed"
         except Exception as exc:
+            telemetry["outcome"] = f"failed ({type(exc).__name__})"
             if isinstance(exc, RiotApiError) and classify_riot_error(str(exc)) == "unauthorized":
                 console.print(f"[red]{EXPIRED_KEY_MESSAGE}[/red]")
             # Not swallowed: the traceback follows. Matches stored before the
@@ -304,9 +416,24 @@ def ingest_riot(
                 "and seed rotation will ignore it on the next run.[/red]"
             )
             raise
+        finally:
+            snapshot = getattr(client, "telemetry_snapshot", None)
+            telemetry["riot"] = snapshot() if snapshot else RiotTelemetry().as_dict()
+            if telemetry_out is not None:
+                telemetry_out.parent.mkdir(parents=True, exist_ok=True)
+                telemetry_out.write_text(json.dumps(telemetry, indent=2, sort_keys=True) + "\n")
         windows = available_balance_windows(db)
         total_participants = db.query_one("SELECT COUNT(*) FROM participants")[0]
         component_backfill = db.completed_item_count_backfill
+
+    if maximum:
+        _print_maximum_report(collected, telemetry["riot"], window_label, degraded)
+        console.print(f"  Balance windows found: {', '.join(w for w, _, _ in windows) or 'none'}")
+        console.print(f"  Total participants now stored: {total_participants}")
+        if collected.seeds_started and collected.seeds_failed == collected.seeds_started:
+            console.print("[red]Every seed's match-history request failed; nothing could be sampled.[/red]")
+            raise typer.Exit(code=1)
+        return
 
     def _rate(value: float | None) -> str:
         return "n/a" if value is None else f"{value:.1%}"
@@ -400,9 +527,135 @@ def ingest_riot(
     console.print(f"  Total participants now stored: {total_participants}")
     if degraded:
         console.print("[yellow]  Note: this ingest used degraded (rarity+1) costs.[/yellow]")
+    _print_riot_telemetry(telemetry["riot"])
     if result.seed_players and result.failed_history_requests == result.seed_players:
         console.print("[red]Every seed's match-history request failed; nothing could be sampled.[/red]")
         raise typer.Exit(code=1)
+
+
+def _check_maximum_options(*, cohort_seeds, legacy, max_ladder_pages, time_bound) -> None:
+    if any(v is not None for v in cohort_seeds) or any(v is not None for v in legacy):
+        raise typer.BadParameter(
+            "maximum mode enumerates all five cohorts and exhausts each history; do not pass "
+            "--<cohort>-seeds, --players, --sampling, --include-master or --matches-per-player"
+        )
+    if max_ladder_pages != DEFAULT_MAX_LADDER_PAGES:
+        raise typer.BadParameter("maximum mode uses --max-division-pages, not --max-ladder-pages")
+    if not time_bound:
+        raise typer.BadParameter(
+            "maximum mode exhausts history, so it needs --current-trusted-window or --start-time"
+        )
+
+
+def _bounded_summary(result) -> dict:
+    fields = (
+        "run_id", "run_status", "sampling_mode", "requested_seeds", "seed_players", "histories_per_seed",
+        "match_id_references", "match_ids_seen", "duplicates_skipped", "matches_fetched", "matches_inserted",
+        "failed_requests", "non_target_matches_skipped", "failed_history_requests", "seeds_with_empty_history",
+        "cross_cohort_match_ids", "seed_ledger_rows", "discovery_rows", "history_start_time", "history_end_time",
+    )
+    return {name: getattr(result, name) for name in fields}
+
+
+def _print_plan(budgets, ceilings, utilization, window_label, history_start, history_end, settings) -> None:
+    """Network-free: no Riot, no CommunityDragon; store counts are read
+    through a read-only connection when the store exists."""
+    target = settings.database_url or settings.db_path
+    store: dict = {}
+    try:
+        with Database.open_existing(target) as db:
+            store = {
+                "stored_matches": db.query_one("SELECT COUNT(*) FROM matches")[0],
+                "players_in_sampling_ledger": len(db.seed_last_sampled()),
+                "completed_ingest_runs": db.query_one(
+                    "SELECT COUNT(*) FROM ingest_runs WHERE status = 'completed'")[0],
+            }
+    except Exception as exc:  # never echo the target: it may be a URL with credentials
+        store = {"unavailable": type(exc).__name__}
+    planned = collection_plan(budgets=budgets, rate_ceilings=ceilings, store=store)
+    console.print("[bold]Maximum collection plan[/bold] (NETWORK-FREE: no Riot or CommunityDragon request was made)")
+    console.print(f"  Trusted window: {window_label or 'none'}")
+    console.print(f"  History bounds: startTime {_format_epoch_s(history_start)}, endTime {_format_epoch_s(history_end)}")
+    console.print(f"  Budgets: {budgets.max_duration_s / 60:g} min, {budgets.max_requests} Riot requests, "
+                  f"{budgets.max_match_fetches} match-detail fetches")
+    console.print(f"  Safety utilization of Riot-advertised limits: {utilization:.0%}")
+    console.print(f"  Operator rate ceilings: {', '.join(planned['rate_ceilings']) or 'none'}")
+    if planned["max_requests_by_time_at_ceiling"] is not None:
+        console.print(f"  Requests possible in the time budget at the ceiling: {planned['max_requests_by_time_at_ceiling']}")
+    console.print(f"  Upper bound on Riot requests this run: {planned['request_upper_bound']}")
+    console.print(f"  Request cost model: {planned['request_cost_model']}")
+    console.print(f"  Store (read-only): {json.dumps(store, sort_keys=True)}")
+
+
+def _print_riot_telemetry(riot: dict) -> None:
+    console.print("  Riot requests:")
+    console.print(f"    total {riot['requests']} (successful {riot['successes']}), by status {riot['by_status']}")
+    for method, count in riot["by_method"].items():
+        console.print(f"    {method}: {count}")
+    for host, count in riot["by_host"].items():
+        console.print(f"    host {host}: {count}")
+    console.print(
+        f"    429s: {riot['rate_limited']} {riot['rate_limited_by_type'] or ''}; transient retries "
+        f"{riot['transient_retries']}, network retries {riot['network_retries']}"
+    )
+    console.print(
+        f"    sleep: pacing {riot['pacing_sleep_s']:.1f}s, 429 pauses {riot['rate_limit_sleep_s']:.1f}s, "
+        f"backoff {riot['backoff_sleep_s']:.1f}s; elapsed {riot['elapsed_s']:.1f}s"
+    )
+    for scope, limits in {**riot["app_limits"], **riot["method_limits"]}.items():
+        console.print(f"    advertised {scope}: {limits}")
+    for scope, share in riot["high_water"].items():
+        console.print(f"    high-water {scope}: {share:.0%}")
+    if riot["malformed_headers"] or riot["missing_headers"]:
+        console.print(f"    malformed headers {riot['malformed_headers']}, missing headers {riot['missing_headers']}")
+
+
+def _print_maximum_report(result: MaximumCollectionResult, riot: dict, window_label: str | None, degraded: bool) -> None:
+    console.print("\n[bold]Maximum collection report[/bold]")
+    console.print(f"  Run id: {result.run_id} ({len(result.wave_run_ids)} waves finalized as ingest runs)")
+    console.print(f"  Stop reason: {result.stop_reason}" + (f" -- {result.stop_detail}" if result.stop_detail else ""))
+    console.print(f"  Trusted window: {window_label or 'none'}")
+    console.print(f"  History bounds: startTime {_format_epoch_s(result.history_start_time)}, "
+                  f"endTime {_format_epoch_s(result.history_end_time)}")
+    console.print("  Seed cohorts (sampling provenance: how lobbies were discovered, not every player's rank):")
+    for cohort, stats in result.cohorts.items():
+        pagination = ""
+        if stats.ladder_complete is not None:
+            reasons = ", ".join(f"{d.division}:{d.stop_reason}/{d.pages}p" for d in stats.divisions)
+            pagination = f"; pagination {'complete' if stats.ladder_complete else 'INCOMPLETE'} ({reasons})"
+        console.print(
+            f"    {cohort}: ladder entries {stats.ladder_entries}, candidates {stats.candidates} "
+            f"(never sampled {stats.never_sampled_candidates}), ladder requests {stats.ladder_requests}{pagination}"
+        )
+        console.print(
+            f"      seeds started {stats.seeds_started}, ledgered {stats.seeds_ledgered}, history requests "
+            f"{stats.history_requests}, match-ID references {stats.match_id_references}, new match IDs {stats.new_match_ids}"
+        )
+    console.print(f"  PUUIDs listed in more than one cohort (seeded once): {result.cross_listed_puuids}")
+    console.print(f"  Candidates: {result.candidates} (never sampled {result.never_sampled_candidates})")
+    console.print(
+        f"  Seeds started {result.seeds_started}: exhausted {result.seeds_exhausted}, repeated-page guard "
+        f"{result.seeds_repeated_page_guard}, page-capped {result.seeds_page_capped}, failed {result.seeds_failed}, "
+        f"interrupted by a budget {result.seeds_interrupted}, empty history {result.seeds_with_empty_history}"
+    )
+    console.print(f"  Seeds ledgered: {result.seeds_ledgered} "
+                  f"(not ledgered because a surfaced match was unhandled: {result.seeds_with_unhandled_matches})")
+    console.print(f"  Requests: ladder {result.ladder_requests}, history {result.history_requests}, "
+                  f"match detail {result.match_fetches}")
+    console.print(f"  Match-ID references {result.match_id_references}, unique match IDs {result.unique_match_ids}, "
+                  f"already stored (not fetched) {result.already_stored_skipped}")
+    console.print(f"  Matches fetched {result.matches_fetched}, inserted {result.matches_inserted}, non-ranked skipped "
+                  f"{result.non_target_matches_skipped}, failed fetches {result.failed_match_fetches}, "
+                  f"left unfetched at stop {result.unhandled_match_ids}")
+    console.print(f"  Earliest inserted match: {_format_epoch_ms(result.earliest_inserted_game_datetime)}")
+    console.print(f"  Latest inserted match: {_format_epoch_ms(result.latest_inserted_game_datetime)}")
+    console.print(f"  Seed ledger rows {result.seed_ledger_rows}, provenance rows {result.discovery_rows}")
+    console.print(f"  Database deadlock retries: {result.deadlock_retries} (matches needing a retry: "
+                  f"{result.matches_with_deadlock_retry}, recovered: {result.deadlocks_recovered})")
+    console.print(f"  Elapsed: {result.elapsed_s:.1f}s")
+    if degraded:
+        console.print("[yellow]  Note: this ingest used degraded (rarity+1) costs.[/yellow]")
+    _print_riot_telemetry(riot)
 
 
 #: Development keys deactivate every 24 hours (Riot Developer Portal). Never
