@@ -63,14 +63,21 @@ Riot development keys expire periodically, so a 401/403 after the key worked pre
 
 By default, `ingest-riot` resolves champion shop costs from CommunityDragon and **aborts** (not silently falls back to `rarity + 1`) if that fetch fails, printing exactly why. Pass `--allow-degraded-costs` to proceed anyway; the run and its printed report are then clearly marked `DEGRADED INGEST`.
 
-### Carry eligibility and champion roles (status)
+### Carry eligibility (item-only)
 
-A carry observation is still a champion finishing a board with **>= 2 completed items** (2-star misses included). A role-aware refinement -- so that a normal Tank with Warmog's / Gargoyle / Dragon's Claw stops counting as a carry, while an off-meta tank built with offensive items still does -- is **not implemented yet**, because the metadata it needs is not there:
+**Appearance** = the champion was on the board. **Carry commitment** = it finished with **>= 2 completed items** (2-star misses included) **and** that itemization was not entirely defensive. That is the only change: one Discovery system, no tank/hybrid/support statistics, no role table, no champion allowlist.
 
-- CommunityDragon's `cdragon/tft/en_us.json` has a champion **`role`** field (values like `APTank`, `ADTank`, `APCaster`), and every Set 18 champion has the key -- but on 2026-09-26 only **2 of 74 shop champions** had a value (`DA_18_Kobuko` = `APTank`, `DA_18_Alune` = `APCaster`); Elise, Ornn, Malphite, Caitlyn, Ahri and the rest are `null`. The other non-null roles are PvE units (Krug, Murkwolf, Rift Herald, ...). Per-champion character files were not found at CommunityDragon's known paths.
-- Item metadata **is** usable: each item's `effects` names its stats (`AD`, `AP`, `AS`, `CritChance` vs `Health`, `Armor`, `MagicResist`), and some items carry readable `tags` (`AbilityPower`, `AttackDamage`, `CritChance`, `AttackSpeed`, `Health`, `Mana`, `Heal`).
+`tftlab.carry` classifies each completed item from CommunityDragon stat metadata (never from its display name):
 
-`tftlab.cdragon` now preserves both (`ChampionMeta.role`, exactly as served or `None`; `ItemMeta.stat_effects` / `tags` / `associated_traits`), and the opt-in live test prints the full role/item inventory so it is visible when the role field gets populated. No role is ever guessed from a name or trait.
+- **Offensive** -- any of the holder's own damage stats: effects `AD`, `AP`, `AS`, `CritChance` and their Set 18 variants (`AD_NotStatBar`, `AP_NotStatBar`, `ADIncrease`, `APIncrease`, `StackingAD`, `StackingSP`, `ADOnAttack`, `ADPerBonus`, `APPerBonus`, `ASPerStack`, `AttackSpeedPerStack`, `ADAPPerTakedown`, `CritDamageToGive`, `CritDamageBonusPercent`, `DamageAmp`), or tags `AttackDamage`, `AbilityPower`, `AttackSpeed`, `CritChance`. Offensive + defensive stats (Titan's Resolve, Sterak's Gage, Crownguard) is offensive. Ally buffs (Zephyr `AllyBonusAS`, Aegis `ASBuff`, Banshee's `BuffAttackSpeed`, Chalice `ChaliceAP`, Zeke's `AttackSpeed`) are not.
+- **Defensive** -- effects `Health`, `Armor`, `MagicResist` or tag `Health`, and nothing offensive (Warmog's, Gargoyle, Dragon's Claw, Spirit Visage, Bramble, Sunfire, ...: 39 completed Set 18 items).
+- **Unknown** -- anything else: not in the snapshot, only unresolved `{hash}` names, or only passive parameters. Set 18 trait emblems (`DA_18_Emblem*`; Ravager Emblem = `DA_18_EmblemSlayer`) have no readable stats, so they are unknown.
+
+A board is excluded **only** when every completed item is defensive. Any offensive **or unknown** completed item keeps it a carry commitment -- uncertain means include, because hiding an unusual build is worse than a false positive. Star level plays no part. So Elise with Warmog's + Gargoyle is not a carry observation, while Elise with Ravager Emblem + Guinsoo's (or Gargoyle + Guinsoo's + Titan's) is -- per board, never per champion.
+
+Metadata reaches analytics without the network: `src/tftlab/data/item_stats.json` is a committed snapshot of CommunityDragon's readable item stats (from `tftlab.cdragon.item_stats_snapshot`), loaded once per process; the opt-in live test compares it with the feed and prints a fresh copy when it drifts. The rule runs inside SQL (`carry_commitment_sql`: defensive items counted exactly in `items_json`, duplicates included), identically in SQLite and Postgres, in every query that selects carry boards -- commitment stats, partners, item packages, traits, the carry detail endpoints and Comp Scout. Appearance counts, Opportunity Score weights, 3-star logic and the association formulas are unchanged; only commitment games, commitment/carry-conversion rates, carry outcomes and the evidence built on them move.
+
+**Champion roles were investigated and are not used.** CommunityDragon's champion `role` field (`APTank`, `ADTank`, `APCaster`) was null for 72 of 74 Set 18 shop champions on 2026-09-26 (only Kobuko and Alune had one). `ChampionMeta.role` preserves it as served, and the live inventory test shows if that changes.
 
 ## Current scoring
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import itertools
 import json
 
+from ..carry import carry_commitment_sql
 from ..items import is_component
 from ..storage import Database
 from .association import Association, compute_associations
@@ -36,6 +37,7 @@ def _carry_commitment_item_games(
     `CANONICAL_UNIT_TIEBREAK_SQL` so that game contributes one item
     observation, not one per instance.
     """
+    eligible_sql, eligible_params = carry_commitment_sql("c", commitment_items)
     rows = db.query_all(
         f"""
         WITH ranked AS (
@@ -51,12 +53,12 @@ def _carry_commitment_item_games(
             JOIN matches m
               ON m.match_id = c.match_id
             WHERE c.character_id = ?
-              AND c.completed_item_count >= ?
+              AND {eligible_sql}
               AND m.balance_window = ?
         )
         SELECT placement, items_json FROM ranked WHERE rn = 1
         """,
-        (character_id, commitment_items, balance_window),
+        (character_id, *eligible_params, balance_window),
     )
     return [(int(placement), _completed_items(items_json)) for placement, items_json in rows]
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from ..carry import carry_commitment_sql
 from ..storage import Database
 from .association import Association, compute_associations
 
@@ -24,8 +25,9 @@ def _carry_commitment_trait_games(
 ) -> list[tuple[int, frozenset[str]]]:
     """The carry's commitment games, each paired with the set of active
     trait breakpoints (`"TraitName:tier"`) on that board."""
+    eligible_sql, eligible_params = carry_commitment_sql("c", commitment_items)
     rows = db.query_all(
-        """
+        f"""
         SELECT c.match_id, c.participant_index, p.placement,
                t.trait_name, t.tier_current
         FROM units c
@@ -37,10 +39,10 @@ def _carry_commitment_trait_games(
           ON t.match_id = c.match_id AND t.participant_index = c.participant_index
           AND t.tier_current >= 1
         WHERE c.character_id = ?
-          AND c.completed_item_count >= ?
+          AND {eligible_sql}
           AND m.balance_window = ?
         """,
-        (character_id, commitment_items, balance_window),
+        (character_id, *eligible_params, balance_window),
     )
 
     placements: dict[tuple[str, int], int] = {}
