@@ -8,6 +8,9 @@ from pathlib import Path
 #: Committed CommunityDragon item metadata for the current set (see
 #: `tftlab.cdragon.item_stats_snapshot`); read offline, never fetched.
 ITEM_STATS_PATH = Path(__file__).parent / "data" / "item_stats.json"
+#: Committed Riot item-intent evidence for the current set (see
+#: `tftlab.cdragon.item_intent_snapshot`); read offline by `tftlab.carry`.
+ITEM_INTENT_PATH = Path(__file__).parent / "data" / "item_intent.json"
 
 # Match-V1 returns item API names. Components should not count toward our
 # carry-commitment threshold. This set intentionally includes common aliases
@@ -27,6 +30,7 @@ _COMPONENT_IDS = {
     "TFT_Item_FryingPan",
     "TFT_Item_EmptyBag",
 }
+LEGACY_COMPONENT_IDS: frozenset[str] = frozenset(_COMPONENT_IDS)
 
 
 @lru_cache(maxsize=1)

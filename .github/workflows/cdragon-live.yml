@@ -4,7 +4,12 @@ name: CommunityDragon live smoke test
 # raw.communitydragon.org feed, so it must never gate normal PR/unit-test CI.
 # A CommunityDragon outage should only fail this workflow, not block merges.
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      select:
+        description: "Optional pytest -k expression (e.g. 'intent or role') to run a subset"
+        required: false
+        default: ""
   schedule:
     - cron: "17 7 * * *" # nightly
 
@@ -24,4 +29,5 @@ jobs:
       - name: Run live CommunityDragon smoke test
         env:
           TFTLAB_LIVE_CDRAGON_TEST: "1"
-        run: pytest tests/test_cdragon_live.py -v
+          SELECT: ${{ github.event.inputs.select }}
+        run: pytest tests/test_cdragon_live.py -v ${SELECT:+-k "$SELECT"}

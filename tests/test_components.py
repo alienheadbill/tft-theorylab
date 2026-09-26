@@ -35,7 +35,7 @@ WARMOG, GARGOYLE, GUINSOO, TITAN = "DA_WarmogsArmor", "DA_GargoyleStoneplate", "
 CASES = [
     (["DA_Component_BFSword", "DA_Component_RecurveBow"], 0, False),
     ([WARMOG, "DA_Component_ChainVest"], 1, False),
-    ([WARMOG, GARGOYLE, "DA_Component_ChainVest"], 2, False),  # both completed items defensive
+    ([WARMOG, GARGOYLE, "DA_Component_ChainVest"], 2, False),  # both completed items Tank-intent only
     ([GUINSOO, "DA_Component_RecurveBow"], 1, False),
     ([GUINSOO, TITAN, "DA_Component_RecurveBow"], 2, True),
     (["TFT_Item_BFSword", "TFT_Item_RecurveBow"], 0, False),  # legacy components unchanged

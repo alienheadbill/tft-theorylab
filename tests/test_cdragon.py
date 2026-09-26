@@ -202,3 +202,117 @@ def test_snapshot_keeps_exact_da_ids_with_verified_aliases_only() -> None:
     assert items["DA_18_EmblemSlayer"]["stat_effects"] == [] and items["DA_18_EmblemSlayer"]["tags"] == []
     assert items["DA_Component_ChainVest"]["tags"] == ["component"]
     assert "DA_Hugify18" not in items and "DA_18_YordleSpirit" not in items  # augments stay out
+
+
+# ---------------------------------------------------------------- Riot item intent (TFTCharacterRoleData)
+
+def _role(name, items, *, revamped=None, legacy="TFT_CharacterRole_Champ_ADCarry_Name"):
+    role = {"__type": "TFTCharacterRoleData", "name": name, "CharacterRoleNameTra": legacy,
+            "items": [f"Maps/Shipping/Map22/Items/{i}" if not i.startswith("{") else i for i in items]}
+    if revamped:  # current UI name key, under hashed field names as Riot ships it
+        role["{a1ad92a7}"] = role["{0116bd9b}"] = f"TFT_CharacterRole_RolesRevamped_{revamped}_Name"
+        role["{886be411}"] = f"TFT_CharacterRole_RolesRevamped_{revamped}_Description"
+    return role
+
+
+ROLE_MAP_BIN = {
+    "{2ccf900f}": _role("APTank", ["TFT_Item_GargoyleStoneplate", "TFT_Item_WarmogsArmor"], revamped="APTank"),
+    "{47bfb556}": _role("HTank", ["TFT_Item_OddOne"], revamped="HTank"),
+    "{34ed6daa}": _role("ADCarry", ["TFT_Item_RapidFireCannon", "TFT_Item_BlueBuff", "TFT_Item_OddOne"], revamped="ADMarksman"),
+    "{7009cb66}": _role("ADCarryCrit", ["TFT_Item_RedBuff"]),  # legacy: no current UI name
+    "{4334cab4}": _role("TutorialADCarry", ["{9b3faced}"]),
+    "{afc39260}": {"__type": "TftItemData", "mName": "TFT_Item_Unrelated"},
+}
+ROLE_STRINGS = {"entries": {
+    "tft_characterrole_rolesrevamped_aptank_name": "Magic Tank",
+    "tft_characterrole_rolesrevamped_htank_name": "Hybrid Tank",
+    "tft_characterrole_rolesrevamped_admarksman_name": "Attack Marksman",
+}}
+
+
+def test_riot_roles_extracts_role_objects_ui_names_and_families() -> None:
+    from tftlab.cdragon import riot_roles
+
+    roles = riot_roles(ROLE_MAP_BIN, ROLE_STRINGS)
+    assert set(roles) == {"APTank", "HTank", "ADCarry", "ADCarryCrit", "TutorialADCarry"}
+    assert roles["APTank"]["ui_name"] == "Magic Tank" and roles["APTank"]["family"] == "tank"
+    assert roles["HTank"]["family"] == "tank"
+    assert roles["ADCarry"]["ui_name"] == "Attack Marksman" and roles["ADCarry"]["family"] == "non_tank"
+    assert roles["ADCarry"]["recommended_items"] == ["TFT_Item_RapidFireCannon", "TFT_Item_BlueBuff", "TFT_Item_OddOne"]
+    assert roles["ADCarryCrit"]["family"] is None and roles["ADCarryCrit"]["ui_name_key"] is None  # legacy: no evidence
+    assert roles["TutorialADCarry"]["unresolved_items"] == ["{9b3faced}"]
+    assert roles["APTank"]["object"] == "{2ccf900f}"
+
+
+@pytest.mark.parametrize("bad, strings", [
+    ({"{1}": _role("APHerald", [], revamped="APHerald")}, {"entries": {"tft_characterrole_rolesrevamped_apherald_name": "Magic Herald"}}),
+    ({"{1}": _role("APTank", [], revamped="APTank")}, {"entries": {}}),  # UI string missing
+    ({"{1}": _role("X", []), "{2}": _role("X", [])}, {"entries": {}}),  # duplicate role names
+])
+def test_unclassifiable_roles_fail_loudly(bad, strings) -> None:
+    from tftlab.cdragon import riot_roles
+
+    with pytest.raises(ValueError):
+        riot_roles(bad, strings)
+
+
+def test_item_intent_snapshot_derives_intent_from_riot_recommendations_with_evidence() -> None:
+    from tftlab.cdragon import item_intent_snapshot
+
+    snap = item_intent_snapshot(parse_set_metadata(DA_BUNDLE, patch="latest"), ROLE_MAP_BIN, ROLE_STRINGS)
+    items = snap["items"]
+    assert snap["set_number"] == 18 and set(snap["roles"]) == {"APTank", "HTank", "ADCarry", "ADCarryCrit", "TutorialADCarry"}
+    gargoyle = items["DA_GargoyleStoneplate"]  # every same-name copy shares the evidence
+    assert gargoyle == {
+        "name": "Gargoyle Stoneplate",
+        "riot_items": ["TFT_Item_CorruptedGargoyleStoneplate", "TFT_Item_GargoyleStoneplate"],
+        "recommended_by_tank_roles": ["APTank"], "recommended_by_non_tank_roles": [], "intent": "tank",
+    }
+    assert items["TFT_Item_GargoyleStoneplate"]["intent"] == "tank"
+    assert items["TFT_Item_CorruptedGargoyleStoneplate"]["intent"] == "known_unlisted"  # own id: not recommended
+    red = items["DA_RedBuff"]  # "Red Buff" is TFT_Item_RapidFireCannon, not TFT_Item_RedBuff
+    assert red["riot_items"] == ["TFT_Item_RapidFireCannon"] and red["intent"] == "damage"
+    assert red["recommended_by_non_tank_roles"] == ["ADCarry"]
+    assert items["DA_BlueBuff"]["riot_items"] == ["TFT_Item_BlueBuff", "TFT_Item_SeraphsEmbrace"]
+    assert items["DA_BlueBuff"]["intent"] == "damage"
+    odd = items["TFT_Item_OddOne"]
+    assert (odd["recommended_by_tank_roles"], odd["recommended_by_non_tank_roles"], odd["intent"]) == (["HTank"], ["ADCarry"], "mixed")
+    assert items["DA_OddOne"]["riot_items"] == [] and items["DA_OddOne"]["intent"] == "unknown"  # components contradict
+    assert items["DA_18_EmblemSlayer"]["riot_items"] == [] and items["DA_18_EmblemSlayer"]["intent"] == "unknown"
+    assert items["TFT_Item_RedBuff"]["intent"] == "known_unlisted"  # only a legacy role lists it: no evidence
+    assert not any(i.startswith("DA_Component_") or i in ("TFT_Item_ChainVest", "TFT_Item_RecurveBow") for i in items)
+    assert "DA_Hugify18" not in items  # augments stay out, as in the stat snapshot
+
+
+def test_champion_role_coverage_counts_character_role_links() -> None:
+    from tftlab.cdragon import champion_role_coverage
+
+    bundle = {"items": [], "setData": [{"number": 18, "traits": [], "champions": [
+        {"apiName": "DA_18_Leona", "name": "Leona", "cost": 1, "traits": ["Solar"]},
+        {"apiName": "DA_18_Kobuko", "name": "Kobuko", "cost": 1, "traits": ["Yordle"]},
+        {"apiName": "DA_18_Gone", "name": "Gone", "cost": 2, "traits": ["X"]},
+        {"apiName": "DA_18_Sentry", "name": "Totem", "cost": 0, "traits": []},  # not a shop champion
+    ]}]}
+    meta = parse_set_metadata(bundle, patch="latest")
+    records = {"DA_18_Leona": {"mCharacterName": "DA_18_Leona"}, "DA_18_Kobuko": {"CharacterRole": "{2ccf900f}"}, "DA_18_Gone": None}
+    assert champion_role_coverage(meta, ROLE_MAP_BIN, records) == {
+        "shop_champions": 3, "with_role": {"DA_18_Kobuko": "APTank"}, "missing_record": ["DA_18_Gone"],
+    }
+
+
+def test_fetch_game_json_reads_raw_game_exports_uncached(tmp_path) -> None:
+    import httpx
+
+    from tftlab.cdragon import MAP22_BIN_PATH, CommunityDragonClient
+
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json=ROLE_MAP_BIN)
+
+    with CommunityDragonClient(cache_dir=tmp_path, client=httpx.Client(transport=httpx.MockTransport(handler))) as client:
+        assert client.fetch_game_json(MAP22_BIN_PATH) == ROLE_MAP_BIN
+        client.fetch_game_json(MAP22_BIN_PATH)
+    assert seen == ["https://raw.communitydragon.org/latest/game/data/maps/shipping/map22/map22.bin.json"] * 2
+    assert not list(tmp_path.iterdir())  # nothing cached

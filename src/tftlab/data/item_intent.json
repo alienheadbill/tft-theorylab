@@ -1,0 +1,2952 @@
+{
+ "_about": "Riot-authored item-intent evidence for the current set's completed items -- the exact ids Match-V1 boards store (DA_* bridged to TFT_Item_* by display name + components) -- produced by tftlab.cdragon.item_intent_snapshot from Riot's TFTCharacterRoleData recommended-item lists (game/data/maps/shipping/map22/map22.bin, role UI names from game/en_us/data/menu/en_us/tft.stringtable.json) as exported by CommunityDragon. Read offline by tftlab.carry (carry eligibility) -- analytics never calls CommunityDragon. tests/test_cdragon_live.py::test_committed_item_intent_matches_live_set compares roles/items with the live data and prints a fresh snapshot when Riot changes them; paste that here to refresh. champion_role_coverage is the report-only baseline for test_champion_role_coverage_matches_baseline (TFTCharacterRecord.CharacterRole links; never used by analytics).",
+ "_source": {
+  "roles": "https://raw.communitydragon.org/latest/game/data/maps/shipping/map22/map22.bin.json (TFTCharacterRoleData: name, RolesRevamped UI name key, items)",
+  "role_ui_names": "https://raw.communitydragon.org/latest/game/en_us/data/menu/en_us/tft.stringtable.json",
+  "items": "https://raw.communitydragon.org/latest/cdragon/tft/en_us.json (via tftlab.cdragon.item_stats_snapshot)",
+  "champion_roles": "https://raw.communitydragon.org/latest/game/characters/<id>.cdtb.bin.json (TFTCharacterRecord.CharacterRole)"
+ },
+ "_fetched": "2026-09-26 via the cdragon-live GitHub Actions workflow (run 36243324121); Riot content 16.19.8217343+branch.releases-16-19.content.release (live)",
+ "set_number": 18,
+ "roles": {
+  "ADCasterMana": {
+   "object": "{109d6820}",
+   "ui_name_key": null,
+   "ui_name": null,
+   "family": null,
+   "recommended_items": [
+    "TFT_Item_SpearOfShojin",
+    "TFT_Item_InfinityEdge",
+    "TFT_Item_Deathblade",
+    "TFT_Item_BlueBuff",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_RapidFireCannon",
+    "TFT_Item_PowerGauntlet",
+    "TFT_Item_LastWhisper"
+   ],
+   "unresolved_items": []
+  },
+  "HFighter": {
+   "object": "{1194180f}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_HFighter_Name",
+   "ui_name": "Hybrid Fighter",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_Bloodthirster",
+    "TFT_Item_TitansResolve",
+    "TFT_Item_UnstableConcoction",
+    "TFT_Item_GuardianAngel",
+    "TFT_Item_Quicksilver",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_PowerGauntlet",
+    "TFT_Item_HextechGunblade"
+   ],
+   "unresolved_items": []
+  },
+  "ADReaper": {
+   "object": "{14a36a9c}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_ADAssassin_Name",
+   "ui_name": "Attack Assassin",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_InfinityEdge",
+    "TFT_Item_UnstableConcoction",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_GuardianAngel",
+    "TFT_Item_SteraksGage",
+    "TFT_Item_LastWhisper",
+    "TFT_Item_PowerGauntlet",
+    "TFT_Item_Bloodthirster"
+   ],
+   "unresolved_items": []
+  },
+  "APSpecialist": {
+   "object": "{1e655906}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_APSpecialist_Name",
+   "ui_name": "Magic Specialist",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_RabadonsDeathcap",
+    "TFT_Item_ArchangelsStaff",
+    "TFT_Item_JeweledGauntlet",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_BlueBuff",
+    "TFT_Item_HextechGunblade",
+    "TFT_Item_PowerGauntlet",
+    "TFT_Item_GuinsoosRageblade"
+   ],
+   "unresolved_items": []
+  },
+  "ADCaster": {
+   "object": "{2ae695df}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_ADCaster_Name",
+   "ui_name": "Attack Caster",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_BlueBuff",
+    "TFT_Item_SpearOfShojin",
+    "TFT_Item_InfinityEdge",
+    "TFT_Item_Deathblade",
+    "TFT_Item_UnstableConcoction",
+    "TFT_Item_RapidFireCannon",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_PowerGauntlet"
+   ],
+   "unresolved_items": []
+  },
+  "APTank": {
+   "object": "{2ccf900f}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_APTank_Name",
+   "ui_name": "Magic Tank",
+   "family": "tank",
+   "recommended_items": [
+    "TFT_Item_WarmogsArmor",
+    "TFT_Item_GargoyleStoneplate",
+    "TFT_Item_Redemption",
+    "TFT_Item_IonicSpark",
+    "TFT_Item_DragonsClaw",
+    "TFT_Item_BrambleVest",
+    "TFT_Item_RedBuff",
+    "TFT_Item_FrozenHeart"
+   ],
+   "unresolved_items": []
+  },
+  "APCaster": {
+   "object": "{32cdc033}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_APCaster_Name",
+   "ui_name": "Magic Caster",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_BlueBuff",
+    "TFT_Item_AdaptiveHelm",
+    "TFT_Item_JeweledGauntlet",
+    "TFT_Item_HextechGunblade",
+    "TFT_Item_Morellonomicon",
+    "TFT_Item_RabadonsDeathcap",
+    "TFT_Item_StatikkShiv",
+    "TFT_Item_Leviathan"
+   ],
+   "unresolved_items": []
+  },
+  "ADCarry": {
+   "object": "{34ed6daa}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_ADMarksman_Name",
+   "ui_name": "Attack Marksman",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_GuinsoosRageblade",
+    "TFT_Item_RunaansHurricane",
+    "TFT_Item_Deathblade",
+    "TFT_Item_LastWhisper",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_InfinityEdge",
+    "TFT_Item_PowerGauntlet",
+    "TFT_Item_RapidFireCannon"
+   ],
+   "unresolved_items": []
+  },
+  "APReaper": {
+   "object": "{402a9680}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_APAssassin_Name",
+   "ui_name": "Magic Assassin",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_UnstableConcoction",
+    "TFT_Item_JeweledGauntlet",
+    "TFT_Item_IonicSpark",
+    "TFT_Item_GuardianAngel",
+    "TFT_Item_HextechGunblade",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_RabadonsDeathcap",
+    "TFT_Item_Bloodthirster"
+   ],
+   "unresolved_items": []
+  },
+  "TutorialADCarry": {
+   "object": "{4334cab4}",
+   "ui_name_key": null,
+   "ui_name": null,
+   "family": null,
+   "recommended_items": [],
+   "unresolved_items": [
+    "{9b3faced}"
+   ]
+  },
+  "APFighter": {
+   "object": "{44de5928}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_APFighter_Name",
+   "ui_name": "Magic Fighter",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_UnstableConcoction",
+    "TFT_Item_JeweledGauntlet",
+    "TFT_Item_IonicSpark",
+    "TFT_Item_GuardianAngel",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_TitansResolve",
+    "TFT_Item_RabadonsDeathcap",
+    "TFT_Item_Bloodthirster"
+   ],
+   "unresolved_items": []
+  },
+  "HTank": {
+   "object": "{47bfb556}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_HTank_Name",
+   "ui_name": "Hybrid Tank",
+   "family": "tank",
+   "recommended_items": [
+    "TFT_Item_WarmogsArmor",
+    "TFT_Item_GargoyleStoneplate",
+    "TFT_Item_Redemption",
+    "TFT_Item_DragonsClaw",
+    "TFT_Item_BrambleVest",
+    "TFT_Item_RedBuff",
+    "TFT_Item_FrozenHeart",
+    "TFT_Item_TitansResolve"
+   ],
+   "unresolved_items": []
+  },
+  "ADFighter": {
+   "object": "{53d104ac}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_ADFighter_Name",
+   "ui_name": "Attack Fighter",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_Bloodthirster",
+    "TFT_Item_SteraksGage",
+    "TFT_Item_TitansResolve",
+    "TFT_Item_Quicksilver",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_UnstableConcoction",
+    "TFT_Item_GuardianAngel",
+    "TFT_Item_LastWhisper"
+   ],
+   "unresolved_items": []
+  },
+  "ADCasterFormSwapper": {
+   "object": "{55e1736d}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_ADCaster_Name",
+   "ui_name": "Attack Caster",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_BlueBuff",
+    "TFT_Item_SpearOfShojin",
+    "TFT_Item_InfinityEdge",
+    "TFT_Item_Deathblade",
+    "TFT_Item_UnstableConcoction",
+    "TFT_Item_RapidFireCannon",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_PowerGauntlet"
+   ],
+   "unresolved_items": []
+  },
+  "APCarryNoCast": {
+   "object": "{58700b1e}",
+   "ui_name_key": null,
+   "ui_name": null,
+   "family": null,
+   "recommended_items": [
+    "TFT_Item_GuinsoosRageblade",
+    "TFT_Item_JeweledGauntlet",
+    "TFT_Item_ArchangelsStaff",
+    "TFT_Item_RabadonsDeathcap",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_StatikkShiv",
+    "TFT_Item_PowerGauntlet",
+    "TFT_Item_HextechGunblade"
+   ],
+   "unresolved_items": []
+  },
+  "APCasterSoraka7_5": {
+   "object": "{5ca028b5}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_APCaster_Name",
+   "ui_name": "Magic Caster",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_ArchangelsStaff",
+    "TFT_Item_SpearOfShojin",
+    "TFT_Item_RabadonsDeathcap",
+    "TFT_Item_AdaptiveHelm",
+    "TFT_Item_Leviathan",
+    "TFT_Item_BlueBuff",
+    "TFT_Item_GuinsoosRageblade",
+    "TFT_Item_Quicksilver"
+   ],
+   "unresolved_items": []
+  },
+  "HCaster": {
+   "object": "{63e60816}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_HCaster_Name",
+   "ui_name": "Hybrid Caster",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_BlueBuff",
+    "TFT_Item_SpearOfShojin",
+    "TFT_Item_AdaptiveHelm",
+    "TFT_Item_HextechGunblade",
+    "TFT_Item_Morellonomicon",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_PowerGauntlet",
+    "TFT_Item_JeweledGauntlet"
+   ],
+   "unresolved_items": []
+  },
+  "ADCarryCrit": {
+   "object": "{7009cb66}",
+   "ui_name_key": null,
+   "ui_name": null,
+   "family": null,
+   "recommended_items": [
+    "TFT_Item_InfinityEdge",
+    "TFT_Item_LastWhisper",
+    "TFT_Item_PowerGauntlet",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_GuinsoosRageblade",
+    "TFT_Item_Deathblade",
+    "TFT_Item_Quicksilver",
+    "TFT_Item_UnstableConcoction"
+   ],
+   "unresolved_items": []
+  },
+  "APCasterViktorS13": {
+   "object": "{70ebff95}",
+   "ui_name_key": null,
+   "ui_name": null,
+   "family": null,
+   "recommended_items": [
+    "TFT_Item_JeweledGauntlet",
+    "TFT_Item_RabadonsDeathcap",
+    "TFT_Item_InfinityEdge",
+    "TFT_Item_Deathblade",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_UnstableConcoction",
+    "TFT_Item_Morellonomicon",
+    "TFT_Item_ArchangelsStaff"
+   ],
+   "unresolved_items": []
+  },
+  "APCasterHighMana": {
+   "object": "{8377a680}",
+   "ui_name_key": null,
+   "ui_name": null,
+   "family": null,
+   "recommended_items": [
+    "TFT_Item_SpearOfShojin",
+    "TFT_Item_ArchangelsStaff",
+    "TFT_Item_RabadonsDeathcap",
+    "TFT_Item_JeweledGauntlet",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_Leviathan",
+    "TFT_Item_PowerGauntlet",
+    "TFT_Item_AdaptiveHelm"
+   ],
+   "unresolved_items": []
+  },
+  "APCarry": {
+   "object": "{9eb7b8a6}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_APMarksman_Name",
+   "ui_name": "Magic Marksman",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_GuinsoosRageblade",
+    "TFT_Item_Leviathan",
+    "TFT_Item_StatikkShiv",
+    "TFT_Item_ArchangelsStaff",
+    "TFT_Item_RabadonsDeathcap",
+    "TFT_Item_HextechGunblade",
+    "TFT_Item_JeweledGauntlet",
+    "TFT_Item_MadredsBloodrazor"
+   ],
+   "unresolved_items": []
+  },
+  "ADSpecialist": {
+   "object": "{a35256da}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_ADSpecialist_Name",
+   "ui_name": "Attack Specialist",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_InfinityEdge",
+    "TFT_Item_LastWhisper",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_Deathblade",
+    "TFT_Item_RunaansHurricane",
+    "TFT_Item_PowerGauntlet",
+    "TFT_Item_RapidFireCannon",
+    "TFT_Item_GuinsoosRageblade"
+   ],
+   "unresolved_items": []
+  },
+  "APCarryHighMana": {
+   "object": "{b8f51cf1}",
+   "ui_name_key": null,
+   "ui_name": null,
+   "family": null,
+   "recommended_items": [
+    "TFT_Item_GuinsoosRageblade",
+    "TFT_Item_JeweledGauntlet",
+    "TFT_Item_ArchangelsStaff",
+    "TFT_Item_RabadonsDeathcap",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_SpearOfShojin",
+    "TFT_Item_PowerGauntlet",
+    "TFT_Item_AdaptiveHelm"
+   ],
+   "unresolved_items": []
+  },
+  "HReaper": {
+   "object": "{c3dd73e5}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_HReaper_Name",
+   "ui_name": "Hybrid Assassin",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_Bloodthirster",
+    "TFT_Item_TitansResolve",
+    "TFT_Item_UnstableConcoction",
+    "TFT_Item_GuardianAngel",
+    "TFT_Item_Quicksilver",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_PowerGauntlet",
+    "TFT_Item_InfinityEdge"
+   ],
+   "unresolved_items": []
+  },
+  "HCarry": {
+   "object": "{c537957d}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_HCarry_Name",
+   "ui_name": "Hybrid Marksman",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_GuinsoosRageblade",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_RapidFireCannon",
+    "TFT_Item_PowerGauntlet",
+    "TFT_Item_HextechGunblade",
+    "TFT_Item_UnstableConcoction",
+    "TFT_Item_InfinityEdge",
+    "TFT_Item_SpearOfShojin"
+   ],
+   "unresolved_items": []
+  },
+  "HSpecialist": {
+   "object": "{cfdf75ab}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_HSpecialist_Name",
+   "ui_name": "Hybrid Specialist",
+   "family": "non_tank",
+   "recommended_items": [
+    "TFT_Item_Bloodthirster",
+    "TFT_Item_TitansResolve",
+    "TFT_Item_UnstableConcoction",
+    "TFT_Item_GuardianAngel",
+    "TFT_Item_Quicksilver",
+    "TFT_Item_MadredsBloodrazor",
+    "TFT_Item_PowerGauntlet",
+    "TFT_Item_HextechGunblade"
+   ],
+   "unresolved_items": []
+  },
+  "ADTank": {
+   "object": "{d5823aeb}",
+   "ui_name_key": "TFT_CharacterRole_RolesRevamped_ADTank_Name",
+   "ui_name": "Attack Tank",
+   "family": "tank",
+   "recommended_items": [
+    "TFT_Item_WarmogsArmor",
+    "TFT_Item_GargoyleStoneplate",
+    "TFT_Item_Redemption",
+    "TFT_Item_SpectralGauntlet",
+    "TFT_Item_DragonsClaw",
+    "TFT_Item_BrambleVest",
+    "TFT_Item_RedBuff",
+    "TFT_Item_FrozenHeart"
+   ],
+   "unresolved_items": []
+  }
+ },
+ "items": {
+  "DA_18_EmblemBlackthorn": {
+   "name": "Blackthorn Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemBlossom": {
+   "name": "Blossom Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemBrawler": {
+   "name": "Brawler Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemCoven": {
+   "name": "Coven Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemDefender": {
+   "name": "Defender Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemElderwood": {
+   "name": "Elderwood Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemExecutioner": {
+   "name": "Executioner Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemFae": {
+   "name": "Fae Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemFloraFatalis": {
+   "name": "Flora Fatalis Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemFloraFatalisAugment": {
+   "name": "Flora Fatalis Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemHunter": {
+   "name": "Hunter Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemInferno": {
+   "name": "Inferno Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemInvoker": {
+   "name": "Invoker Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemJuggernaut": {
+   "name": "Juggernaut Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemLunar": {
+   "name": "Lunar Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemPrimal": {
+   "name": "Primal Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemRapidfire": {
+   "name": "Rapidfire Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemSlayer": {
+   "name": "Ravager Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemSpellweaver": {
+   "name": "Spellweaver Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemSprykin": {
+   "name": "Sprykin Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_18_EmblemVanguard": {
+   "name": "Vanguard Emblem",
+   "riot_items": [],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "unknown"
+  },
+  "DA_AdaptiveHelm": {
+   "name": "Adaptive Helm",
+   "riot_items": [
+    "TFT_Item_AdaptiveHelm"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCaster",
+    "APCasterSoraka7_5",
+    "HCaster"
+   ],
+   "intent": "damage"
+  },
+  "DA_ArchangelsStaff": {
+   "name": "Archangel's Staff",
+   "riot_items": [
+    "TFT_Item_ArchangelsStaff"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCarry",
+    "APCasterSoraka7_5",
+    "APSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "DA_Bloodthirster": {
+   "name": "Bloodthirster",
+   "riot_items": [
+    "TFT_Item_Bloodthirster"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADFighter",
+    "ADReaper",
+    "APFighter",
+    "APReaper",
+    "HFighter",
+    "HReaper",
+    "HSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "DA_BlueBuff": {
+   "name": "Blue Buff",
+   "riot_items": [
+    "TFT_Item_BlueBuff",
+    "TFT_Item_SeraphsEmbrace"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "APCaster",
+    "APCasterSoraka7_5",
+    "APSpecialist",
+    "HCaster"
+   ],
+   "intent": "damage"
+  },
+  "DA_BrambleVest": {
+   "name": "Bramble Vest",
+   "riot_items": [
+    "TFT_Item_BrambleVest"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank",
+    "APTank",
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "DA_Crownguard": {
+   "name": "Crownguard",
+   "riot_items": [
+    "TFT_Item_Crownguard"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "DA_Deathblade": {
+   "name": "Deathblade",
+   "riot_items": [
+    "TFT_Item_CorruptedDeathblade",
+    "TFT_Item_Deathblade",
+    "TFT_Item_FreeDeathblade"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "ADSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "DA_DragonsClaw": {
+   "name": "Dragon's Claw",
+   "riot_items": [
+    "TFT_Item_DragonsClaw"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank",
+    "APTank",
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "DA_EdgeOfNight": {
+   "name": "Edge of Night",
+   "riot_items": [
+    "TFT_Item_GuardianAngel"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADFighter",
+    "ADReaper",
+    "APFighter",
+    "APReaper",
+    "HFighter",
+    "HReaper",
+    "HSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "DA_Evenshroud": {
+   "name": "Evenshroud",
+   "riot_items": [
+    "TFT_Item_SpectralGauntlet"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "DA_GargoyleStoneplate": {
+   "name": "Gargoyle Stoneplate",
+   "riot_items": [
+    "TFT_Item_CorruptedGargoyleStoneplate",
+    "TFT_Item_GargoyleStoneplate"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank",
+    "APTank",
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "DA_GiantSlayer": {
+   "name": "Giant Slayer",
+   "riot_items": [
+    "TFT_Item_MadredsBloodrazor"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "ADFighter",
+    "ADReaper",
+    "ADSpecialist",
+    "APCarry",
+    "APFighter",
+    "APReaper",
+    "APSpecialist",
+    "HCarry",
+    "HCaster",
+    "HFighter",
+    "HReaper",
+    "HSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "DA_GuinsoosRageblade": {
+   "name": "Guinsoo's Rageblade",
+   "riot_items": [
+    "TFT_Item_CorruptedGuinsoosRageblade",
+    "TFT_Item_GuinsoosRageblade"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADSpecialist",
+    "APCarry",
+    "APCasterSoraka7_5",
+    "APSpecialist",
+    "HCarry"
+   ],
+   "intent": "damage"
+  },
+  "DA_HandOfJustice": {
+   "name": "Hand Of Justice",
+   "riot_items": [
+    "TFT_Item_CorruptedHandOfJustice",
+    "TFT_Item_UnstableConcoction"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "ADFighter",
+    "ADReaper",
+    "APFighter",
+    "APReaper",
+    "HCarry",
+    "HFighter",
+    "HReaper",
+    "HSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "DA_HextechGunblade": {
+   "name": "Hextech Gunblade",
+   "riot_items": [
+    "TFT_Item_HextechGunblade"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCarry",
+    "APCaster",
+    "APReaper",
+    "APSpecialist",
+    "HCarry",
+    "HCaster",
+    "HFighter",
+    "HSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "DA_InfinityEdge": {
+   "name": "Infinity Edge",
+   "riot_items": [
+    "TFT_Item_CorruptedInfinityEdge",
+    "TFT_Item_InfinityEdge"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "ADReaper",
+    "ADSpecialist",
+    "HCarry",
+    "HReaper"
+   ],
+   "intent": "damage"
+  },
+  "DA_IonicSpark": {
+   "name": "Ionic Spark",
+   "riot_items": [
+    "TFT_Item_IonicSpark"
+   ],
+   "recommended_by_tank_roles": [
+    "APTank"
+   ],
+   "recommended_by_non_tank_roles": [
+    "APFighter",
+    "APReaper"
+   ],
+   "intent": "mixed"
+  },
+  "DA_Item_Artifact_TalismanOfAscension": {
+   "name": "Talisman of Ascension",
+   "riot_items": [
+    "TFT_Item_Artifact_TalismanOfAscension"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "DA_JeweledGauntlet": {
+   "name": "Jeweled Gauntlet",
+   "riot_items": [
+    "TFT_Item_CorruptedJeweledGauntlet",
+    "TFT_Item_JeweledGauntlet"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCarry",
+    "APCaster",
+    "APFighter",
+    "APReaper",
+    "APSpecialist",
+    "HCaster"
+   ],
+   "intent": "damage"
+  },
+  "DA_KrakensFury": {
+   "name": "Kraken's Fury",
+   "riot_items": [
+    "TFT_Item_RunaansHurricane"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "DA_LastWhisper": {
+   "name": "Last Whisper",
+   "riot_items": [
+    "TFT_Item_LastWhisper"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADFighter",
+    "ADReaper",
+    "ADSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "DA_Morellonomicon": {
+   "name": "Morellonomicon",
+   "riot_items": [
+    "TFT_Item_Morellonomicon"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCaster",
+    "HCaster"
+   ],
+   "intent": "damage"
+  },
+  "DA_NashorsTooth": {
+   "name": "Nashor's Tooth",
+   "riot_items": [
+    "TFT_Item_Leviathan"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCarry",
+    "APCaster",
+    "APCasterSoraka7_5"
+   ],
+   "intent": "damage"
+  },
+  "DA_ProtectorsVow": {
+   "name": "Protector's Vow",
+   "riot_items": [
+    "TFT_Item_FrozenHeart"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank",
+    "APTank",
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "DA_Quicksilver": {
+   "name": "Quicksilver",
+   "riot_items": [
+    "TFT_Item_Quicksilver"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADFighter",
+    "APCasterSoraka7_5",
+    "HFighter",
+    "HReaper",
+    "HSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "DA_RabadonsDeathcap": {
+   "name": "Rabadon's Deathcap",
+   "riot_items": [
+    "TFT_Item_CorruptedRabadonsDeathcap",
+    "TFT_Item_RabadonsDeathcap"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCarry",
+    "APCaster",
+    "APCasterSoraka7_5",
+    "APFighter",
+    "APReaper",
+    "APSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "DA_RedBuff": {
+   "name": "Red Buff",
+   "riot_items": [
+    "TFT_Item_RapidFireCannon"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "ADSpecialist",
+    "HCarry"
+   ],
+   "intent": "damage"
+  },
+  "DA_SpearOfShojin": {
+   "name": "Spear of Shojin",
+   "riot_items": [
+    "TFT_Item_CorruptedSpearOfShojin",
+    "TFT_Item_SpearOfShojin"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "APCasterSoraka7_5",
+    "HCarry",
+    "HCaster"
+   ],
+   "intent": "damage"
+  },
+  "DA_SpiritVisage": {
+   "name": "Spirit Visage",
+   "riot_items": [
+    "TFT_Item_CorruptedRedemption",
+    "TFT_Item_Redemption"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank",
+    "APTank",
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "DA_SteadfastHeart": {
+   "name": "Steadfast Heart",
+   "riot_items": [
+    "TFT_Item_NightHarvester"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "DA_SteraksGage": {
+   "name": "Sterak's Gage",
+   "riot_items": [
+    "TFT_Item_SteraksGage"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADFighter",
+    "ADReaper"
+   ],
+   "intent": "damage"
+  },
+  "DA_StrikersFlail": {
+   "name": "Striker's Flail",
+   "riot_items": [
+    "TFT_Item_PowerGauntlet"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "ADReaper",
+    "ADSpecialist",
+    "APSpecialist",
+    "HCarry",
+    "HCaster",
+    "HFighter",
+    "HReaper",
+    "HSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "DA_SunfireCape": {
+   "name": "Sunfire Cape",
+   "riot_items": [
+    "TFT_Item_RedBuff"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank",
+    "APTank",
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "DA_TacticiansCape": {
+   "name": "Tactician's Cape",
+   "riot_items": [
+    "TFT_Item_TacticiansRing"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "DA_TacticiansCrown": {
+   "name": "Tacticians Crown",
+   "riot_items": [
+    "TFT_Item_ForceOfNature"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "DA_TacticiansShield": {
+   "name": "Tacticians Shield",
+   "riot_items": [
+    "TFT_Item_TacticiansScepter"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "DA_ThiefsGloves": {
+   "name": "Thief's Gloves",
+   "riot_items": [
+    "TFT_Item_ThiefsGloves",
+    "TFT_Item_ThiefsGloves_AcademyCopy1",
+    "TFT_Item_ThiefsGloves_AcademyCopy2"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "DA_TitansResolve": {
+   "name": "Titan's Resolve",
+   "riot_items": [
+    "TFT_Item_TitansResolve"
+   ],
+   "recommended_by_tank_roles": [
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [
+    "ADFighter",
+    "APFighter",
+    "HFighter",
+    "HReaper",
+    "HSpecialist"
+   ],
+   "intent": "mixed"
+  },
+  "DA_VoidStaff": {
+   "name": "Void Staff",
+   "riot_items": [
+    "TFT_Item_StatikkShiv"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCarry",
+    "APCaster"
+   ],
+   "intent": "damage"
+  },
+  "DA_WarmogsArmor": {
+   "name": "Warmogs Armor",
+   "riot_items": [
+    "TFT_Item_CorruptedWarmogsArmor",
+    "TFT_Item_WarmogsArmor"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank",
+    "APTank",
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "TFT_Item_AdaptiveHelm": {
+   "name": "Adaptive Helm",
+   "riot_items": [
+    "TFT_Item_AdaptiveHelm"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCaster",
+    "APCasterSoraka7_5",
+    "HCaster"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_AegisOfTheLegion": {
+   "name": "Aegis of the Legion",
+   "riot_items": [
+    "TFT_Item_AegisOfTheLegion"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_ArchangelsStaff": {
+   "name": "Archangel's Staff",
+   "riot_items": [
+    "TFT_Item_ArchangelsStaff"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCarry",
+    "APCasterSoraka7_5",
+    "APSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_Artifact_AegisOfDawn": {
+   "name": "Aegis of Dawn",
+   "riot_items": [
+    "TFT_Item_Artifact_AegisOfDawn"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_AegisOfDusk": {
+   "name": "Aegis of Dusk",
+   "riot_items": [
+    "TFT_Item_Artifact_AegisOfDusk"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_BlightingJewel": {
+   "name": "Blighting Jewel",
+   "riot_items": [
+    "TFT_Item_Artifact_BlightingJewel"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_CappaJuice": {
+   "name": "Cappa Juice",
+   "riot_items": [
+    "TFT_Item_Artifact_CappaJuice"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_CursedBlade": {
+   "name": "Cursed Blade",
+   "riot_items": [
+    "TFT_Item_Artifact_CursedBlade"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_CursedVampiricScepter": {
+   "name": "Corrupt Vampiric Scepter",
+   "riot_items": [
+    "TFT_Item_Artifact_CursedVampiricScepter"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_Dawncore": {
+   "name": "Dawncore",
+   "riot_items": [
+    "TFT_Item_Artifact_Dawncore"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_EternalPact": {
+   "name": "Eternal Pact",
+   "riot_items": [
+    "TFT_Item_Artifact_EternalPact"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_Fishbones": {
+   "name": "Fishbones",
+   "riot_items": [
+    "TFT_Item_Artifact_Fishbones"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_ForbiddenIdol": {
+   "name": "Forbidden Idol",
+   "riot_items": [
+    "TFT_Item_Artifact_ForbiddenIdol"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_HellfireHatchet": {
+   "name": "Hellfire Hatchet",
+   "riot_items": [
+    "TFT_Item_Artifact_HellfireHatchet"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_HorizonFocus": {
+   "name": "Horizon Focus",
+   "riot_items": [
+    "TFT_Item_Artifact_HorizonFocus"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_InnervatingLocket": {
+   "name": "Innervating Locket",
+   "riot_items": [
+    "TFT_Item_Artifact_InnervatingLocket"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_LesserMirroredPersona": {
+   "name": "Lesser Mirrored Persona",
+   "riot_items": [
+    "TFT_Item_Artifact_LesserMirroredPersona"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_LichBane": {
+   "name": "Lich Bane",
+   "riot_items": [
+    "TFT_Item_Artifact_LichBane"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_LightshieldCrest": {
+   "name": "Lightshield Crest",
+   "riot_items": [
+    "TFT_Item_Artifact_LightshieldCrest"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_LudensTempest": {
+   "name": "Luden's Tempest",
+   "riot_items": [
+    "TFT_Item_Artifact_LudensTempest"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_MendingEchoes": {
+   "name": "Mending Echoes",
+   "riot_items": [
+    "TFT_Item_Artifact_MendingEchoes"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_MirroredPersona": {
+   "name": "Mirrored Persona",
+   "riot_items": [
+    "TFT_Item_Artifact_MirroredPersona"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_Mittens": {
+   "name": "Mittens",
+   "riot_items": [
+    "TFT_Item_Artifact_Mittens"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_NavoriFlickerblades": {
+   "name": "Flickerblades",
+   "riot_items": [
+    "TFT_Item_Artifact_NavoriFlickerblades"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_ProwlersClaw": {
+   "name": "Prowler's Claw",
+   "riot_items": [
+    "TFT_Item_Artifact_ProwlersClaw"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_RapidFirecannon": {
+   "name": "Rapid Firecannon",
+   "riot_items": [
+    "TFT_Item_Artifact_RapidFirecannon"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_SeekersArmguard": {
+   "name": "Seeker's Armguard",
+   "riot_items": [
+    "TFT_Item_Artifact_SeekersArmguard"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_ShadowPuppet": {
+   "name": "Shadow Puppet",
+   "riot_items": [
+    "TFT_Item_Artifact_ShadowPuppet"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_SilvermereDawn": {
+   "name": "Silvermere Dawn",
+   "riot_items": [
+    "TFT_Item_Artifact_SilvermereDawn"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_SpectralCutlass": {
+   "name": "Spectral Cutlass",
+   "riot_items": [
+    "TFT_Item_Artifact_SpectralCutlass"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_StatikkShiv": {
+   "name": "Statikk Shiv",
+   "riot_items": [
+    "TFT_Item_Artifact_StatikkShiv"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_SuspiciousTrenchCoat": {
+   "name": "Suspicious Trench Coat",
+   "riot_items": [
+    "TFT_Item_Artifact_SuspiciousTrenchCoat"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_TalismanOfAscension": {
+   "name": "Talisman Of Ascension",
+   "riot_items": [
+    "TFT_Item_Artifact_TalismanOfAscension"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_TheIndomitable": {
+   "name": "The Indomitable",
+   "riot_items": [
+    "TFT_Item_Artifact_TheIndomitable"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_TitanicHydra": {
+   "name": "Titanic Hydra",
+   "riot_items": [
+    "TFT_Item_Artifact_TitanicHydra"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_UnendingDespair": {
+   "name": "Unending Despair",
+   "riot_items": [
+    "TFT_Item_Artifact_UnendingDespair"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_VoidGauntlet": {
+   "name": "Void Gauntlet",
+   "riot_items": [
+    "TFT_Item_Artifact_VoidGauntlet"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_WitheringRelic": {
+   "name": "Withered Relic",
+   "riot_items": [
+    "TFT_Item_Artifact_WitheringRelic"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Artifact_WitsEnd": {
+   "name": "Wit's End",
+   "riot_items": [
+    "TFT_Item_Artifact_WitsEnd"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_BansheesVeil": {
+   "name": "Banshee's Veil",
+   "riot_items": [
+    "TFT_Item_BansheesVeil"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_BladeOfTheRuinedKing": {
+   "name": "TFT_item_name_BladeOfTheRuinedKing",
+   "riot_items": [
+    "TFT_Item_BladeOfTheRuinedKing"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Blank": {
+   "name": "TFT_Item_Blank",
+   "riot_items": [
+    "TFT_Item_Blank"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Bloodthirster": {
+   "name": "Bloodthirster",
+   "riot_items": [
+    "TFT_Item_Bloodthirster"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADFighter",
+    "ADReaper",
+    "APFighter",
+    "APReaper",
+    "HFighter",
+    "HReaper",
+    "HSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_BlueBuff": {
+   "name": "Blue Buff",
+   "riot_items": [
+    "TFT_Item_BlueBuff"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "APCaster",
+    "APCasterSoraka7_5",
+    "APSpecialist",
+    "HCaster"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_BrambleVest": {
+   "name": "Bramble Vest",
+   "riot_items": [
+    "TFT_Item_BrambleVest"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank",
+    "APTank",
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "TFT_Item_CarouselOfChaos_TimeUndilator": {
+   "name": "Time Undilator",
+   "riot_items": [
+    "TFT_Item_CarouselOfChaos_TimeUndilator"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Catalyst": {
+   "name": "TFT_item_name_Catalyst",
+   "riot_items": [
+    "TFT_Item_Catalyst"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Chalice": {
+   "name": "Chalice of Power",
+   "riot_items": [
+    "TFT_Item_Chalice"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_ChonccsChalice": {
+   "name": "Choncc's Chalice",
+   "riot_items": [
+    "TFT_Item_ChonccsChalice"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_ChonccsCrown": {
+   "name": "Choncc's Crown",
+   "riot_items": [
+    "TFT_Item_ChonccsCrown"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_ChonccsSpork": {
+   "name": "Choncc's Spork",
+   "riot_items": [
+    "TFT_Item_ChonccsSpork"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_CorruptedDeathblade": {
+   "name": "Deathblade",
+   "riot_items": [
+    "TFT_Item_CorruptedDeathblade"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_CorruptedGargoyleStoneplate": {
+   "name": "Gargoyle Stoneplate",
+   "riot_items": [
+    "TFT_Item_CorruptedGargoyleStoneplate"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_CorruptedGuinsoosRageblade": {
+   "name": "Guinsoo's Rageblade",
+   "riot_items": [
+    "TFT_Item_CorruptedGuinsoosRageblade"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_CorruptedHandOfJustice": {
+   "name": "Hand Of Justice",
+   "riot_items": [
+    "TFT_Item_CorruptedHandOfJustice"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_CorruptedInfinityEdge": {
+   "name": "Infinity Edge",
+   "riot_items": [
+    "TFT_Item_CorruptedInfinityEdge"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_CorruptedJeweledGauntlet": {
+   "name": "Jeweled Gauntlet",
+   "riot_items": [
+    "TFT_Item_CorruptedJeweledGauntlet"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_CorruptedRabadonsDeathcap": {
+   "name": "Rabadon's Deathcap",
+   "riot_items": [
+    "TFT_Item_CorruptedRabadonsDeathcap"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_CorruptedRedemption": {
+   "name": "Spirit Visage",
+   "riot_items": [
+    "TFT_Item_CorruptedRedemption"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_CorruptedSpearOfShojin": {
+   "name": "Spear of Shojin",
+   "riot_items": [
+    "TFT_Item_CorruptedSpearOfShojin"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_CorruptedWarmogsArmor": {
+   "name": "Warmog's Armor",
+   "riot_items": [
+    "TFT_Item_CorruptedWarmogsArmor"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_CrestOfCinders": {
+   "name": "Crest Of Cinders",
+   "riot_items": [
+    "TFT_Item_CrestOfCinders"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Crownguard": {
+   "name": "Crownguard",
+   "riot_items": [
+    "TFT_Item_Crownguard"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_CursedBlade": {
+   "name": "tft_item_name_CursedBlade",
+   "riot_items": [
+    "TFT_Item_CursedBlade"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Darkin": {
+   "name": "tft_item_name_Darkin",
+   "riot_items": [
+    "TFT_Item_Darkin"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Deathblade": {
+   "name": "Deathblade",
+   "riot_items": [
+    "TFT_Item_Deathblade"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "ADSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_DebugBase": {
+   "name": "MissingNo",
+   "riot_items": [
+    "TFT_Item_DebugBase"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_DebugCrit": {
+   "name": "Critical Hit!",
+   "riot_items": [
+    "TFT_Item_DebugCrit"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_DebugDamage": {
+   "name": "Portable Pain",
+   "riot_items": [
+    "TFT_Item_DebugDamage"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_DebugDamageAmp": {
+   "name": "Damage Amp",
+   "riot_items": [
+    "TFT_Item_DebugDamageAmp"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_DebugFirstHit": {
+   "name": "Ace",
+   "riot_items": [
+    "TFT_Item_DebugFirstHit"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_DebugMana": {
+   "name": "The Tears of My Enemies",
+   "riot_items": [
+    "TFT_Item_DebugMana"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_DebugShield": {
+   "name": "Pengu's Protection",
+   "riot_items": [
+    "TFT_Item_DebugShield"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_DebugStun": {
+   "name": "Hammer to the Face",
+   "riot_items": [
+    "TFT_Item_DebugStun"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_DebugTaunt": {
+   "name": "Taunt",
+   "riot_items": [
+    "TFT_Item_DebugTaunt"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_DebugUnitID": {
+   "name": "Do You Know Who I Am?",
+   "riot_items": [
+    "TFT_Item_DebugUnitID"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_DragonsClaw": {
+   "name": "Dragon's Claw",
+   "riot_items": [
+    "TFT_Item_DragonsClaw"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank",
+    "APTank",
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "TFT_Item_EternalFlame": {
+   "name": "The Eternal Flame",
+   "riot_items": [
+    "TFT_Item_EternalFlame"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_ForceOfNature": {
+   "name": "Tactician's Crown",
+   "riot_items": [
+    "TFT_Item_ForceOfNature"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_FreeBFSword": {
+   "name": "B.F. Sword",
+   "riot_items": [
+    "TFT_Item_FreeBFSword"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_FreeDeathblade": {
+   "name": "Deathblade",
+   "riot_items": [
+    "TFT_Item_FreeDeathblade"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_FreeVengeance": {
+   "name": "tft_item_name_SwordOfTheDivine2",
+   "riot_items": [
+    "TFT_Item_FreeVengeance"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_FrozenHeart": {
+   "name": "Protector's Vow",
+   "riot_items": [
+    "TFT_Item_FrozenHeart"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank",
+    "APTank",
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "TFT_Item_FrozenMallet": {
+   "name": "TFT_item_name_FrozenMallet",
+   "riot_items": [
+    "TFT_Item_FrozenMallet"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GargoyleStoneplate": {
+   "name": "Gargoyle Stoneplate",
+   "riot_items": [
+    "TFT_Item_GargoyleStoneplate"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank",
+    "APTank",
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "TFT_Item_GrantCompletedAnvil": {
+   "name": "Completed Item Anvil",
+   "riot_items": [
+    "TFT_Item_GrantCompletedAnvil"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantCompletedItem1": {
+   "name": "1 completed item",
+   "riot_items": [
+    "TFT_Item_GrantCompletedItem1"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantCompletedItem2": {
+   "name": "@ItemsToGive@ completed items",
+   "riot_items": [
+    "TFT_Item_GrantCompletedItem2"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantCompletedItem3": {
+   "name": "@ItemsToGive@ completed items",
+   "riot_items": [
+    "TFT_Item_GrantCompletedItem3"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantComponent1": {
+   "name": "1 component",
+   "riot_items": [
+    "TFT_Item_GrantComponent1"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantComponent2": {
+   "name": "@ItemsToGive@ components",
+   "riot_items": [
+    "TFT_Item_GrantComponent2"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantComponent3": {
+   "name": "@ItemsToGive@ components",
+   "riot_items": [
+    "TFT_Item_GrantComponent3"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantComponent4": {
+   "name": "@ItemsToGive@ components",
+   "riot_items": [
+    "TFT_Item_GrantComponent4"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantComponent5": {
+   "name": "@ItemsToGive@ components",
+   "riot_items": [
+    "TFT_Item_GrantComponent5"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantComponent6": {
+   "name": "@ItemsToGive@ components",
+   "riot_items": [
+    "TFT_Item_GrantComponent6"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantComponent7": {
+   "name": "@ItemsToGive@ components",
+   "riot_items": [
+    "TFT_Item_GrantComponent7"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantComponent8": {
+   "name": "@ItemsToGive@ components",
+   "riot_items": [
+    "TFT_Item_GrantComponent8"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantComponent9": {
+   "name": "@ItemsToGive@ components",
+   "riot_items": [
+    "TFT_Item_GrantComponent9"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantComponentAnvil": {
+   "name": "Component Item Key",
+   "riot_items": [
+    "TFT_Item_GrantComponentAnvil"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantOrbs1": {
+   "name": "1 loot orb",
+   "riot_items": [
+    "TFT_Item_GrantOrbs1"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantOrbs2": {
+   "name": "@OrbsToGive@ loot orbs",
+   "riot_items": [
+    "TFT_Item_GrantOrbs2"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantOrbs3": {
+   "name": "@OrbsToGive@ loot orbs",
+   "riot_items": [
+    "TFT_Item_GrantOrbs3"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantOrbs4": {
+   "name": "@OrbsToGive@ loot orbs",
+   "riot_items": [
+    "TFT_Item_GrantOrbs4"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantOrbs5": {
+   "name": "@OrbsToGive@ loot orbs",
+   "riot_items": [
+    "TFT_Item_GrantOrbs5"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantOrbs6": {
+   "name": "@OrbsToGive@ loot orbs",
+   "riot_items": [
+    "TFT_Item_GrantOrbs6"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantOrbs7": {
+   "name": "@OrbsToGive@ loot orbs",
+   "riot_items": [
+    "TFT_Item_GrantOrbs7"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantOrbs8": {
+   "name": "@OrbsToGive@ loot orbs",
+   "riot_items": [
+    "TFT_Item_GrantOrbs8"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantOrbs9": {
+   "name": "@OrbsToGive@ loot orbs",
+   "riot_items": [
+    "TFT_Item_GrantOrbs9"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantOrnnAnvil": {
+   "name": "Artifact Anvil",
+   "riot_items": [
+    "TFT_Item_GrantOrnnAnvil"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GrantTomeOfTraits": {
+   "name": "Tome of Traits",
+   "riot_items": [
+    "TFT_Item_GrantTomeOfTraits"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_GuardianAngel": {
+   "name": "Edge of Night",
+   "riot_items": [
+    "TFT_Item_GuardianAngel"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADFighter",
+    "ADReaper",
+    "APFighter",
+    "APReaper",
+    "HFighter",
+    "HReaper",
+    "HSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_GuinsoosRageblade": {
+   "name": "Guinsoo's Rageblade",
+   "riot_items": [
+    "TFT_Item_GuinsoosRageblade"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADSpecialist",
+    "APCarry",
+    "APCasterSoraka7_5",
+    "APSpecialist",
+    "HCarry"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_Hex_Inferno": {
+   "name": "tft_item_name_InfernoHexBuff",
+   "riot_items": [
+    "TFT_Item_Hex_Inferno"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Hex_Mountain": {
+   "name": "tft_item_name_MountainHexBuff",
+   "riot_items": [
+    "TFT_Item_Hex_Mountain"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Hex_Ocean": {
+   "name": "tft_item_name_OceanHexBuff",
+   "riot_items": [
+    "TFT_Item_Hex_Ocean"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Hex_Wind": {
+   "name": "tft_item_name_WindHexBuff",
+   "riot_items": [
+    "TFT_Item_Hex_Wind"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_HextechChestguard": {
+   "name": "tft_item_name_HextechChestguard",
+   "riot_items": [
+    "TFT_Item_HextechChestguard"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_HextechGunblade": {
+   "name": "Hextech Gunblade",
+   "riot_items": [
+    "TFT_Item_HextechGunblade"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCarry",
+    "APCaster",
+    "APReaper",
+    "APSpecialist",
+    "HCarry",
+    "HCaster",
+    "HFighter",
+    "HSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_Hush": {
+   "name": "tft_item_name_Hush",
+   "riot_items": [
+    "TFT_Item_Hush"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_IcebornGauntlet": {
+   "name": "tft_item_name_FrozenFist",
+   "riot_items": [
+    "TFT_Item_IcebornGauntlet"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_InfinityEdge": {
+   "name": "Infinity Edge",
+   "riot_items": [
+    "TFT_Item_InfinityEdge"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "ADReaper",
+    "ADSpecialist",
+    "HCarry",
+    "HReaper"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_IonicSpark": {
+   "name": "Ionic Spark",
+   "riot_items": [
+    "TFT_Item_IonicSpark"
+   ],
+   "recommended_by_tank_roles": [
+    "APTank"
+   ],
+   "recommended_by_non_tank_roles": [
+    "APFighter",
+    "APReaper"
+   ],
+   "intent": "mixed"
+  },
+  "TFT_Item_IsYordle": {
+   "name": "tft_item_name_Mittens",
+   "riot_items": [
+    "TFT_Item_IsYordle"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_JammedSlot": {
+   "name": "Jammed!",
+   "riot_items": [
+    "TFT_Item_JammedSlot"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_JeweledGauntlet": {
+   "name": "Jeweled Gauntlet",
+   "riot_items": [
+    "TFT_Item_JeweledGauntlet"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCarry",
+    "APCaster",
+    "APFighter",
+    "APReaper",
+    "APSpecialist",
+    "HCaster"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_KnightsVow": {
+   "name": "Knight's Vow",
+   "riot_items": [
+    "TFT_Item_KnightsVow"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_LastWhisper": {
+   "name": "Last Whisper",
+   "riot_items": [
+    "TFT_Item_LastWhisper"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADFighter",
+    "ADReaper",
+    "ADSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_Leviathan": {
+   "name": "Nashor's Tooth",
+   "riot_items": [
+    "TFT_Item_Leviathan"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCarry",
+    "APCaster",
+    "APCasterSoraka7_5"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_LocketOfTheIronSolari": {
+   "name": "Locket of the Iron Solari",
+   "riot_items": [
+    "TFT_Item_LocketOfTheIronSolari"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_MacaoMode_HextechSniper": {
+   "name": "Hextech Sniper Rifle",
+   "riot_items": [
+    "TFT_Item_MacaoMode_HextechSniper"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_MadredsBloodrazor": {
+   "name": "Giant Slayer",
+   "riot_items": [
+    "TFT_Item_MadredsBloodrazor"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "ADFighter",
+    "ADReaper",
+    "ADSpecialist",
+    "APCarry",
+    "APFighter",
+    "APReaper",
+    "APSpecialist",
+    "HCarry",
+    "HCaster",
+    "HFighter",
+    "HReaper",
+    "HSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_Moonstone": {
+   "name": "Moonstone Renewer",
+   "riot_items": [
+    "TFT_Item_Moonstone"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Morellonomicon": {
+   "name": "Morellonomicon",
+   "riot_items": [
+    "TFT_Item_Morellonomicon"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCaster",
+    "HCaster"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_MortalReminder": {
+   "name": "game_item_displayname_3033",
+   "riot_items": [
+    "TFT_Item_MortalReminder"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_NightHarvester": {
+   "name": "Steadfast Heart",
+   "riot_items": [
+    "TFT_Item_NightHarvester"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_PhantomDancer": {
+   "name": "TFT_item_name_PhantomDancer",
+   "riot_items": [
+    "TFT_Item_PhantomDancer"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_PowerGauntlet": {
+   "name": "Striker's Flail",
+   "riot_items": [
+    "TFT_Item_PowerGauntlet"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "ADReaper",
+    "ADSpecialist",
+    "APSpecialist",
+    "HCarry",
+    "HCaster",
+    "HFighter",
+    "HReaper",
+    "HSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_Quicksilver": {
+   "name": "Quicksilver",
+   "riot_items": [
+    "TFT_Item_Quicksilver"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADFighter",
+    "APCasterSoraka7_5",
+    "HFighter",
+    "HReaper",
+    "HSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_RabadonsDeathcap": {
+   "name": "Rabadon's Deathcap",
+   "riot_items": [
+    "TFT_Item_RabadonsDeathcap"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCarry",
+    "APCaster",
+    "APCasterSoraka7_5",
+    "APFighter",
+    "APReaper",
+    "APSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_RadiantVirtue": {
+   "name": "Virtue of the Martyr",
+   "riot_items": [
+    "TFT_Item_RadiantVirtue"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_RapidFireCannon": {
+   "name": "Red Buff",
+   "riot_items": [
+    "TFT_Item_RapidFireCannon"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "ADSpecialist",
+    "HCarry"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_RedBuff": {
+   "name": "Sunfire Cape",
+   "riot_items": [
+    "TFT_Item_RedBuff"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank",
+    "APTank",
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "TFT_Item_Redemption": {
+   "name": "Spirit Visage",
+   "riot_items": [
+    "TFT_Item_Redemption"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank",
+    "APTank",
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "TFT_Item_RunaansHurricane": {
+   "name": "Kraken's Fury",
+   "riot_items": [
+    "TFT_Item_RunaansHurricane"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCarry",
+    "ADSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_SentinelSwarm": {
+   "name": "Sentinel Swarm",
+   "riot_items": [
+    "TFT_Item_SentinelSwarm"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_SeraphsEmbrace": {
+   "name": "Blue Buff",
+   "riot_items": [
+    "TFT_Item_SeraphsEmbrace"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Shroud": {
+   "name": "Shroud of Stillness",
+   "riot_items": [
+    "TFT_Item_Shroud"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_SpearOfShojin": {
+   "name": "Spear of Shojin",
+   "riot_items": [
+    "TFT_Item_SpearOfShojin"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "APCasterSoraka7_5",
+    "HCarry",
+    "HCaster"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_SpectralGauntlet": {
+   "name": "Evenshroud",
+   "riot_items": [
+    "TFT_Item_SpectralGauntlet"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "TFT_Item_SpellThiefsEdge": {
+   "name": "tft_item_name_SpellThiefsEdge",
+   "riot_items": [
+    "TFT_Item_SpellThiefsEdge"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Spite": {
+   "name": "Spite",
+   "riot_items": [
+    "TFT_Item_Spite"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_StatikkShiv": {
+   "name": "Void Staff",
+   "riot_items": [
+    "TFT_Item_StatikkShiv"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "APCarry",
+    "APCaster"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_SteraksGage": {
+   "name": "Sterak's Gage",
+   "riot_items": [
+    "TFT_Item_SteraksGage"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADFighter",
+    "ADReaper"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_SupportKnightsVow": {
+   "name": "Knight's Vow",
+   "riot_items": [
+    "TFT_Item_SupportKnightsVow"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_SwordOfTheDivine": {
+   "name": "tft_item_name_SwordOfTheDivine2",
+   "riot_items": [
+    "TFT_Item_SwordOfTheDivine"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_TacticiansRing": {
+   "name": "Tactician's Cape",
+   "riot_items": [
+    "TFT_Item_TacticiansRing"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_TacticiansScepter": {
+   "name": "Tactician's Shield",
+   "riot_items": [
+    "TFT_Item_TacticiansScepter"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_ThiefsGloves": {
+   "name": "Thief's Gloves",
+   "riot_items": [
+    "TFT_Item_ThiefsGloves"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_ThiefsGloves_AcademyCopy1": {
+   "name": "Thief's Gloves",
+   "riot_items": [
+    "TFT_Item_ThiefsGloves_AcademyCopy1"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_ThiefsGloves_AcademyCopy2": {
+   "name": "Thief's Gloves",
+   "riot_items": [
+    "TFT_Item_ThiefsGloves_AcademyCopy2"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Thornmail": {
+   "name": "game_item_displayname_3075",
+   "riot_items": [
+    "TFT_Item_Thornmail"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_TitanicHydra": {
+   "name": "Zz'Rot Portal",
+   "riot_items": [
+    "TFT_Item_TitanicHydra"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_TitansResolve": {
+   "name": "Titan's Resolve",
+   "riot_items": [
+    "TFT_Item_TitansResolve"
+   ],
+   "recommended_by_tank_roles": [
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [
+    "ADFighter",
+    "APFighter",
+    "HFighter",
+    "HReaper",
+    "HSpecialist"
+   ],
+   "intent": "mixed"
+  },
+  "TFT_Item_Unknown": {
+   "name": "Spatula",
+   "riot_items": [
+    "TFT_Item_Unknown"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_UnstableConcoction": {
+   "name": "Hand Of Justice",
+   "riot_items": [
+    "TFT_Item_UnstableConcoction"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [
+    "ADCaster",
+    "ADCasterFormSwapper",
+    "ADFighter",
+    "ADReaper",
+    "APFighter",
+    "APReaper",
+    "HCarry",
+    "HFighter",
+    "HReaper",
+    "HSpecialist"
+   ],
+   "intent": "damage"
+  },
+  "TFT_Item_UnstableTreasureChest": {
+   "name": "Unstable Treasure Chest",
+   "riot_items": [
+    "TFT_Item_UnstableTreasureChest"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_UnusableSlot": {
+   "name": "Unusable Slot",
+   "riot_items": [
+    "TFT_Item_UnusableSlot"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Vengeance": {
+   "name": "tft_item_name_SwordOfTheDivine2",
+   "riot_items": [
+    "TFT_Item_Vengeance"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_WarmogsArmor": {
+   "name": "Warmog's Armor",
+   "riot_items": [
+    "TFT_Item_WarmogsArmor"
+   ],
+   "recommended_by_tank_roles": [
+    "ADTank",
+    "APTank",
+    "HTank"
+   ],
+   "recommended_by_non_tank_roles": [],
+   "intent": "tank"
+  },
+  "TFT_Item_YoumuusGhostblade": {
+   "name": "Youmuu's Ghostblade",
+   "riot_items": [
+    "TFT_Item_YoumuusGhostblade"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Yuumi": {
+   "name": "TFT_item_name_Yuumi",
+   "riot_items": [
+    "TFT_Item_Yuumi"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_ZekesHerald": {
+   "name": "Zeke's Herald",
+   "riot_items": [
+    "TFT_Item_ZekesHerald"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_Zephyr": {
+   "name": "Zephyr",
+   "riot_items": [
+    "TFT_Item_Zephyr"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  },
+  "TFT_Item_ZhonyasHourglass": {
+   "name": "TFT_item_name_ZhonyasHourglass",
+   "riot_items": [
+    "TFT_Item_ZhonyasHourglass"
+   ],
+   "recommended_by_tank_roles": [],
+   "recommended_by_non_tank_roles": [],
+   "intent": "known_unlisted"
+  }
+ },
+ "champion_role_coverage": {
+  "shop_champions": 74,
+  "with_role": {
+   "DA_18_Alune": "APCaster",
+   "DA_18_Kobuko": "APTank"
+  },
+  "missing_record": []
+ }
+}
