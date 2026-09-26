@@ -157,6 +157,13 @@ def metadata_inventory(raw: dict) -> dict:
             for i in samples
         ],
         "elise": [c for c in champions if "Elise" in str(c.get("apiName"))],
+        # Where emblems live in the bundle-wide item list (name/prefix/stats).
+        "item_prefixes": dict(Counter("_".join(str(i.get("apiName", "")).split("_")[:2]) for i in raw.get("items", [])).most_common(25)),
+        "emblems": [
+            {k: i.get(k) for k in ("apiName", "name", "composition", "effects", "tags", "associatedTraits", "isAugment")}
+            for i in raw.get("items", [])
+            if "emblem" in str(i.get("apiName", "")).lower() and str(current.get("number")) in str(i.get("apiName", ""))
+        ][:12],
     }
 
 
