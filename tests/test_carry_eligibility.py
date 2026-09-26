@@ -41,6 +41,9 @@ VISAGE, STEADFAST, WARMOG, GARGOYLE = "DA_SpiritVisage", "DA_SteadfastHeart", "D
 TITAN, STERAK, GUINSOO, CROWNGUARD = "DA_TitansResolve", "DA_SteraksGage", "DA_GuinsoosRageblade", "DA_Crownguard"
 ADAPTIVE, IONIC, CLAW, LW = "DA_AdaptiveHelm", "DA_IonicSpark", "DA_DragonsClaw", "DA_LastWhisper"
 RAVAGER_EMBLEM = "DA_18_EmblemSlayer"  # "Ravager Emblem": no Riot counterpart in the recommendation namespace
+# Known special items outside Riot's role-recommendation domain (their own map22 ItemTags differ).
+TALISMAN, THIEFS = "DA_Item_Artifact_TalismanOfAscension", "DA_ThiefsGloves"
+TAC_CAPE, TAC_CROWN, TAC_SHIELD = "DA_TacticiansCape", "DA_TacticiansCrown", "DA_TacticiansShield"
 ELISE = "DA_18_Elise"
 
 # The same items under their TFT_Item_* ids (the ids Riot's role lists name).
@@ -57,17 +60,21 @@ def _snapshot() -> dict:
 
 
 @pytest.mark.parametrize(
-    "resolved, tank, non_tank, expected",
+    "resolved, tank, non_tank, in_domain, expected",
     [
-        (True, [], ["ADCarry"], DAMAGE),
-        (True, ["APTank"], [], TANK),
-        (True, ["HTank"], ["ADFighter"], MIXED),
-        (True, [], [], KNOWN_UNLISTED),
-        (False, [], [], UNKNOWN),
+        (True, [], ["ADCarry"], True, DAMAGE),
+        (True, ["APTank"], [], True, TANK),
+        (True, ["HTank"], ["ADFighter"], True, MIXED),
+        (True, [], [], True, KNOWN_UNLISTED),  # Riot considered this kind of item and recommends it nowhere
+        (True, [], [], False, UNKNOWN),  # outside the domain: absence of a recommendation says nothing
+        (True, [], ["ADCarry"], False, DAMAGE),  # a recommendation is positive evidence wherever it appears
+        (False, [], [], False, UNKNOWN),
     ],
 )
-def test_intent_states(resolved, tank, non_tank, expected) -> None:
-    assert intent_from_recommendations(resolved=resolved, tank_roles=tank, non_tank_roles=non_tank) == expected
+def test_intent_states(resolved, tank, non_tank, in_domain, expected) -> None:
+    assert intent_from_recommendations(
+        resolved=resolved, tank_roles=tank, non_tank_roles=non_tank, in_recommendation_domain=in_domain
+    ) == expected
 
 
 def test_named_set18_items_classify_from_riot_recommendations() -> None:
@@ -77,6 +84,8 @@ def test_named_set18_items_classify_from_riot_recommendations() -> None:
         TITAN: MIXED, IONIC: MIXED,
         STERAK: DAMAGE, GUINSOO: DAMAGE, ADAPTIVE: DAMAGE, LW: DAMAGE,
         RAVAGER_EMBLEM: UNKNOWN,
+        # known, but outside the recommendation domain: not negative evidence
+        TALISMAN: UNKNOWN, TAC_CAPE: UNKNOWN, TAC_CROWN: UNKNOWN, TAC_SHIELD: UNKNOWN, THIEFS: UNKNOWN,
     }
     assert {i: item_intent(i) for i in expected} == expected
 
@@ -99,6 +108,11 @@ def test_classification_keeps_its_riot_evidence() -> None:
     assert items[STEADFAST]["riot_items"] == [T_STEADFAST]  # known to Riot, recommended by nobody
     assert items[STEADFAST]["recommended_by_tank_roles"] == items[STEADFAST]["recommended_by_non_tank_roles"] == []
     assert items[RAVAGER_EMBLEM]["riot_items"] == []  # unresolved: absence of evidence is not evidence
+    # Steadfast Heart / Crownguard are ordinary completed items (inside the domain); the special items
+    # resolve to known Riot items but carry Riot item tags outside it.
+    assert items[STEADFAST]["in_recommendation_domain"] and items[CROWNGUARD]["in_recommendation_domain"]
+    for special in (TALISMAN, TAC_CAPE, TAC_CROWN, TAC_SHIELD, THIEFS):
+        assert items[special]["riot_items"] and items[special]["in_recommendation_domain"] is False, special
 
 
 def test_snapshot_evidence_is_consistent_with_riot_roles() -> None:
@@ -110,7 +124,13 @@ def test_snapshot_evidence_is_consistent_with_riot_roles() -> None:
     for item_id, meta in snap["items"].items():
         assert meta["intent"] == intent_from_recommendations(
             resolved=bool(meta["riot_items"]), tank_roles=meta["recommended_by_tank_roles"],
-            non_tank_roles=meta["recommended_by_non_tank_roles"],
+            non_tank_roles=meta["recommended_by_non_tank_roles"], in_recommendation_domain=meta["in_recommendation_domain"],
+        ), item_id
+        domain = snap["recommendation_domain"]
+        tags = set(meta["riot_item_tags"] or ())
+        assert meta["in_recommendation_domain"] == (
+            meta["riot_item_tags"] is not None
+            and set(domain["required_item_tags"]) <= tags <= set(domain["allowed_item_tags"])
         ), item_id
         for family, key in (("tank", "recommended_by_tank_roles"), ("non_tank", "recommended_by_non_tank_roles")):
             for role in meta[key]:
@@ -154,7 +174,11 @@ def test_components_and_unknown_ids() -> None:
     assert not any(is_component(i) for i in items)
     assert not any(is_component(i) for i in no_carry_evidence_item_ids())
     assert item_intent("DA_SomethingNewNextPatch") == UNKNOWN
-    assert all(i.startswith("DA_18_Emblem") for i, m in items.items() if i.startswith("DA_") and m["intent"] == UNKNOWN)
+    # Every DA_ UNKNOWN is a trait emblem or a special item outside the recommendation domain.
+    assert all(i.startswith("DA_18_Emblem") or not m["in_recommendation_domain"]
+               for i, m in items.items() if i.startswith("DA_") and m["intent"] == UNKNOWN)
+    # Every KNOWN_UNLISTED item is inside the domain.
+    assert all(m["in_recommendation_domain"] for m in items.values() if m["intent"] == KNOWN_UNLISTED)
 
 
 # ---------------------------------------------------------------- the rule
@@ -176,6 +200,9 @@ def test_components_and_unknown_ids() -> None:
         ([GARGOYLE, GUINSOO], True),
         ([STEADFAST, GUINSOO], True),
         ([WARMOG, "DA_NotInTheSnapshot"], True),
+        ([TALISMAN, WARMOG], True),  # artifact: outside the domain => UNKNOWN => conservative
+        ([TAC_CROWN, WARMOG], True), ([TAC_CAPE, WARMOG], True), ([TAC_SHIELD, GARGOYLE], True),
+        ([THIEFS, WARMOG], True), ([THIEFS, STEADFAST], True),  # not excluded for lacking a recommendation
         ([WARMOG, "DA_Component_ChainVest"], False),  # 1 completed item
         ([GUINSOO, "DA_Component_RecurveBow"], False),  # components never count
         ([WARMOG, GARGOYLE, "DA_Component_ChainVest"], False),
@@ -334,7 +361,7 @@ PACKAGES = [
     [VISAGE, STEADFAST], [WARMOG, GARGOYLE], [WARMOG, WARMOG, GARGOYLE], [CROWNGUARD, WARMOG], [TITAN, STERAK],
     [RAVAGER_EMBLEM, GUINSOO], [RAVAGER_EMBLEM, WARMOG], [WARMOG, "DA_NotInTheSnapshot"], [GARGOYLE, GUINSOO],
     [WARMOG, "DA_Component_ChainVest", "DA_Component_NegatronCloak"], [], [T_WARMOG, T_GARGOYLE], [T_TITAN, T_STERAK],
-    [STEADFAST, CROWNGUARD, VISAGE], [IONIC, WARMOG],
+    [STEADFAST, CROWNGUARD, VISAGE], [IONIC, WARMOG], [TALISMAN, WARMOG], [TAC_CROWN, GARGOYLE], [THIEFS, VISAGE],
 ]
 
 
@@ -345,7 +372,8 @@ def _sql_matches_python(db: Database) -> None:
     eligible = {r[0] for r in db.query_all(f"SELECT u.character_id FROM units u WHERE {sql}", params)}
     expected = {f"TFT99_P{i}" for i, items in enumerate(PACKAGES) if is_carry_observation(items)}
     assert eligible == expected
-    assert expected == {"TFT99_P4", "TFT99_P5", "TFT99_P6", "TFT99_P7", "TFT99_P8", "TFT99_P12", "TFT99_P14"}
+    assert expected == {"TFT99_P4", "TFT99_P5", "TFT99_P6", "TFT99_P7", "TFT99_P8", "TFT99_P12", "TFT99_P14",
+                        "TFT99_P15", "TFT99_P16", "TFT99_P17"}
 
 
 def test_sql_rule_matches_python_rule_on_sqlite(tmp_path: Path) -> None:

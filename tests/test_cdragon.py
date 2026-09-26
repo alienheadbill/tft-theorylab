@@ -182,6 +182,14 @@ DA_BUNDLE = {
         _item("DA_OddOne", "Odd One", composition=["DA_Component_RecurveBow", "DA_Component_RecurveBow"]),
         # Emblem: no readable stats; augment-like entry with Health: excluded from the snapshot.
         _item("DA_18_EmblemSlayer", "Ravager Emblem", tags=["{ebcd1bac}"], composition=["DA_Component_ChainVest", "DA_Component_NegatronCloak"]),
+        # Known special items (outside the role-recommendation domain) and an ordinary unlisted item.
+        _item("TFT_Item_TacticiansScepter", "Tactician's Shield", composition=["TFT_Item_ChainVest", "TFT_Item_ChainVest"]),
+        _item("DA_TacticiansShield", "Tacticians Shield", composition=["DA_Component_ChainVest", "DA_Component_ChainVest"]),
+        _item("TFT_Item_ThiefsGloves", "Thief's Gloves", composition=["TFT_Item_RecurveBow", "TFT_Item_RecurveBow"]),
+        _item("DA_ThiefsGloves", "Thief's Gloves", composition=["DA_Component_RecurveBow", "DA_Component_RecurveBow"]),
+        _item("TFT_Item_NightHarvester", "Steadfast Heart", effects={"Armor": 20, "CritChance": 20},
+              composition=["TFT_Item_ChainVest", "TFT_Item_RecurveBow"]),
+        _item("DA_SteadfastHeart", "Steadfast Heart", composition=["DA_Component_ChainVest", "DA_Component_RecurveBow"]),
         _item("DA_Hugify18", "Hugify", effects={"Health": 100}),
         _item("DA_18_YordleSpirit", "Yordle Spirit", effects={"DodgeChance": 1}),
     ],
@@ -223,6 +231,22 @@ ROLE_MAP_BIN = {
     "{4334cab4}": _role("TutorialADCarry", ["{9b3faced}"]),
     "{afc39260}": {"__type": "TftItemData", "mName": "TFT_Item_Unrelated"},
 }
+# Riot item records (map22 TftItemData): "{7ea41d13}" is the tag every
+# ordinary completed item carries; "Resistance"/"Mana" are ordinary extras.
+ORDINARY = "{7ea41d13}"
+for _i, (_name, _tags) in enumerate({
+    "TFT_Item_GargoyleStoneplate": [ORDINARY, "Resistance"], "TFT_Item_CorruptedGargoyleStoneplate": [ORDINARY, "Resistance"],
+    "DA_GargoyleStoneplate": [ORDINARY, "Resistance"], "TFT_Item_WarmogsArmor": [ORDINARY, "Health"],
+    "TFT_Item_RapidFireCannon": [ORDINARY], "DA_RedBuff": [ORDINARY], "TFT_Item_RedBuff": [ORDINARY, "Health"],
+    "TFT_Item_BlueBuff": [ORDINARY, "Mana"], "TFT_Item_SeraphsEmbrace": [ORDINARY, "Mana"], "DA_BlueBuff": [ORDINARY, "Mana"],
+    "TFT_Item_OddOne": [ORDINARY], "DA_OddOne": [ORDINARY],
+    "DA_18_EmblemSlayer": ["TraitItem"],
+    # special items: known, resolvable, but outside the recommendation domain
+    "TFT_Item_TacticiansScepter": ["{ec243f6b}", "TacticiansItem"], "DA_TacticiansShield": ["{ec243f6b}", "TacticiansItem"],
+    "TFT_Item_ThiefsGloves": [ORDINARY, "{2905e581}"], "DA_ThiefsGloves": [ORDINARY, "{2905e581}"],
+    "TFT_Item_NightHarvester": [ORDINARY], "DA_SteadfastHeart": [ORDINARY],
+}.items()):
+    ROLE_MAP_BIN[f"{{item{_i}}}"] = {"__type": "TftItemData", "mName": _name, "ItemTags": _tags}
 ROLE_STRINGS = {"entries": {
     "tft_characterrole_rolesrevamped_aptank_name": "Magic Tank",
     "tft_characterrole_rolesrevamped_htank_name": "Hybrid Tank",
@@ -266,7 +290,8 @@ def test_item_intent_snapshot_derives_intent_from_riot_recommendations_with_evid
     assert gargoyle == {
         "name": "Gargoyle Stoneplate",
         "riot_items": ["TFT_Item_CorruptedGargoyleStoneplate", "TFT_Item_GargoyleStoneplate"],
-        "recommended_by_tank_roles": ["APTank"], "recommended_by_non_tank_roles": [], "intent": "tank",
+        "recommended_by_tank_roles": ["APTank"], "recommended_by_non_tank_roles": [],
+        "riot_item_tags": ["Resistance", "{7ea41d13}"], "in_recommendation_domain": True, "intent": "tank",
     }
     assert items["TFT_Item_GargoyleStoneplate"]["intent"] == "tank"
     assert items["TFT_Item_CorruptedGargoyleStoneplate"]["intent"] == "known_unlisted"  # own id: not recommended
@@ -280,8 +305,32 @@ def test_item_intent_snapshot_derives_intent_from_riot_recommendations_with_evid
     assert items["DA_OddOne"]["riot_items"] == [] and items["DA_OddOne"]["intent"] == "unknown"  # components contradict
     assert items["DA_18_EmblemSlayer"]["riot_items"] == [] and items["DA_18_EmblemSlayer"]["intent"] == "unknown"
     assert items["TFT_Item_RedBuff"]["intent"] == "known_unlisted"  # only a legacy role lists it: no evidence
+    assert snap["recommendation_domain"] == {
+        "required_item_tags": ["{7ea41d13}"],  # shared by every role-recommended item
+        "allowed_item_tags": ["Health", "Mana", "Resistance", "{7ea41d13}"],
+    }
+    steadfast = items["DA_SteadfastHeart"]  # ordinary completed item, recommended by no role
+    assert (steadfast["riot_items"], steadfast["in_recommendation_domain"], steadfast["intent"]) == (
+        ["TFT_Item_NightHarvester"], True, "known_unlisted")
+    for special in ("DA_TacticiansShield", "TFT_Item_TacticiansScepter", "DA_ThiefsGloves", "TFT_Item_ThiefsGloves"):
+        meta = items[special]  # resolvable and known, but outside the domain: absence says nothing
+        assert meta["riot_items"] and meta["in_recommendation_domain"] is False and meta["intent"] == "unknown", special
+    assert items["DA_ThiefsGloves"]["riot_item_tags"] == ["{2905e581}", "{7ea41d13}"]  # ordinary tag + one no recommended item has
+    assert items["DA_18_EmblemSlayer"]["in_recommendation_domain"] is False
     assert not any(i.startswith("DA_Component_") or i in ("TFT_Item_ChainVest", "TFT_Item_RecurveBow") for i in items)
     assert "DA_Hugify18" not in items  # augments stay out, as in the stat snapshot
+
+
+def test_recommendation_domain_must_be_derivable_from_riot_item_records() -> None:
+    from tftlab.cdragon import item_intent_snapshot
+
+    meta = parse_set_metadata(DA_BUNDLE, patch="latest")
+    no_record = {k: v for k, v in ROLE_MAP_BIN.items() if v.get("mName") != "TFT_Item_WarmogsArmor"}
+    with pytest.raises(ValueError, match="without a TftItemData record"):
+        item_intent_snapshot(meta, no_record, ROLE_STRINGS)
+    no_shared = {k: ({**v, "ItemTags": [f"tag{k}"]} if v.get("__type") == "TftItemData" else v) for k, v in ROLE_MAP_BIN.items()}
+    with pytest.raises(ValueError, match="share no Riot item tag"):
+        item_intent_snapshot(meta, no_shared, ROLE_STRINGS)
 
 
 def test_champion_role_coverage_counts_character_role_links() -> None:

@@ -286,7 +286,7 @@ def test_committed_item_intent_matches_live_set(riot_game_data) -> None:
     on a mismatch the message holds the full live snapshot for the refresh."""
     live = item_intent_snapshot(*riot_game_data)
     committed = json.loads(ITEM_INTENT_FIXTURE.read_text()) if ITEM_INTENT_FIXTURE.exists() else {}
-    committed = {k: committed.get(k) for k in ("set_number", "roles", "items")}
+    committed = {k: committed.get(k) for k in ("set_number", "roles", "recommendation_domain", "items")}
     assert committed == live, (
         "src/tftlab/data/item_intent.json is out of date. Live snapshot:\n"
         + "ITEM_INTENT_SNAPSHOT_BEGIN\n" + json.dumps(live, ensure_ascii=False, separators=(",", ":")) + "\nITEM_INTENT_SNAPSHOT_END"

@@ -23,18 +23,24 @@ Marksman"); each completed item is:
 - DAMAGE: recommended by one or more non-Tank roles and no Tank role.
 - TANK: recommended by one or more Tank roles and no non-Tank role.
 - MIXED: recommended by both (e.g. an item a Hybrid Tank and a Fighter share).
-- KNOWN_UNLISTED: a known completed item that no role recommends. This is
-  not "tank"; it only means Riot gives no role evidence for it (Steadfast
-  Heart, Crownguard, Thief's Gloves, Tactician's items, artifacts).
-- UNKNOWN: not resolvable in the snapshot -- future ids, items with no
-  Riot counterpart in the recommendation namespace (Set 18 trait emblems
-  such as Ravager Emblem = `DA_18_EmblemSlayer`), or unresolved aliases.
+- KNOWN_UNLISTED: an ordinary completed item inside Riot's recommendation
+  domain that no role recommends (Steadfast Heart, Crownguard). This is not
+  "tank"; it only means Riot considered this kind of item and gives no role
+  evidence for it. The domain is Riot's own: items whose map22 `ItemTags`
+  hold every tag all role-recommended items share and no tag none of them
+  carry (see `tftlab.cdragon.item_intent_snapshot`).
+- UNKNOWN: no usable evidence -- future ids, unresolved aliases, items with
+  no Riot counterpart in the recommendation namespace (Set 18 trait emblems
+  such as Ravager Emblem = `DA_18_EmblemSlayer`), and special items outside
+  the recommendation domain (Tactician's items, artifacts such as Talisman
+  of Ascension, Thief's Gloves), whose absence from role lists says nothing.
 
 A board counts when any completed item is DAMAGE, MIXED or UNKNOWN (unknown
 stays conservative: hiding an unusual build is worse than a false
 positive). TANK and KNOWN_UNLISTED items alone never prove carry intent, so
 Spirit Visage + Steadfast Heart or Crownguard + Warmog's is not a carry
-observation, while Ravager Emblem + Guinsoo's or Titan's + Sterak's is.
+observation, while Ravager Emblem + Guinsoo's, Titan's + Sterak's or
+Talisman of Ascension + Warmog's is.
 """
 
 from __future__ import annotations
@@ -58,10 +64,13 @@ INTENTS = (DAMAGE, TANK, MIXED, KNOWN_UNLISTED, UNKNOWN)
 CARRY_EVIDENCE = frozenset({DAMAGE, MIXED, UNKNOWN})
 
 
-def intent_from_recommendations(*, resolved: bool, tank_roles: Iterable[str], non_tank_roles: Iterable[str]) -> str:
-    """The intent Riot's recommendations imply for one item. `resolved` is
-    False when the item has no counterpart in the recommendation namespace
-    (absence of a recommendation then says nothing)."""
+def intent_from_recommendations(
+    *, resolved: bool, tank_roles: Iterable[str], non_tank_roles: Iterable[str], in_recommendation_domain: bool
+) -> str:
+    """The intent Riot's recommendations imply for one item. A
+    recommendation is positive evidence wherever it appears; the absence of
+    one is only evidence (KNOWN_UNLISTED) for a resolved item inside the
+    recommendation domain -- otherwise it says nothing (UNKNOWN)."""
     if not resolved:
         return UNKNOWN
     tank, non_tank = bool(list(tank_roles)), bool(list(non_tank_roles))
@@ -71,7 +80,7 @@ def intent_from_recommendations(*, resolved: bool, tank_roles: Iterable[str], no
         return TANK
     if non_tank:
         return DAMAGE
-    return KNOWN_UNLISTED
+    return KNOWN_UNLISTED if in_recommendation_domain else UNKNOWN
 
 
 @lru_cache(maxsize=1)

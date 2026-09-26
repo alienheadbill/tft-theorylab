@@ -375,9 +375,22 @@ def item_intent_snapshot(meta: SetMetadata, map_bin: dict[str, Any], strings: di
       shares its evidence. No candidate (e.g. trait emblems) means
       unresolved, i.e. UNKNOWN.
 
-    Each item keeps its evidence: the Riot items it resolved to and exactly
-    which Tank and non-Tank roles recommend them, plus the derived intent
-    (`tftlab.carry.intent_from_recommendations`)."""
+    Absence from every role list is only evidence inside Riot's
+    recommendation domain, which comes from Riot's own item tags (map22
+    `TftItemData.ItemTags`): the tags every role-recommended item carries are
+    required, and only tags some recommended item carries are allowed. An
+    ordinary completed item (tag `{7ea41d13}`, shared by all 36 Set 18
+    craftables) is inside; trait emblems (`TraitItem`), Tactician's items
+    (`TacticiansItem`), artifacts (`{44ace175}`) and Thief's Gloves (two tags
+    no recommended item has) are outside, so "no role recommends it" means
+    UNKNOWN for them, not KNOWN_UNLISTED.
+
+    Each item keeps its evidence: the Riot items it resolved to, exactly
+    which Tank and non-Tank roles recommend them, its own Riot item tags and
+    domain membership, plus the derived intent
+    (`tftlab.carry.intent_from_recommendations`). Raises ValueError when a
+    recommended item has no TftItemData record or the recommended items
+    share no tag (no domain can be defined)."""
     from .carry import intent_from_recommendations
     from .items import LEGACY_COMPONENT_IDS
 
@@ -388,6 +401,22 @@ def item_intent_snapshot(meta: SetMetadata, map_bin: dict[str, Any], strings: di
             continue
         for item_id in role["recommended_items"]:
             recommended.setdefault(item_id, {TANK_FAMILY: set(), NON_TANK_FAMILY: set()})[role["family"]].add(role_name)
+
+    item_tags: dict[str, set[str]] = {}
+    for obj in map_bin.values():
+        if isinstance(obj, dict) and obj.get("__type") == "TftItemData" and obj.get("mName"):
+            item_tags.setdefault(str(obj["mName"]), set()).update(str(t) for t in obj.get("ItemTags") or ())
+    recommended_ids = sorted(recommended)
+    missing = [i for i in recommended_ids if i not in item_tags]
+    if missing:
+        raise ValueError(f"recommended items without a TftItemData record: {missing}")
+    required_tags = set.intersection(*(item_tags[i] for i in recommended_ids)) if recommended_ids else set()
+    allowed_tags = set.union(*(item_tags[i] for i in recommended_ids)) if recommended_ids else set()
+    if not required_tags:
+        raise ValueError("role-recommended items share no Riot item tag; the recommendation domain is undefined")
+
+    def in_domain(item_id: str) -> bool:
+        return item_id in item_tags and required_tags <= item_tags[item_id] <= allowed_tags
 
     stats = item_stats_snapshot(meta)["items"]
     riot_ids = {i for i in stats if not i.startswith("DA_")}
@@ -418,9 +447,19 @@ def item_intent_snapshot(meta: SetMetadata, map_bin: dict[str, Any], strings: di
             "riot_items": resolved,
             "recommended_by_tank_roles": tank,
             "recommended_by_non_tank_roles": non_tank,
-            "intent": intent_from_recommendations(resolved=bool(resolved), tank_roles=tank, non_tank_roles=non_tank),
+            "riot_item_tags": sorted(item_tags[item_id]) if item_id in item_tags else None,
+            "in_recommendation_domain": in_domain(item_id),
+            "intent": intent_from_recommendations(
+                resolved=bool(resolved), tank_roles=tank, non_tank_roles=non_tank,
+                in_recommendation_domain=in_domain(item_id),
+            ),
         }
-    return {"set_number": meta.set_number, "roles": roles, "items": dict(sorted(items.items()))}
+    return {
+        "set_number": meta.set_number,
+        "roles": roles,
+        "recommendation_domain": {"required_item_tags": sorted(required_tags), "allowed_item_tags": sorted(allowed_tags)},
+        "items": dict(sorted(items.items())),
+    }
 
 
 def champion_role_coverage(
