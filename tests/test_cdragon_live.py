@@ -190,7 +190,7 @@ def test_committed_item_stats_match_live_set(tmp_path) -> None:
     committed = {k: committed.get(k) for k in ("set_number", "items")}
     assert committed == live, (
         "src/tftlab/data/item_stats.json is out of date. Live snapshot:\n"
-        + "ITEM_STATS_SNAPSHOT_BEGIN\n" + json.dumps(live, indent=1, ensure_ascii=False) + "\nITEM_STATS_SNAPSHOT_END"
+        + "ITEM_STATS_SNAPSHOT_BEGIN\n" + json.dumps(live, ensure_ascii=False, separators=(",", ":")) + "\nITEM_STATS_SNAPSHOT_END"
     )
 
 
