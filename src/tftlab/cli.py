@@ -710,6 +710,45 @@ def discovery_smoke(
         console.print("")
 
 
+@app.command("discovery-report")
+def discovery_report_command(
+    db: str = typer.Option(
+        None, "--db", help="SQLite path or postgres:// URL; defaults to DATABASE_URL or TFT_DB_PATH"
+    ),
+    balance_window: str = typer.Option(None, "--balance-window", help="Defaults to the latest window in the store"),
+    out_dir: Path = typer.Option(Path("discovery-report"), "--out-dir"),
+    top_n: int = typer.Option(8, "--top-n", min=1, max=20, help="Best partners/items/traits kept per candidate"),
+    compare_pr21: bool = typer.Option(True, "--compare-pr21/--no-compare-pr21",
+                                      help="Also evaluate the PR #21 stat-only carry rule on the same rows"),
+) -> None:
+    """Read-only Discovery research report: every carry candidate in one
+    balance window with full evidence, sample-aware evidence bands and an
+    optional PR #21 vs current carry-rule comparison, written as JSON/CSV.
+
+    Opens the database with `Database.open_existing` only (Postgres
+    `default_transaction_read_only=on`, verified; SQLite `mode=ro`): no
+    schema creation, migration, backfill or write of any kind, and no Riot
+    or CommunityDragon call. Output is aggregates only."""
+    from .research_report import build_report, write_report
+
+    with Database.open_existing(_resolve_db_target(db)) as database:
+        report = build_report(database, balance_window=balance_window, top_n=top_n, baseline=compare_pr21)
+    paths = write_report(report, out_dir)
+    d = report["dataset"]
+    console.print(f"Read-only connection: {report['read_only_connection']}")
+    console.print(f"Balance window: {d['balance_window']}  matches: {d['window_matches']}  "
+                  f"participants: {d['window_participants']}  unit-observable: {d['window_unit_observable_participants']}  "
+                  f"source-empty: {d['window_source_empty_participants']}")
+    console.print(f"Candidates (>= 1 commitment game, cost 1-5): {len(report['candidates'])}")
+    if "pr21_comparison" in report:
+        c = report["pr21_comparison"]
+        pct = f"{c['percent_change']:+.1%}" if c["percent_change"] is not None else "n/a"
+        console.print(f"Commitment games PR #21 -> PR #22: {c['total_commitment_games_pr21']} -> "
+                      f"{c['total_commitment_games_pr22']} ({c['absolute_change']:+d}, {pct})")
+    for path in paths:
+        console.print(f"Wrote {path}")
+
+
 @app.command()
 def leaderboard(
     db: Path = typer.Option(Path("data/tftlab.sqlite3"), "--db"),

@@ -171,19 +171,23 @@ def _is_source_empty(payload_json: str, participant_index: int, placement: int, 
     return "units" not in entry or entry["units"] == []
 
 
-def classify_participants_without_units(db: Database) -> tuple[int, int]:
+def classify_participants_without_units(db: Database, *, balance_window: str | None = None) -> tuple[int, int]:
     """(source-empty, unexpected) counts for participants with no stored
-    units. Reads raw payloads only for the matches involved."""
+    units -- store-wide, or only in matches of `balance_window` when given.
+    Reads raw payloads only for the matches involved."""
+    scope = "JOIN matches m ON m.match_id = p.match_id AND m.balance_window = ?" if balance_window is not None else ""
     rows = db.query_all(
-        """
+        f"""
         SELECT p.match_id, p.participant_index, p.placement
         FROM participants p
+        {scope}
         WHERE NOT EXISTS (
             SELECT 1 FROM units u
             WHERE u.match_id = p.match_id AND u.participant_index = p.participant_index
         )
         ORDER BY p.match_id, p.participant_index
-        """
+        """,
+        (balance_window,) if balance_window is not None else (),
     )
     source_empty = 0
     unexpected = 0
