@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..patch import patch_sort_key
+from ..carry import carry_commitment_sql
 from ..storage import Database
 
 
@@ -103,8 +104,11 @@ def carry_commitment_stats(
     """Return low-usage carry stats from final-board Match-V1 data.
 
     A participant is a commitment game for a unit when that unit finishes with
-    >= `commitment_items` non-component items. This deliberately includes 2-star
-    misses, avoiding the survivorship bias of analyzing only successful 3-stars.
+    >= `commitment_items` non-component items and that itemization is not
+    entirely defensive (`tftlab.carry.is_carry_observation`; e.g. Warmog's +
+    Gargoyle is a tank, not a carry, at any star level). This deliberately
+    includes 2-star misses, avoiding the survivorship bias of analyzing only
+    successful 3-stars. Appearances count every board the champion is on.
 
     Results are always scoped to a single balance window: different windows
     (client patches, or mid-patch balance updates within the same client
@@ -140,8 +144,12 @@ def carry_commitment_stats(
     if not total_participants:
         return []
 
+    # Carry commitment = >= commitment_items completed items AND not an
+    # all-defensive itemization (tftlab.carry). Appearance is unaffected:
+    # every unit row still counts as an appearance below.
+    eligible_sql, eligible_params = carry_commitment_sql("u", commitment_items)
     rows = db.query_all(
-        """
+        f"""
         WITH per_champion AS (
             -- Collapse a participant's (possibly multiple) instances of one
             -- champion into a single row *before* aggregating across
@@ -159,8 +167,8 @@ def carry_commitment_stats(
                 u.character_id,
                 MAX(u.unit_name) AS unit_name,
                 MAX(u.cost) AS cost,
-                MAX(CASE WHEN u.completed_item_count >= ? THEN 1 ELSE 0 END) AS committed,
-                MAX(CASE WHEN u.completed_item_count >= ? AND u.tier >= 3 THEN 1 ELSE 0 END) AS hit_3star
+                MAX(CASE WHEN {eligible_sql} THEN 1 ELSE 0 END) AS committed,
+                MAX(CASE WHEN {eligible_sql} AND u.tier >= 3 THEN 1 ELSE 0 END) AS hit_3star
             FROM units u
             JOIN matches m ON m.match_id = u.match_id
             WHERE m.balance_window = ?
@@ -189,8 +197,8 @@ def carry_commitment_stats(
         HAVING SUM(pc.committed) >= ?
         """,
         (
-            commitment_items,
-            commitment_items,
+            *eligible_params,
+            *eligible_params,
             resolved_window,
             min_cost,
             max_cost,

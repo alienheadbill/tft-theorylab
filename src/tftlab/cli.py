@@ -294,6 +294,8 @@ def ingest_riot(
                 run_id=run_id,
             )
         except Exception as exc:
+            if isinstance(exc, RiotApiError) and classify_riot_error(str(exc)) == "unauthorized":
+                console.print(f"[red]{EXPIRED_KEY_MESSAGE}[/red]")
             # Not swallowed: the traceback follows. Matches stored before the
             # failure stay stored; the seed ledger/provenance for this run was
             # never finalized, so the next run's rotation ignores it.
@@ -304,6 +306,7 @@ def ingest_riot(
             raise
         windows = available_balance_windows(db)
         total_participants = db.query_one("SELECT COUNT(*) FROM participants")[0]
+        component_backfill = db.completed_item_count_backfill
 
     def _rate(value: float | None) -> str:
         return "n/a" if value is None else f"{value:.1%}"
@@ -359,6 +362,15 @@ def ingest_riot(
     console.print(f"  Matches inserted: {result.matches_inserted}")
     console.print(f"  Failed requests: {result.failed_requests}")
     console.print(f"  Non-ranked-queue matches skipped: {result.non_target_matches_skipped}")
+    never = sum(r.never_sampled_selected for r in result.cohort_reports.values())
+    previously = sum(r.previously_sampled_selected for r in result.cohort_reports.values())
+    seeds = result.seed_players or None
+    console.print(
+        "  Collection value (is another run worth it?): "
+        f"never-sampled seeds {_rate(never / seeds if seeds else None)}, "
+        f"previously-sampled seeds {_rate(previously / seeds if seeds else None)}, "
+        f"zero-history seeds {_rate(result.seeds_with_empty_history / seeds if seeds else None)}"
+    )
     console.print(f"  In-run overlap rate: {_rate(result.in_run_overlap_rate)}")
     console.print(f"  Already-stored duplicate rate: {_rate(result.known_duplicate_rate)}")
     console.print(f"  Inserted matches per seed: {_ratio(result.inserted_per_seed)}")
@@ -380,6 +392,10 @@ def ingest_riot(
         f"  Provenance rows finalized: {result.discovery_rows} "
         f"(for {result.matches_with_provenance} stored matches, each stored once)"
     )
+    console.print(
+        "  Stored completed-item counts corrected on connect (component recognition): "
+        + ("already up to date" if component_backfill is None else f"{component_backfill} unit rows")
+    )
     console.print(f"  Balance windows found: {', '.join(w for w, _, _ in windows) or 'none'}")
     console.print(f"  Total participants now stored: {total_participants}")
     if degraded:
@@ -387,6 +403,14 @@ def ingest_riot(
     if result.seed_players and result.failed_history_requests == result.seed_players:
         console.print("[red]Every seed's match-history request failed; nothing could be sampled.[/red]")
         raise typer.Exit(code=1)
+
+
+#: Development keys deactivate every 24 hours (Riot Developer Portal). Never
+#: includes the key itself.
+EXPIRED_KEY_MESSAGE = (
+    "401 Unauthorized -- RIOT_API_KEY is invalid or expired. Reset the development key in the "
+    "Riot Developer Portal and replace the GitHub Actions RIOT_API_KEY secret."
+)
 
 
 @app.command("verify-riot")
@@ -409,7 +433,7 @@ def verify_riot() -> None:
     except RiotApiError as exc:
         category = classify_riot_error(str(exc))
         messages = {
-            "unauthorized": "401 Unauthorized -- RIOT_API_KEY is invalid or expired.",
+            "unauthorized": EXPIRED_KEY_MESSAGE,
             "forbidden": "403 Forbidden -- RIOT_API_KEY lacks permission for this endpoint/region.",
             "rate_limited": "429 Rate limited -- back off and retry later; Riot enforces per-key rate limits.",
             "network_error": "Network error contacting Riot API -- check connectivity and try again.",

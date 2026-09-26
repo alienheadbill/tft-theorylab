@@ -63,6 +63,26 @@ Riot development keys expire periodically, so a 401/403 after the key worked pre
 
 By default, `ingest-riot` resolves champion shop costs from CommunityDragon and **aborts** (not silently falls back to `rarity + 1`) if that fetch fails, printing exactly why. Pass `--allow-degraded-costs` to proceed anyway; the run and its printed report are then clearly marked `DEGRADED INGEST`.
 
+### Carry eligibility (item-only)
+
+**Appearance** = the champion was on the board. **Carry commitment** = it finished with **>= 2 completed items** (2-star misses included) **and** that itemization was not entirely defensive. That is the only change: one Discovery system, no tank/hybrid/support statistics, no role table, no champion allowlist.
+
+`tftlab.carry` classifies each completed item from CommunityDragon stat metadata (never from its display name):
+
+- **Offensive** -- any of the holder's own damage stats: effects `AD`, `AP`, `AS`, `CritChance` and their Set 18 variants (`AD_NotStatBar`, `AP_NotStatBar`, `ADIncrease`, `APIncrease`, `StackingAD`, `StackingSP`, `ADOnAttack`, `ADPerBonus`, `APPerBonus`, `ASPerStack`, `AttackSpeedPerStack`, `ADAPPerTakedown`, `CritDamageToGive`, `CritDamageBonusPercent`, `DamageAmp`), or tags `AttackDamage`, `AbilityPower`, `AttackSpeed`, `CritChance`. Offensive + defensive stats (Titan's Resolve, Sterak's Gage, Crownguard) is offensive. Ally buffs (Zephyr `AllyBonusAS`, Aegis `ASBuff`, Banshee's `BuffAttackSpeed`, Chalice `ChaliceAP`, Zeke's `AttackSpeed`) are not.
+- **Defensive** -- effects `Health`, `Armor`, `MagicResist` or tag `Health`, and nothing offensive (Warmog's, Gargoyle, Dragon's Claw, Spirit Visage, Bramble, Sunfire, ...: 39 completed Set 18 items).
+- **Unknown** -- anything else: not in the snapshot, only unresolved `{hash}` names, or only passive parameters. Set 18 trait emblems (`DA_18_Emblem*`; Ravager Emblem = `DA_18_EmblemSlayer`) have no readable stats, so they are unknown.
+
+A board is excluded **only** when every completed item is defensive. Any offensive **or unknown** completed item keeps it a carry commitment -- uncertain means include, because hiding an unusual build is worse than a false positive. Star level plays no part. So Elise with Warmog's + Gargoyle is not a carry observation, while Elise with Ravager Emblem + Guinsoo's (or Gargoyle + Guinsoo's + Titan's) is -- per board, never per champion.
+
+**Item ids are the exact ones Match-V1 stores.** Set 18 boards store the `DA_*` namespace (`DA_GargoyleStoneplate`, `DA_GuinsoosRageblade`, `DA_TitansResolve`, ...). CommunityDragon has an entry for each, but with **no named `effects`** and only some readable tags (e.g. `DA_GuinsoosRageblade` = `AttackSpeed`, `DA_WarmogsArmor` = `Health`; `DA_GargoyleStoneplate` and `DA_DragonsClaw` have only hashed tags). So the snapshot keeps each exact `DA_*` id and adds the stats of its `TFT_Item_*` counterpart **only when the alias is verified unambiguous**: identical display name, component names not contradicting, and every remaining candidate sharing one stat signature (a Corrupted copy with the same stats is fine; two different "Blue Buff" entries are not). The display name, not the id, is the bridge -- a prefix rewrite would be wrong: `DA_RedBuff` ("Red Buff") is `TFT_Item_RapidFireCannon`, while `TFT_Item_RedBuff` is "Sunfire Cape". Items with no verified alias keep only their own metadata (often none, i.e. unknown). The snapshot holds 256 items: 185 `TFT_Item_*`/`TFT18_Item_*` plus 71 `DA_*` (craftables, components, `DA_18_Emblem*`, `DA_Item_*`), 41 of them aliased; `DA_*` augments are deliberately left out.
+
+**Components are never completed items.** `tftlab.items.is_component` recognizes the legacy `TFT_Item_*` components **plus every item the committed snapshot tags `component`** -- for Set 18 the ten `DA_Component_*` ids (`DA_Component_BFSword`, `..._ChainVest`, `..._FryingPan`, `..._GiantsBelt`, `..._NeedlesslyLargeRod`, `..._NegatronCloak`, `..._RecurveBow`, `..._SparringGloves`, `..._Spatula`, `..._TearOfTheGoddess`). Metadata decides, never an id prefix; unknown non-component items still count as completed/special items. So Warmog's + `DA_Component_ChainVest` is one completed item (not a carry), and Warmog's + Gargoyle + a component is a two-item all-defensive tank board. (No stored production payload has been inspected for `DA_Component_*`; CommunityDragon lists them as the Set 18 components, so they are recognized.) Rows ingested before this was recognized are corrected by a one-time migration: every **initializing** connection (`Database(...)` -- CLI, ingest, validate, admin) checks `schema_migrations` for `completed_item_count:<fingerprint of the component set>` and, if absent, recomputes each unit's count from its unchanged `items_json`, updates only rows that differ, and records the marker in the same transaction. It is idempotent, re-runs by itself if the recognized component set ever changes, and never runs from the read-only web path (`Database.open_existing`). The ingest report prints how many unit rows it corrected; in production that happens at the start of the next authorized live-ingest run.
+
+Metadata reaches analytics without the network: `src/tftlab/data/item_stats.json` is a committed snapshot of CommunityDragon's readable item stats (from `tftlab.cdragon.item_stats_snapshot`), loaded once per process; the opt-in live test compares it with the feed and prints a fresh copy when it drifts. The rule runs inside SQL (`carry_commitment_sql`: defensive items counted exactly in `items_json`, duplicates included), identically in SQLite and Postgres, in every query that selects carry boards -- commitment stats, partners, item packages, traits, the carry detail endpoints and Comp Scout. Appearance counts, Opportunity Score weights, 3-star logic and the association formulas are unchanged; only commitment games, commitment/carry-conversion rates, carry outcomes and the evidence built on them move.
+
+**Champion roles were investigated and are not used.** CommunityDragon's champion `role` field (`APTank`, `ADTank`, `APCaster`) was null for 72 of 74 Set 18 shop champions on 2026-09-26 (only Kobuko and Alune had one). `ChampionMeta.role` preserves it as served, and the live inventory test shows if that changes.
+
 ## Current scoring
 
 `carry_commitment_stats` (`tftlab/analytics/commitment.py`) still exposes a simple, Bayesian-shrunk `opportunity_score` per carry, combining Top4/win strength, rarity, and confidence -- this backs the existing `/api/carries` leaderboard and CLI `leaderboard` command unchanged. It deliberately does **not** reward 3-star hit rate; hit and miss performance are shown separately so a powerful-but-fragile reroll isn't confused with a reliable line.
@@ -451,6 +471,38 @@ Both URLs point at the same database; only the host/network path differs. Gettin
 - `DATABASE_URL` -- the production Postgres database's **External** Connection String (from the Render Postgres dashboard, not the Internal one used by the web service).
 
 Neither secret is ever printed in the workflow's logs.
+
+### Patch-wide collection plan (18.3)
+
+**Goal: broad sampling across the whole 18.3 window** (2026-09-24T07:00:00Z to 2026-10-06T00:00:00Z) -- chronological coverage of the patch through many different ladder players. It is **not** exhaustive capture of every NA ranked game, and not longitudinal capture of every game each selected player plays.
+
+**Recommendation: two runs per day, about 12 hours apart (e.g. ~08:00 and ~20:00 UTC), each with the five-cohort allocation `challenger=15 grandmaster=15 master=20 diamond=25 platinum=25`, `matches_per_player=10`, until the window closes.** Manual `workflow_dispatch` only; nothing is scheduled.
+
+Why, from the first successful five-cohort run (100 seeds: 589 history references, 560 unique IDs, 458 new ranked matches, 13 zero-window seeds, 4.9% in-run overlap):
+
+- **History depth.** The 87 active seeds averaged ~6.8 window games each after ~2 days of the patch, i.e. roughly 3-5 ranked games per day for a typical sampled player. A 10-game request therefore reaches back about 2-3 days for a typical seed and about 1 day for a heavy grinder. Runs 12 hours apart leave no chronological gap even for players well above average; once a day would still cover most seeds but would drop part of the heaviest grinders' days. Raising `matches_per_player` would mostly re-read the same players' older games -- breadth beats depth because high-Elo lobbies overlap.
+- **Breadth and rotation.** Each run takes 100 seeds, never-sampled first. Challenger (221 players at 15/run) runs out of never-sampled players after ~15 runs (~7.5 days at this cadence) and then re-samples the least recently sampled -- a week later, almost entirely new games. Grandmaster (331), Master (1,471) and the Diamond/Platinum candidate pools last longer.
+- **Request volume.** About 690 Riot requests per run (≈27 ladder + 100 histories + ≈560 match bodies), ~13-15 minutes at development-key rate limits (100 requests / 2 minutes). Two runs a day is ~1,400 requests -- far inside the limits; the real constraint is the manual key refresh below.
+- **Duplicates.** In-run overlap was 4.9%; cross-run duplicates will rise as more lobbies are already stored (the 14.3% seen during the resume run was inflated by the resume itself). Stored matches are skipped without being re-fetched, so duplicates cost only history references.
+- **Remaining days.** From 2026-09-26 to 2026-10-06 there are ~9.5 days, so ~19 runs. If yields stay near the first run and decline gradually, expect roughly **6,000-8,000 more 18.3 matches** -- an estimate, not a promise.
+
+**When to back off:** the ingest report prints `Collection value (is another run worth it?)` -- never-sampled, previously-sampled and zero-history seed percentages -- next to the already-stored duplicate rate, inserted-per-seed and new-match yield. If never-sampled seeds fall below ~50% or new-match yield stays below ~40% for two consecutive runs, drop to one run per day.
+
+**Limitations:** seeds are ladder players, so the population is what they played (see "Data population and seed cohorts"); a heavy grinder's games older than their last 10 are not requested; Diamond/Platinum candidates come from the first pages of each division (reported as capped when so).
+
+**Patch end is strict.** Production always runs `--current-trusted-window`. At 2026-10-06T00:00:00Z (end exclusive) there is no current trusted window unless 18.4's real verified window has been registered, so the ingest step fails instead of crawling another patch or going unbounded. 18.4 is added only when its real window is known.
+
+### Riot development key operations
+
+Riot's Developer Portal says development API keys deactivate every 24 hours. Before a collection day (and whenever `verify-riot` fails with 401):
+
+1. Open the Riot Developer Portal (developer.riotgames.com) and sign in.
+2. Reset / regenerate the development API key and copy it.
+3. In GitHub: **Settings → Secrets and variables → Actions → `RIOT_API_KEY` → Update**, paste, save.
+4. Start the run; its `Verify Riot API` step confirms the new key before anything is ingested.
+5. Never paste the key into logs, issues, PRs, the README or chat.
+
+With an expired key, `Verify Riot API` exits 1 with: *"401 Unauthorized -- RIOT_API_KEY is invalid or expired. Reset the development key in the Riot Developer Portal and replace the GitHub Actions RIOT_API_KEY secret."* and the ingest step never runs. If a key expires mid-run, the ingest prints the same guidance, the run stays incomplete, and seed rotation ignores it. The key is never printed. Logging in to Riot or regenerating keys is not automated.
 
 **Operating rule:** after merging anything that deploys (especially schema changes), wait for the Render deployment to finish before starting a production ingest. This is defense in depth only: web requests no longer run schema maintenance, and a transient deadlock on one match is retried, so correctness does not depend on that timing.
 

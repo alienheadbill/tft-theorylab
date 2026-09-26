@@ -1,0 +1,2787 @@
+{
+ "_about": "Readable CommunityDragon stat metadata (ItemMeta.stat_effects / tags) for the current set's items -- the exact apiNames Match-V1 boards store, including the DA_* namespace with verified TFT_Item_* aliases (see tftlab.cdragon.item_stats_snapshot), produced by tftlab.cdragon.item_stats_snapshot from the live cdragon/tft/en_us.json. Read offline by tftlab.carry (carry eligibility) -- analytics never calls CommunityDragon. tests/test_cdragon_live.py::test_committed_item_stats_match_live_set compares it with the live feed and prints a fresh snapshot when it drifts; paste that here to refresh.",
+ "_fetched": "2026-09-26 via the cdragon-live GitHub Actions workflow (run 36237873315)",
+ "set_number": 18,
+ "items": {
+  "DA_18_EmblemBlackthorn": {
+   "name": "Blackthorn Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemBlossom": {
+   "name": "Blossom Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemBrawler": {
+   "name": "Brawler Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemCoven": {
+   "name": "Coven Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemDefender": {
+   "name": "Defender Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemElderwood": {
+   "name": "Elderwood Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemExecutioner": {
+   "name": "Executioner Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemFae": {
+   "name": "Fae Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemFloraFatalis": {
+   "name": "Flora Fatalis Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemFloraFatalisAugment": {
+   "name": "Flora Fatalis Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemHunter": {
+   "name": "Hunter Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemInferno": {
+   "name": "Inferno Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemInvoker": {
+   "name": "Invoker Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemJuggernaut": {
+   "name": "Juggernaut Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemLunar": {
+   "name": "Lunar Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemPrimal": {
+   "name": "Primal Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemRapidfire": {
+   "name": "Rapidfire Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemSlayer": {
+   "name": "Ravager Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemSpellweaver": {
+   "name": "Spellweaver Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemSprykin": {
+   "name": "Sprykin Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_18_EmblemVanguard": {
+   "name": "Vanguard Emblem",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_AdaptiveHelm": {
+   "name": "Adaptive Helm",
+   "stat_effects": [
+    "BacklineADAP",
+    "FrontlineResists",
+    "MagicResist",
+    "ManaPercIncrease",
+    "ManaRegen"
+   ],
+   "tags": [
+    "Mana"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "Mana"
+   ],
+   "alias_of": [
+    "TFT_Item_AdaptiveHelm"
+   ]
+  },
+  "DA_ArchangelsStaff": {
+   "name": "Archangel's Staff",
+   "stat_effects": [
+    "AP",
+    "APPerInterval",
+    "IntervalSeconds",
+    "ManaRegen"
+   ],
+   "tags": [
+    "AbilityPower"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "AbilityPower"
+   ],
+   "alias_of": [
+    "TFT_Item_ArchangelsStaff"
+   ]
+  },
+  "DA_Bloodthirster": {
+   "name": "Bloodthirster",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "HealthThreshold",
+    "LifeSteal",
+    "MagicResist",
+    "ShieldDuration",
+    "ShieldHealthPercent",
+    "StatOmnivamp"
+   ],
+   "tags": [
+    "AbilityPower",
+    "AttackDamage"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "AbilityPower",
+    "AttackDamage"
+   ],
+   "alias_of": [
+    "TFT_Item_Bloodthirster"
+   ]
+  },
+  "DA_BlueBuff": {
+   "name": "Blue Buff",
+   "stat_effects": [],
+   "tags": [
+    "Mana"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "Mana"
+   ],
+   "alias_of": []
+  },
+  "DA_BrambleVest": {
+   "name": "Bramble Vest",
+   "stat_effects": [
+    "1StarAoEDamage",
+    "2StarAoEDamage",
+    "3StarAoEDamage",
+    "4StarAoEDamage",
+    "Armor",
+    "AutoDamageReduction",
+    "ICD",
+    "PercentMaxHP"
+   ],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": [
+    "TFT_Item_BrambleVest"
+   ]
+  },
+  "DA_Component_BFSword": {
+   "name": "B.F. Sword",
+   "stat_effects": [],
+   "tags": [
+    "component"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "component"
+   ],
+   "alias_of": []
+  },
+  "DA_Component_ChainVest": {
+   "name": "Chain Vest",
+   "stat_effects": [
+    "Armor"
+   ],
+   "tags": [
+    "component"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "component"
+   ],
+   "alias_of": [
+    "TFT_Item_ChainVest"
+   ]
+  },
+  "DA_Component_FryingPan": {
+   "name": "Frying Pan",
+   "stat_effects": [],
+   "tags": [
+    "component"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "component"
+   ],
+   "alias_of": [
+    "TFT_Item_FryingPan"
+   ]
+  },
+  "DA_Component_GiantsBelt": {
+   "name": "Giant's Belt",
+   "stat_effects": [
+    "Health"
+   ],
+   "tags": [
+    "component"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "component"
+   ],
+   "alias_of": [
+    "TFT_Item_GiantsBelt"
+   ]
+  },
+  "DA_Component_NeedlesslyLargeRod": {
+   "name": "Needlessly Large Rod",
+   "stat_effects": [
+    "AP"
+   ],
+   "tags": [
+    "component"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "component"
+   ],
+   "alias_of": [
+    "TFT_Item_NeedlesslyLargeRod"
+   ]
+  },
+  "DA_Component_NegatronCloak": {
+   "name": "Negatron Cloak",
+   "stat_effects": [
+    "MagicResist"
+   ],
+   "tags": [
+    "component"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "component"
+   ],
+   "alias_of": [
+    "TFT_Item_NegatronCloak"
+   ]
+  },
+  "DA_Component_RecurveBow": {
+   "name": "Recurve Bow",
+   "stat_effects": [
+    "AS"
+   ],
+   "tags": [
+    "component"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "component"
+   ],
+   "alias_of": [
+    "TFT_Item_RecurveBow"
+   ]
+  },
+  "DA_Component_SparringGloves": {
+   "name": "Sparring Gloves",
+   "stat_effects": [
+    "CritChance"
+   ],
+   "tags": [
+    "component"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "component"
+   ],
+   "alias_of": [
+    "TFT_Item_SparringGloves"
+   ]
+  },
+  "DA_Component_Spatula": {
+   "name": "Spatula",
+   "stat_effects": [],
+   "tags": [
+    "component"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "component"
+   ],
+   "alias_of": []
+  },
+  "DA_Component_TearOfTheGoddess": {
+   "name": "Tear Of The Goddess",
+   "stat_effects": [],
+   "tags": [
+    "component"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "component"
+   ],
+   "alias_of": []
+  },
+  "DA_Crownguard": {
+   "name": "Crownguard",
+   "stat_effects": [
+    "AP",
+    "Armor",
+    "Health",
+    "ShieldBonusAP",
+    "ShieldDuration",
+    "ShieldSize"
+   ],
+   "tags": [
+    "AbilityPower"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "AbilityPower"
+   ],
+   "alias_of": [
+    "TFT_Item_Crownguard"
+   ]
+  },
+  "DA_Deathblade": {
+   "name": "Deathblade",
+   "stat_effects": [],
+   "tags": [
+    "AttackDamage"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "AttackDamage"
+   ],
+   "alias_of": []
+  },
+  "DA_DragonsClaw": {
+   "name": "Dragon's Claw",
+   "stat_effects": [
+    "HealthRegenInterval",
+    "ICD",
+    "MagicResist",
+    "PercentHealthDamage",
+    "PercentMaxHP"
+   ],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": [
+    "TFT_Item_DragonsClaw"
+   ]
+  },
+  "DA_EdgeOfNight": {
+   "name": "Edge of Night",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "AS",
+    "Armor",
+    "DamageReduction",
+    "HealthThreshold",
+    "MissingHealthRestore",
+    "StealthDuration"
+   ],
+   "tags": [
+    "AttackDamage",
+    "AttackSpeed"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "AttackSpeed",
+    "AttackDamage"
+   ],
+   "alias_of": [
+    "TFT_Item_GuardianAngel"
+   ]
+  },
+  "DA_Evenshroud": {
+   "name": "Evenshroud",
+   "stat_effects": [
+    "ARReductionAmount",
+    "BonusResistDuration",
+    "BonusResists",
+    "Health",
+    "HexRange",
+    "MagicResist"
+   ],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": [
+    "TFT_Item_SpectralGauntlet"
+   ]
+  },
+  "DA_GargoyleStoneplate": {
+   "name": "Gargoyle Stoneplate",
+   "stat_effects": [
+    "Armor",
+    "ArmorPerEnemy",
+    "Health",
+    "MRPerEnemy",
+    "MagicResist",
+    "SizeIncrease"
+   ],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": [
+    "TFT_Item_CorruptedGargoyleStoneplate",
+    "TFT_Item_GargoyleStoneplate"
+   ]
+  },
+  "DA_GiantSlayer": {
+   "name": "Giant Slayer",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "AS",
+    "DamageAmp"
+   ],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": [
+    "TFT_Item_MadredsBloodrazor"
+   ]
+  },
+  "DA_GuinsoosRageblade": {
+   "name": "Guinsoo's Rageblade",
+   "stat_effects": [
+    "AP",
+    "AS",
+    "AttackSpeedPerStack"
+   ],
+   "tags": [
+    "AttackSpeed"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "AttackSpeed"
+   ],
+   "alias_of": [
+    "TFT_Item_CorruptedGuinsoosRageblade",
+    "TFT_Item_GuinsoosRageblade"
+   ]
+  },
+  "DA_HandOfJustice": {
+   "name": "Hand Of Justice",
+   "stat_effects": [
+    "AD_NotStatBar",
+    "AP_NotStatBar",
+    "CritChance",
+    "HealthThreshold",
+    "ManaRegen",
+    "StatOmnivamp_NotStatBar"
+   ],
+   "tags": [
+    "CritChance"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "CritChance"
+   ],
+   "alias_of": [
+    "TFT_Item_CorruptedHandOfJustice",
+    "TFT_Item_UnstableConcoction"
+   ]
+  },
+  "DA_HextechGunblade": {
+   "name": "Hextech Gunblade",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "AllyHealing",
+    "ManaRegen",
+    "Omnivamp",
+    "StatOmnivamp"
+   ],
+   "tags": [
+    "AbilityPower",
+    "AttackDamage",
+    "Heal"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "AbilityPower",
+    "AttackDamage",
+    "Heal"
+   ],
+   "alias_of": [
+    "TFT_Item_HextechGunblade"
+   ]
+  },
+  "DA_InfinityEdge": {
+   "name": "Infinity Edge",
+   "stat_effects": [
+    "AD",
+    "CritChance",
+    "CritDamageToGive"
+   ],
+   "tags": [
+    "CritChance"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "CritChance"
+   ],
+   "alias_of": [
+    "TFT_Item_CorruptedInfinityEdge",
+    "TFT_Item_InfinityEdge"
+   ]
+  },
+  "DA_IonicSpark": {
+   "name": "Ionic Spark",
+   "stat_effects": [
+    "AP",
+    "Damage",
+    "Health",
+    "HexRange",
+    "MRShred",
+    "MagicResist",
+    "ManaRatio"
+   ],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": [
+    "TFT_Item_IonicSpark"
+   ]
+  },
+  "DA_Item_Artifact_TalismanOfAscension": {
+   "name": "Talisman of Ascension",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_JeweledGauntlet": {
+   "name": "Jeweled Gauntlet",
+   "stat_effects": [
+    "AP",
+    "CritChance",
+    "CritDamageToGive"
+   ],
+   "tags": [
+    "CritChance"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "CritChance"
+   ],
+   "alias_of": [
+    "TFT_Item_CorruptedJeweledGauntlet",
+    "TFT_Item_JeweledGauntlet"
+   ]
+  },
+  "DA_KrakensFury": {
+   "name": "Kraken's Fury",
+   "stat_effects": [
+    "AD",
+    "ADOnAttack",
+    "AS",
+    "ASCapstone",
+    "MagicResist",
+    "MaxStacks"
+   ],
+   "tags": [
+    "AttackDamage"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "AttackDamage"
+   ],
+   "alias_of": [
+    "TFT_Item_RunaansHurricane"
+   ]
+  },
+  "DA_LastWhisper": {
+   "name": "Last Whisper",
+   "stat_effects": [
+    "AD",
+    "AS",
+    "ArmorBreakDuration",
+    "ArmorReductionPercent",
+    "CritChance"
+   ],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": [
+    "TFT_Item_LastWhisper"
+   ]
+  },
+  "DA_Morellonomicon": {
+   "name": "Morellonomicon",
+   "stat_effects": [
+    "AP",
+    "BurnDuration",
+    "BurnPercent",
+    "GrievousWoundsPercent",
+    "Health",
+    "ManaRegen",
+    "MonsterCap",
+    "TicksPerSecond"
+   ],
+   "tags": [
+    "AbilityPower",
+    "AttackSpeed"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "AttackSpeed",
+    "AbilityPower"
+   ],
+   "alias_of": [
+    "TFT_Item_Morellonomicon"
+   ]
+  },
+  "DA_NashorsTooth": {
+   "name": "Nashor's Tooth",
+   "stat_effects": [
+    "AP",
+    "AS",
+    "BaseManaOnHit",
+    "CritChance",
+    "Health",
+    "ManaOnCrit"
+   ],
+   "tags": [
+    "AbilityPower",
+    "AttackSpeed"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "AttackSpeed",
+    "AbilityPower"
+   ],
+   "alias_of": [
+    "TFT_Item_Leviathan"
+   ]
+  },
+  "DA_ProtectorsVow": {
+   "name": "Protector's Vow",
+   "stat_effects": [
+    "Armor",
+    "CombatStartMana",
+    "HealthThreshold",
+    "MagicResist",
+    "ManaRegen",
+    "ShieldDuration",
+    "ShieldHealthPercent",
+    "TriggerMana"
+   ],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": [
+    "TFT_Item_FrozenHeart"
+   ]
+  },
+  "DA_Quicksilver": {
+   "name": "Quicksilver",
+   "stat_effects": [
+    "AS",
+    "CritChance",
+    "MagicResist",
+    "ProcAttackSpeed",
+    "SpellShieldDuration"
+   ],
+   "tags": [
+    "AttackSpeed"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "AttackSpeed"
+   ],
+   "alias_of": [
+    "TFT_Item_Quicksilver"
+   ]
+  },
+  "DA_RabadonsDeathcap": {
+   "name": "Rabadon's Deathcap",
+   "stat_effects": [
+    "AP",
+    "BonusDamage"
+   ],
+   "tags": [
+    "AbilityPower"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "AbilityPower"
+   ],
+   "alias_of": [
+    "TFT_Item_CorruptedRabadonsDeathcap",
+    "TFT_Item_RabadonsDeathcap"
+   ]
+  },
+  "DA_RedBuff": {
+   "name": "Red Buff",
+   "stat_effects": [
+    "AS",
+    "BonusDamage",
+    "BurnPercent",
+    "Duration",
+    "HealingReductionPct",
+    "HexRangeIncrease"
+   ],
+   "tags": [
+    "AttackSpeed"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "AttackSpeed"
+   ],
+   "alias_of": [
+    "TFT_Item_RapidFireCannon"
+   ]
+  },
+  "DA_SpearOfShojin": {
+   "name": "Spear of Shojin",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "FlatManaRestore",
+    "ManaRegen"
+   ],
+   "tags": [
+    "Mana"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "Mana"
+   ],
+   "alias_of": [
+    "TFT_Item_CorruptedSpearOfShojin",
+    "TFT_Item_SpearOfShojin"
+   ]
+  },
+  "DA_SpiritVisage": {
+   "name": "Spirit Visage",
+   "stat_effects": [
+    "HealTickRate",
+    "Health",
+    "ManaRegen",
+    "MaxHeal",
+    "MissingHealthHeal"
+   ],
+   "tags": [
+    "Heal"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "Heal"
+   ],
+   "alias_of": [
+    "TFT_Item_CorruptedRedemption",
+    "TFT_Item_Redemption"
+   ]
+  },
+  "DA_SteadfastHeart": {
+   "name": "Steadfast Heart",
+   "stat_effects": [
+    "Armor",
+    "BaseDurability",
+    "CritChance",
+    "EmpoweredDurability",
+    "Health",
+    "ThresholdForEmpower"
+   ],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": [
+    "TFT_Item_NightHarvester"
+   ]
+  },
+  "DA_SteraksGage": {
+   "name": "Sterak's Gage",
+   "stat_effects": [
+    "AD",
+    "Health",
+    "HealthThreshold",
+    "PercentHealthShield",
+    "ShieldDuration"
+   ],
+   "tags": [
+    "AttackDamage"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "AttackDamage"
+   ],
+   "alias_of": [
+    "TFT_Item_SteraksGage"
+   ]
+  },
+  "DA_StrikersFlail": {
+   "name": "Striker's Flail",
+   "stat_effects": [
+    "AS",
+    "BuffDamageAmp",
+    "CritChance",
+    "Duration",
+    "Health",
+    "MaxStacks"
+   ],
+   "tags": [
+    "CritChance"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "CritChance"
+   ],
+   "alias_of": [
+    "TFT_Item_PowerGauntlet"
+   ]
+  },
+  "DA_SunfireCape": {
+   "name": "Sunfire Cape",
+   "stat_effects": [
+    "Armor",
+    "BonusPercentHP",
+    "BurnDuration",
+    "BurnPercent",
+    "GrievousWoundsPercent",
+    "Health",
+    "HexRange",
+    "ICD",
+    "MonsterCap"
+   ],
+   "tags": [
+    "Health"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "Health"
+   ],
+   "alias_of": [
+    "TFT_Item_RedBuff"
+   ]
+  },
+  "DA_TacticiansCape": {
+   "name": "Tactician's Cape",
+   "stat_effects": [
+    "MaxArmySizeIncrease",
+    "PercentGoldChance",
+    "Timer"
+   ],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": [
+    "TFT_Item_TacticiansRing"
+   ]
+  },
+  "DA_TacticiansCrown": {
+   "name": "Tacticians Crown",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_TacticiansShield": {
+   "name": "Tacticians Shield",
+   "stat_effects": [],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": []
+  },
+  "DA_ThiefsGloves": {
+   "name": "Thief's Gloves",
+   "stat_effects": [
+    "CritChance",
+    "Health"
+   ],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": [
+    "TFT_Item_ThiefsGloves",
+    "TFT_Item_ThiefsGloves_AcademyCopy1",
+    "TFT_Item_ThiefsGloves_AcademyCopy2"
+   ]
+  },
+  "DA_TitansResolve": {
+   "name": "Titan's Resolve",
+   "stat_effects": [
+    "AS",
+    "Armor",
+    "StackCap",
+    "StackedAmp",
+    "StackingAD",
+    "StackingSP"
+   ],
+   "tags": [
+    "AbilityPower",
+    "AttackDamage"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "AttackDamage",
+    "AbilityPower"
+   ],
+   "alias_of": [
+    "TFT_Item_TitansResolve"
+   ]
+  },
+  "DA_VoidStaff": {
+   "name": "Void Staff",
+   "stat_effects": [
+    "AP",
+    "AS",
+    "MRShred",
+    "MRShredDuration",
+    "ManaRegen"
+   ],
+   "tags": [],
+   "own_stat_effects": [],
+   "own_tags": [],
+   "alias_of": [
+    "TFT_Item_StatikkShiv"
+   ]
+  },
+  "DA_WarmogsArmor": {
+   "name": "Warmogs Armor",
+   "stat_effects": [],
+   "tags": [
+    "Health"
+   ],
+   "own_stat_effects": [],
+   "own_tags": [
+    "Health"
+   ],
+   "alias_of": []
+  },
+  "TFT_Item_AdaptiveHelm": {
+   "name": "Adaptive Helm",
+   "stat_effects": [
+    "BacklineADAP",
+    "FrontlineResists",
+    "MagicResist",
+    "ManaPercIncrease",
+    "ManaRegen"
+   ],
+   "tags": [
+    "Mana"
+   ]
+  },
+  "TFT_Item_AegisOfTheLegion": {
+   "name": "Aegis of the Legion",
+   "stat_effects": [
+    "ASBuff",
+    "BonusResists",
+    "BuffDuration",
+    "Health"
+   ],
+   "tags": []
+  },
+  "TFT_Item_ArchangelsStaff": {
+   "name": "Archangel's Staff",
+   "stat_effects": [
+    "AP",
+    "APPerInterval",
+    "IntervalSeconds",
+    "ManaRegen"
+   ],
+   "tags": [
+    "AbilityPower"
+   ]
+  },
+  "TFT_Item_Artifact_AegisOfDawn": {
+   "name": "Aegis of Dawn",
+   "stat_effects": [
+    "Armor",
+    "ArmorStealPerTick",
+    "Health",
+    "TickRate",
+    "TickRateWithAegisOfDusk"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_AegisOfDusk": {
+   "name": "Aegis of Dusk",
+   "stat_effects": [
+    "Health",
+    "MRStealPerTick",
+    "MagicResist",
+    "TickRate",
+    "TickRateWithAegisOfDawn"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_BlightingJewel": {
+   "name": "Blighting Jewel",
+   "stat_effects": [
+    "AP",
+    "ICD",
+    "MRReduction",
+    "ManaGain",
+    "ManaRegen"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_CappaJuice": {
+   "name": "Cappa Juice",
+   "stat_effects": [
+    "AD",
+    "ADAPPerTakedown",
+    "AP",
+    "AS",
+    "PercentHatLoss"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_CursedBlade": {
+   "name": "Cursed Blade",
+   "stat_effects": [
+    "AS",
+    "HitCount",
+    "MagicResist",
+    "MaxHealthPercent"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_CursedVampiricScepter": {
+   "name": "Corrupt Vampiric Scepter",
+   "stat_effects": [
+    "AS",
+    "PercentDamage"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_Dawncore": {
+   "name": "Dawncore",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "FlatManaReduction",
+    "ManaRegen",
+    "MinimumTotalMana",
+    "ReductionPerCast"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_EternalPact": {
+   "name": "Eternal Pact",
+   "stat_effects": [
+    "AP",
+    "APToGrant",
+    "ManaRegen",
+    "ManaRegenToGrant",
+    "ManaToGrant",
+    "PercentAPShield",
+    "ShieldCadence",
+    "ShieldDuration"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_Fishbones": {
+   "name": "Fishbones",
+   "stat_effects": [
+    "AD",
+    "AS"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_ForbiddenIdol": {
+   "name": "Forbidden Idol",
+   "stat_effects": [
+    "Armor",
+    "Health",
+    "MagicResist",
+    "PercentShieldConversion"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_HellfireHatchet": {
+   "name": "Hellfire Hatchet",
+   "stat_effects": [
+    "AD",
+    "ASPerMissingHealthPercent",
+    "Health",
+    "MaxHealthPercentDamage",
+    "MissingHealthPercent",
+    "StatOmnivamp"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_HorizonFocus": {
+   "name": "Horizon Focus",
+   "stat_effects": [
+    "Armor",
+    "Health",
+    "MagicResist",
+    "ManaRegen",
+    "PercentHealthDamage"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_InnervatingLocket": {
+   "name": "Innervating Locket",
+   "stat_effects": [
+    "Duration",
+    "Health",
+    "ManaRegen",
+    "PercentHealth",
+    "PercentMana"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_LesserMirroredPersona": {
+   "name": "Lesser Mirrored Persona",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "AS",
+    "Armor",
+    "Health",
+    "MagicResist",
+    "StatSharePercent"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_LichBane": {
+   "name": "Lich Bane",
+   "stat_effects": [
+    "AP",
+    "AS"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_LightshieldCrest": {
+   "name": "Lightshield Crest",
+   "stat_effects": [
+    "Armor",
+    "MagicResist",
+    "PercentOfResists",
+    "ShieldDuration",
+    "TriggerRate"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_LudensTempest": {
+   "name": "Luden's Tempest",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "BaseDamage",
+    "PercentOfOverkill"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_MendingEchoes": {
+   "name": "Mending Echoes",
+   "stat_effects": [
+    "HealPercentToGrant",
+    "Health",
+    "IncreasedHealing",
+    "ManaRegen"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_MirroredPersona": {
+   "name": "Mirrored Persona",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "AS",
+    "Armor",
+    "Health",
+    "MagicResist",
+    "NumCombats",
+    "StatSharePercent"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_Mittens": {
+   "name": "Mittens",
+   "stat_effects": [
+    "AS",
+    "PercentDR"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_NavoriFlickerblades": {
+   "name": "Flickerblades",
+   "stat_effects": [
+    "ADPerBonus",
+    "AP",
+    "APPerBonus",
+    "AS",
+    "ASPerStack",
+    "StacksPerBonus"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_ProwlersClaw": {
+   "name": "Prowler's Claw",
+   "stat_effects": [
+    "AD",
+    "CritChance",
+    "CritDamageBonusPercent",
+    "Health",
+    "HexRange"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_RapidFirecannon": {
+   "name": "Rapid Firecannon",
+   "stat_effects": [
+    "AS"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_SeekersArmguard": {
+   "name": "Seeker's Armguard",
+   "stat_effects": [
+    "AP",
+    "Armor",
+    "MagicResist",
+    "StatOmnivamp",
+    "StatsPerTakedown"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_ShadowPuppet": {
+   "name": "Shadow Puppet",
+   "stat_effects": [
+    "AS",
+    "Armor",
+    "ClonePercentDamage",
+    "ClonePercentHealth",
+    "MagicResist"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_SilvermereDawn": {
+   "name": "Silvermere Dawn",
+   "stat_effects": [
+    "AD",
+    "Armor",
+    "AttackSpeedCap",
+    "MagicResist",
+    "ManaConversion",
+    "StunDuration"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_SpectralCutlass": {
+   "name": "Spectral Cutlass",
+   "stat_effects": [
+    "AD",
+    "CritChance",
+    "Duration",
+    "Health"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_StatikkShiv": {
+   "name": "Statikk Shiv",
+   "stat_effects": [
+    "AP",
+    "APScalar",
+    "AS",
+    "Damage",
+    "NumTargets"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_SuspiciousTrenchCoat": {
+   "name": "Suspicious Trench Coat",
+   "stat_effects": [
+    "AS",
+    "Health",
+    "PercentHealthOfCopies",
+    "PercentHealthTrigger"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_TalismanOfAscension": {
+   "name": "Talisman Of Ascension",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "DamageAmp",
+    "DamageIncreasePercent",
+    "Health",
+    "MaxHealthPercent",
+    "Seconds"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_TheIndomitable": {
+   "name": "The Indomitable",
+   "stat_effects": [
+    "Armor",
+    "Health",
+    "HealthPercBonus",
+    "MagicResist"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_TitanicHydra": {
+   "name": "Titanic Hydra",
+   "stat_effects": [
+    "AD",
+    "AS",
+    "Health",
+    "PercentAttackDamageSplash",
+    "PercentMaxHealthSplash"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_UnendingDespair": {
+   "name": "Unending Despair",
+   "stat_effects": [
+    "Armor",
+    "Health",
+    "PercentDamage"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_VoidGauntlet": {
+   "name": "Void Gauntlet",
+   "stat_effects": [
+    "Health",
+    "HexRadius",
+    "InitialPercentHealthStore",
+    "PercentHealthStore"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_WitheringRelic": {
+   "name": "Withered Relic",
+   "stat_effects": [
+    "Armor",
+    "FlatMaxHealth",
+    "MagicResist"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Artifact_WitsEnd": {
+   "name": "Wit's End",
+   "stat_effects": [
+    "AS",
+    "Armor",
+    "Health",
+    "MagicResist",
+    "PercentHealing"
+   ],
+   "tags": []
+  },
+  "TFT_Item_BFSword": {
+   "name": "B.F. Sword",
+   "stat_effects": [
+    "AD"
+   ],
+   "tags": [
+    "component"
+   ]
+  },
+  "TFT_Item_BansheesVeil": {
+   "name": "Banshee's Veil",
+   "stat_effects": [
+    "BuffAttackSpeed",
+    "Duration",
+    "Health",
+    "HexRange"
+   ],
+   "tags": []
+  },
+  "TFT_Item_BladeOfTheRuinedKing": {
+   "name": "TFT_item_name_BladeOfTheRuinedKing",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_Blank": {
+   "name": "TFT_Item_Blank",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_Bloodthirster": {
+   "name": "Bloodthirster",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "HealthThreshold",
+    "LifeSteal",
+    "MagicResist",
+    "ShieldDuration",
+    "ShieldHealthPercent",
+    "StatOmnivamp"
+   ],
+   "tags": [
+    "AbilityPower",
+    "AttackDamage"
+   ]
+  },
+  "TFT_Item_BlueBuff": {
+   "name": "Blue Buff",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "ManaRegen",
+    "ModifiedADAP"
+   ],
+   "tags": [
+    "Mana"
+   ]
+  },
+  "TFT_Item_BrambleVest": {
+   "name": "Bramble Vest",
+   "stat_effects": [
+    "1StarAoEDamage",
+    "2StarAoEDamage",
+    "3StarAoEDamage",
+    "4StarAoEDamage",
+    "Armor",
+    "AutoDamageReduction",
+    "ICD",
+    "PercentMaxHP"
+   ],
+   "tags": []
+  },
+  "TFT_Item_CarouselOfChaos_TimeUndilator": {
+   "name": "Time Undilator",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_Catalyst": {
+   "name": "TFT_item_name_Catalyst",
+   "stat_effects": [
+    "DodgeChance",
+    "Mana"
+   ],
+   "tags": []
+  },
+  "TFT_Item_ChainVest": {
+   "name": "Chain Vest",
+   "stat_effects": [
+    "Armor"
+   ],
+   "tags": [
+    "component"
+   ]
+  },
+  "TFT_Item_Chalice": {
+   "name": "Chalice of Power",
+   "stat_effects": [
+    "BonusInitialMana",
+    "ChaliceAP",
+    "Health",
+    "HexRange"
+   ],
+   "tags": []
+  },
+  "TFT_Item_ChonccsChalice": {
+   "name": "Choncc's Chalice",
+   "stat_effects": [
+    "MaxArmySizeIncrease",
+    "PercentGoldChance",
+    "Timer"
+   ],
+   "tags": []
+  },
+  "TFT_Item_ChonccsCrown": {
+   "name": "Choncc's Crown",
+   "stat_effects": [
+    "MaxArmySizeIncrease",
+    "PercentGoldChance",
+    "Timer"
+   ],
+   "tags": []
+  },
+  "TFT_Item_ChonccsSpork": {
+   "name": "Choncc's Spork",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "Health",
+    "ManaRegen"
+   ],
+   "tags": []
+  },
+  "TFT_Item_CorruptedDeathblade": {
+   "name": "Deathblade",
+   "stat_effects": [
+    "AD",
+    "BonusDamage"
+   ],
+   "tags": [
+    "AttackDamage"
+   ]
+  },
+  "TFT_Item_CorruptedGargoyleStoneplate": {
+   "name": "Gargoyle Stoneplate",
+   "stat_effects": [
+    "Armor",
+    "ArmorPerEnemy",
+    "Health",
+    "MRPerEnemy",
+    "MagicResist",
+    "SizeIncrease"
+   ],
+   "tags": []
+  },
+  "TFT_Item_CorruptedGuinsoosRageblade": {
+   "name": "Guinsoo's Rageblade",
+   "stat_effects": [
+    "AP",
+    "AS",
+    "AttackSpeedPerStack"
+   ],
+   "tags": [
+    "AttackSpeed"
+   ]
+  },
+  "TFT_Item_CorruptedHandOfJustice": {
+   "name": "Hand Of Justice",
+   "stat_effects": [
+    "AD_NotStatBar",
+    "AP_NotStatBar",
+    "CritChance",
+    "HealthThreshold",
+    "ManaRegen",
+    "StatOmnivamp_NotStatBar"
+   ],
+   "tags": [
+    "CritChance"
+   ]
+  },
+  "TFT_Item_CorruptedInfinityEdge": {
+   "name": "Infinity Edge",
+   "stat_effects": [
+    "AD",
+    "CritChance",
+    "CritDamageToGive"
+   ],
+   "tags": [
+    "CritChance"
+   ]
+  },
+  "TFT_Item_CorruptedJeweledGauntlet": {
+   "name": "Jeweled Gauntlet",
+   "stat_effects": [
+    "AP",
+    "CritChance",
+    "CritDamageToGive"
+   ],
+   "tags": [
+    "CritChance"
+   ]
+  },
+  "TFT_Item_CorruptedRabadonsDeathcap": {
+   "name": "Rabadon's Deathcap",
+   "stat_effects": [
+    "AP",
+    "BonusDamage"
+   ],
+   "tags": [
+    "AbilityPower"
+   ]
+  },
+  "TFT_Item_CorruptedRedemption": {
+   "name": "Spirit Visage",
+   "stat_effects": [
+    "HealTickRate",
+    "Health",
+    "ManaRegen",
+    "MaxHeal",
+    "MissingHealthHeal"
+   ],
+   "tags": [
+    "Heal"
+   ]
+  },
+  "TFT_Item_CorruptedSpearOfShojin": {
+   "name": "Spear of Shojin",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "FlatManaRestore",
+    "ManaRegen"
+   ],
+   "tags": [
+    "Mana"
+   ]
+  },
+  "TFT_Item_CorruptedWarmogsArmor": {
+   "name": "Warmog's Armor",
+   "stat_effects": [
+    "BonusPercentHP",
+    "Health"
+   ],
+   "tags": [
+    "Health"
+   ]
+  },
+  "TFT_Item_CrestOfCinders": {
+   "name": "Crest Of Cinders",
+   "stat_effects": [
+    "BurnAmount",
+    "BurnDuration",
+    "HealInterval",
+    "Health",
+    "HexRange",
+    "MaxHPHeal"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Crownguard": {
+   "name": "Crownguard",
+   "stat_effects": [
+    "AP",
+    "Armor",
+    "Health",
+    "ShieldBonusAP",
+    "ShieldDuration",
+    "ShieldSize"
+   ],
+   "tags": [
+    "AbilityPower"
+   ]
+  },
+  "TFT_Item_CursedBlade": {
+   "name": "tft_item_name_CursedBlade",
+   "stat_effects": [
+    "AS",
+    "MagicResist"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Darkin": {
+   "name": "tft_item_name_Darkin",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_Deathblade": {
+   "name": "Deathblade",
+   "stat_effects": [
+    "AD",
+    "BonusDamage"
+   ],
+   "tags": [
+    "AttackDamage"
+   ]
+  },
+  "TFT_Item_DebugBase": {
+   "name": "MissingNo",
+   "stat_effects": [],
+   "tags": [
+    "Consumable"
+   ]
+  },
+  "TFT_Item_DebugCrit": {
+   "name": "Critical Hit!",
+   "stat_effects": [],
+   "tags": [
+    "Consumable"
+   ]
+  },
+  "TFT_Item_DebugDamage": {
+   "name": "Portable Pain",
+   "stat_effects": [],
+   "tags": [
+    "Consumable"
+   ]
+  },
+  "TFT_Item_DebugDamageAmp": {
+   "name": "Damage Amp",
+   "stat_effects": [],
+   "tags": [
+    "Consumable"
+   ]
+  },
+  "TFT_Item_DebugFirstHit": {
+   "name": "Ace",
+   "stat_effects": [],
+   "tags": [
+    "Consumable"
+   ]
+  },
+  "TFT_Item_DebugMana": {
+   "name": "The Tears of My Enemies",
+   "stat_effects": [],
+   "tags": [
+    "Consumable"
+   ]
+  },
+  "TFT_Item_DebugShield": {
+   "name": "Pengu's Protection",
+   "stat_effects": [],
+   "tags": [
+    "Consumable"
+   ]
+  },
+  "TFT_Item_DebugStun": {
+   "name": "Hammer to the Face",
+   "stat_effects": [],
+   "tags": [
+    "Consumable"
+   ]
+  },
+  "TFT_Item_DebugTaunt": {
+   "name": "Taunt",
+   "stat_effects": [],
+   "tags": [
+    "Consumable"
+   ]
+  },
+  "TFT_Item_DebugUnitID": {
+   "name": "Do You Know Who I Am?",
+   "stat_effects": [],
+   "tags": [
+    "Consumable"
+   ]
+  },
+  "TFT_Item_DragonsClaw": {
+   "name": "Dragon's Claw",
+   "stat_effects": [
+    "HealthRegenInterval",
+    "ICD",
+    "MagicResist",
+    "PercentHealthDamage",
+    "PercentMaxHP"
+   ],
+   "tags": []
+  },
+  "TFT_Item_EmptyBag": {
+   "name": "TFT_Item_EmptyBag",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_EternalFlame": {
+   "name": "The Eternal Flame",
+   "stat_effects": [
+    "BonusDamage",
+    "DamageAmp",
+    "Health",
+    "TOOLTIPWoundAmount",
+    "WoundDuration"
+   ],
+   "tags": []
+  },
+  "TFT_Item_ForceOfNature": {
+   "name": "Tactician's Crown",
+   "stat_effects": [
+    "MaxArmySizeIncrease",
+    "PercentGoldChance"
+   ],
+   "tags": []
+  },
+  "TFT_Item_FreeBFSword": {
+   "name": "B.F. Sword",
+   "stat_effects": [
+    "AD"
+   ],
+   "tags": []
+  },
+  "TFT_Item_FreeDeathblade": {
+   "name": "Deathblade",
+   "stat_effects": [
+    "AD"
+   ],
+   "tags": []
+  },
+  "TFT_Item_FreeVengeance": {
+   "name": "tft_item_name_SwordOfTheDivine2",
+   "stat_effects": [
+    "AS",
+    "AttackSpeedPerStack",
+    "CritChance"
+   ],
+   "tags": []
+  },
+  "TFT_Item_FrozenHeart": {
+   "name": "Protector's Vow",
+   "stat_effects": [
+    "Armor",
+    "CombatStartMana",
+    "HealthThreshold",
+    "MagicResist",
+    "ManaRegen",
+    "ShieldDuration",
+    "ShieldHealthPercent",
+    "TriggerMana"
+   ],
+   "tags": []
+  },
+  "TFT_Item_FrozenMallet": {
+   "name": "TFT_item_name_FrozenMallet",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_FryingPan": {
+   "name": "Frying Pan",
+   "stat_effects": [],
+   "tags": [
+    "component"
+   ]
+  },
+  "TFT_Item_GargoyleStoneplate": {
+   "name": "Gargoyle Stoneplate",
+   "stat_effects": [
+    "Armor",
+    "ArmorPerEnemy",
+    "Health",
+    "MRPerEnemy",
+    "MagicResist",
+    "SizeIncrease"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GiantsBelt": {
+   "name": "Giant's Belt",
+   "stat_effects": [
+    "Health"
+   ],
+   "tags": [
+    "component"
+   ]
+  },
+  "TFT_Item_GrantCompletedAnvil": {
+   "name": "Completed Item Anvil",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_GrantCompletedItem1": {
+   "name": "1 completed item",
+   "stat_effects": [
+    "ItemsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantCompletedItem2": {
+   "name": "@ItemsToGive@ completed items",
+   "stat_effects": [
+    "ItemsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantCompletedItem3": {
+   "name": "@ItemsToGive@ completed items",
+   "stat_effects": [
+    "ItemsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantComponent1": {
+   "name": "1 component",
+   "stat_effects": [
+    "ItemsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantComponent2": {
+   "name": "@ItemsToGive@ components",
+   "stat_effects": [
+    "ItemsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantComponent3": {
+   "name": "@ItemsToGive@ components",
+   "stat_effects": [
+    "ItemsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantComponent4": {
+   "name": "@ItemsToGive@ components",
+   "stat_effects": [
+    "ItemsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantComponent5": {
+   "name": "@ItemsToGive@ components",
+   "stat_effects": [
+    "ItemsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantComponent6": {
+   "name": "@ItemsToGive@ components",
+   "stat_effects": [
+    "ItemsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantComponent7": {
+   "name": "@ItemsToGive@ components",
+   "stat_effects": [
+    "ItemsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantComponent8": {
+   "name": "@ItemsToGive@ components",
+   "stat_effects": [
+    "ItemsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantComponent9": {
+   "name": "@ItemsToGive@ components",
+   "stat_effects": [
+    "ItemsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantComponentAnvil": {
+   "name": "Component Item Key",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_GrantOrbs1": {
+   "name": "1 loot orb",
+   "stat_effects": [
+    "OrbsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantOrbs2": {
+   "name": "@OrbsToGive@ loot orbs",
+   "stat_effects": [
+    "OrbsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantOrbs3": {
+   "name": "@OrbsToGive@ loot orbs",
+   "stat_effects": [
+    "OrbsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantOrbs4": {
+   "name": "@OrbsToGive@ loot orbs",
+   "stat_effects": [
+    "OrbsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantOrbs5": {
+   "name": "@OrbsToGive@ loot orbs",
+   "stat_effects": [
+    "OrbsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantOrbs6": {
+   "name": "@OrbsToGive@ loot orbs",
+   "stat_effects": [
+    "OrbsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantOrbs7": {
+   "name": "@OrbsToGive@ loot orbs",
+   "stat_effects": [
+    "OrbsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantOrbs8": {
+   "name": "@OrbsToGive@ loot orbs",
+   "stat_effects": [
+    "OrbsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantOrbs9": {
+   "name": "@OrbsToGive@ loot orbs",
+   "stat_effects": [
+    "OrbsToGive"
+   ],
+   "tags": []
+  },
+  "TFT_Item_GrantOrnnAnvil": {
+   "name": "Artifact Anvil",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_GrantTomeOfTraits": {
+   "name": "Tome of Traits",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_GuardianAngel": {
+   "name": "Edge of Night",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "AS",
+    "Armor",
+    "DamageReduction",
+    "HealthThreshold",
+    "MissingHealthRestore",
+    "StealthDuration"
+   ],
+   "tags": [
+    "AttackSpeed",
+    "AttackDamage"
+   ]
+  },
+  "TFT_Item_GuinsoosRageblade": {
+   "name": "Guinsoo's Rageblade",
+   "stat_effects": [
+    "AP",
+    "AS",
+    "AttackSpeedPerStack"
+   ],
+   "tags": [
+    "AttackSpeed"
+   ]
+  },
+  "TFT_Item_Hex_Inferno": {
+   "name": "tft_item_name_InfernoHexBuff",
+   "stat_effects": [
+    "AttackSpeedPercent"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Hex_Mountain": {
+   "name": "tft_item_name_MountainHexBuff",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_Hex_Ocean": {
+   "name": "tft_item_name_OceanHexBuff",
+   "stat_effects": [
+    "startingmana"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Hex_Wind": {
+   "name": "tft_item_name_WindHexBuff",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_HextechChestguard": {
+   "name": "tft_item_name_HextechChestguard",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_HextechGunblade": {
+   "name": "Hextech Gunblade",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "AllyHealing",
+    "ManaRegen",
+    "Omnivamp",
+    "StatOmnivamp"
+   ],
+   "tags": [
+    "AbilityPower",
+    "AttackDamage",
+    "Heal"
+   ]
+  },
+  "TFT_Item_Hush": {
+   "name": "tft_item_name_Hush",
+   "stat_effects": [
+    "MagicResist",
+    "Mana",
+    "ManaLockDuration",
+    "SilenceDuration"
+   ],
+   "tags": []
+  },
+  "TFT_Item_IcebornGauntlet": {
+   "name": "tft_item_name_FrozenFist",
+   "stat_effects": [
+    "Armor",
+    "DodgeChance",
+    "FreezeDuration"
+   ],
+   "tags": []
+  },
+  "TFT_Item_InfinityEdge": {
+   "name": "Infinity Edge",
+   "stat_effects": [
+    "AD",
+    "CritChance",
+    "CritDamageToGive"
+   ],
+   "tags": [
+    "CritChance"
+   ]
+  },
+  "TFT_Item_IonicSpark": {
+   "name": "Ionic Spark",
+   "stat_effects": [
+    "AP",
+    "Damage",
+    "Health",
+    "HexRange",
+    "MRShred",
+    "MagicResist",
+    "ManaRatio"
+   ],
+   "tags": []
+  },
+  "TFT_Item_IsYordle": {
+   "name": "tft_item_name_Mittens",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_JammedSlot": {
+   "name": "Jammed!",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_JeweledGauntlet": {
+   "name": "Jeweled Gauntlet",
+   "stat_effects": [
+    "AP",
+    "CritChance",
+    "CritDamageToGive"
+   ],
+   "tags": [
+    "CritChance"
+   ]
+  },
+  "TFT_Item_KnightsVow": {
+   "name": "Knight's Vow",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_LastWhisper": {
+   "name": "Last Whisper",
+   "stat_effects": [
+    "AD",
+    "AS",
+    "ArmorBreakDuration",
+    "ArmorReductionPercent",
+    "CritChance"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Leviathan": {
+   "name": "Nashor's Tooth",
+   "stat_effects": [
+    "AP",
+    "AS",
+    "BaseManaOnHit",
+    "CritChance",
+    "Health",
+    "ManaOnCrit"
+   ],
+   "tags": [
+    "AttackSpeed",
+    "AbilityPower"
+   ]
+  },
+  "TFT_Item_LocketOfTheIronSolari": {
+   "name": "Locket of the Iron Solari",
+   "stat_effects": [
+    "BonusResists",
+    "Health",
+    "HexRange",
+    "ShieldDuration",
+    "ShieldValue"
+   ],
+   "tags": []
+  },
+  "TFT_Item_MacaoMode_HextechSniper": {
+   "name": "Hextech Sniper Rifle",
+   "stat_effects": [
+    "BonusAllyHealth",
+    "CostIncrease",
+    "Health",
+    "ManaLockDuration"
+   ],
+   "tags": []
+  },
+  "TFT_Item_MadredsBloodrazor": {
+   "name": "Giant Slayer",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "AS",
+    "DamageAmp"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Moonstone": {
+   "name": "Moonstone Renewer",
+   "stat_effects": [
+    "BaseShieldAmount",
+    "Health",
+    "MaxShield",
+    "ShieldDuration",
+    "ShieldRate",
+    "ShieldTargets"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Morellonomicon": {
+   "name": "Morellonomicon",
+   "stat_effects": [
+    "AP",
+    "BurnDuration",
+    "BurnPercent",
+    "GrievousWoundsPercent",
+    "Health",
+    "ManaRegen",
+    "MonsterCap",
+    "TicksPerSecond"
+   ],
+   "tags": [
+    "AttackSpeed",
+    "AbilityPower"
+   ]
+  },
+  "TFT_Item_MortalReminder": {
+   "name": "game_item_displayname_3033",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_NeedlesslyLargeRod": {
+   "name": "Needlessly Large Rod",
+   "stat_effects": [
+    "AP"
+   ],
+   "tags": [
+    "component"
+   ]
+  },
+  "TFT_Item_NegatronCloak": {
+   "name": "Negatron Cloak",
+   "stat_effects": [
+    "MagicResist"
+   ],
+   "tags": [
+    "component"
+   ]
+  },
+  "TFT_Item_NightHarvester": {
+   "name": "Steadfast Heart",
+   "stat_effects": [
+    "Armor",
+    "BaseDurability",
+    "CritChance",
+    "EmpoweredDurability",
+    "Health",
+    "ThresholdForEmpower"
+   ],
+   "tags": []
+  },
+  "TFT_Item_PhantomDancer": {
+   "name": "TFT_item_name_PhantomDancer",
+   "stat_effects": [
+    "AS",
+    "Armor"
+   ],
+   "tags": []
+  },
+  "TFT_Item_PowerGauntlet": {
+   "name": "Striker's Flail",
+   "stat_effects": [
+    "AS",
+    "BuffDamageAmp",
+    "CritChance",
+    "Duration",
+    "Health",
+    "MaxStacks"
+   ],
+   "tags": [
+    "CritChance"
+   ]
+  },
+  "TFT_Item_Quicksilver": {
+   "name": "Quicksilver",
+   "stat_effects": [
+    "AS",
+    "CritChance",
+    "MagicResist",
+    "ProcAttackSpeed",
+    "SpellShieldDuration"
+   ],
+   "tags": [
+    "AttackSpeed"
+   ]
+  },
+  "TFT_Item_RabadonsDeathcap": {
+   "name": "Rabadon's Deathcap",
+   "stat_effects": [
+    "AP",
+    "BonusDamage"
+   ],
+   "tags": [
+    "AbilityPower"
+   ]
+  },
+  "TFT_Item_RadiantVirtue": {
+   "name": "Virtue of the Martyr",
+   "stat_effects": [
+    "HealTickRate",
+    "Health",
+    "MaxHeal",
+    "MaxHealthHeal",
+    "NumBonusHeals",
+    "PostDeathDuration",
+    "TOOLTIPEmpoweredHeal"
+   ],
+   "tags": []
+  },
+  "TFT_Item_RapidFireCannon": {
+   "name": "Red Buff",
+   "stat_effects": [
+    "AS",
+    "BonusDamage",
+    "BurnPercent",
+    "Duration",
+    "HealingReductionPct",
+    "HexRangeIncrease"
+   ],
+   "tags": [
+    "AttackSpeed"
+   ]
+  },
+  "TFT_Item_RecurveBow": {
+   "name": "Recurve Bow",
+   "stat_effects": [
+    "AS"
+   ],
+   "tags": [
+    "component"
+   ]
+  },
+  "TFT_Item_RedBuff": {
+   "name": "Sunfire Cape",
+   "stat_effects": [
+    "Armor",
+    "BonusPercentHP",
+    "BurnDuration",
+    "BurnPercent",
+    "GrievousWoundsPercent",
+    "Health",
+    "HexRange",
+    "ICD",
+    "MonsterCap"
+   ],
+   "tags": [
+    "Health"
+   ]
+  },
+  "TFT_Item_Redemption": {
+   "name": "Spirit Visage",
+   "stat_effects": [
+    "HealTickRate",
+    "Health",
+    "ManaRegen",
+    "MaxHeal",
+    "MissingHealthHeal"
+   ],
+   "tags": [
+    "Heal"
+   ]
+  },
+  "TFT_Item_RunaansHurricane": {
+   "name": "Kraken's Fury",
+   "stat_effects": [
+    "AD",
+    "ADOnAttack",
+    "AS",
+    "ASCapstone",
+    "MagicResist",
+    "MaxStacks"
+   ],
+   "tags": [
+    "AttackDamage"
+   ]
+  },
+  "TFT_Item_SentinelSwarm": {
+   "name": "Sentinel Swarm",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_SeraphsEmbrace": {
+   "name": "Blue Buff",
+   "stat_effects": [
+    "AP",
+    "Mana",
+    "ManaOnTakedown",
+    "ManaReduction",
+    "TakedownTimer"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Shroud": {
+   "name": "Shroud of Stillness",
+   "stat_effects": [
+    "BonusAllyHealth",
+    "CostIncrease",
+    "Health",
+    "ManaLockDuration"
+   ],
+   "tags": []
+  },
+  "TFT_Item_SparringGloves": {
+   "name": "Sparring Gloves",
+   "stat_effects": [
+    "CritChance"
+   ],
+   "tags": [
+    "component"
+   ]
+  },
+  "TFT_Item_Spatula": {
+   "name": "Spatula",
+   "stat_effects": [],
+   "tags": [
+    "component"
+   ]
+  },
+  "TFT_Item_SpearOfShojin": {
+   "name": "Spear of Shojin",
+   "stat_effects": [
+    "AD",
+    "AP",
+    "FlatManaRestore",
+    "ManaRegen"
+   ],
+   "tags": [
+    "Mana"
+   ]
+  },
+  "TFT_Item_SpectralGauntlet": {
+   "name": "Evenshroud",
+   "stat_effects": [
+    "ARReductionAmount",
+    "BonusResistDuration",
+    "BonusResists",
+    "Health",
+    "HexRange",
+    "MagicResist"
+   ],
+   "tags": []
+  },
+  "TFT_Item_SpellThiefsEdge": {
+   "name": "tft_item_name_SpellThiefsEdge",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_Spite": {
+   "name": "Spite",
+   "stat_effects": [
+    "ADIncrease",
+    "APIncrease",
+    "Duration",
+    "Health"
+   ],
+   "tags": []
+  },
+  "TFT_Item_StatikkShiv": {
+   "name": "Void Staff",
+   "stat_effects": [
+    "AP",
+    "AS",
+    "MRShred",
+    "MRShredDuration",
+    "ManaRegen"
+   ],
+   "tags": []
+  },
+  "TFT_Item_SteraksGage": {
+   "name": "Sterak's Gage",
+   "stat_effects": [
+    "AD",
+    "Health",
+    "HealthThreshold",
+    "PercentHealthShield",
+    "ShieldDuration"
+   ],
+   "tags": [
+    "AttackDamage"
+   ]
+  },
+  "TFT_Item_SupportKnightsVow": {
+   "name": "Knight's Vow",
+   "stat_effects": [
+    "AllyHealth",
+    "Health",
+    "HexRange",
+    "Omnivamp",
+    "Resists"
+   ],
+   "tags": []
+  },
+  "TFT_Item_SwordOfTheDivine": {
+   "name": "tft_item_name_SwordOfTheDivine2",
+   "stat_effects": [
+    "ChanceToProc"
+   ],
+   "tags": []
+  },
+  "TFT_Item_TacticiansRing": {
+   "name": "Tactician's Cape",
+   "stat_effects": [
+    "MaxArmySizeIncrease",
+    "PercentGoldChance",
+    "Timer"
+   ],
+   "tags": []
+  },
+  "TFT_Item_TacticiansScepter": {
+   "name": "Tactician's Shield",
+   "stat_effects": [
+    "MaxArmySizeIncrease",
+    "PercentGoldChance"
+   ],
+   "tags": []
+  },
+  "TFT_Item_TearOfTheGoddess": {
+   "name": "Tear of the Goddess",
+   "stat_effects": [
+    "ManaRegen"
+   ],
+   "tags": [
+    "component"
+   ]
+  },
+  "TFT_Item_ThiefsGloves": {
+   "name": "Thief's Gloves",
+   "stat_effects": [
+    "CritChance",
+    "Health"
+   ],
+   "tags": []
+  },
+  "TFT_Item_ThiefsGloves_AcademyCopy1": {
+   "name": "Thief's Gloves",
+   "stat_effects": [
+    "CritChance",
+    "Health"
+   ],
+   "tags": []
+  },
+  "TFT_Item_ThiefsGloves_AcademyCopy2": {
+   "name": "Thief's Gloves",
+   "stat_effects": [
+    "CritChance",
+    "Health"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Thornmail": {
+   "name": "game_item_displayname_3075",
+   "stat_effects": [
+    "Armor"
+   ],
+   "tags": []
+  },
+  "TFT_Item_TitanicHydra": {
+   "name": "Zz'Rot Portal",
+   "stat_effects": [
+    "AS",
+    "Health",
+    "SummonedStatReduction"
+   ],
+   "tags": []
+  },
+  "TFT_Item_TitansResolve": {
+   "name": "Titan's Resolve",
+   "stat_effects": [
+    "AS",
+    "Armor",
+    "StackCap",
+    "StackedAmp",
+    "StackingAD",
+    "StackingSP"
+   ],
+   "tags": [
+    "AttackDamage",
+    "AbilityPower"
+   ]
+  },
+  "TFT_Item_Unknown": {
+   "name": "Spatula",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_UnstableConcoction": {
+   "name": "Hand Of Justice",
+   "stat_effects": [
+    "AD_NotStatBar",
+    "AP_NotStatBar",
+    "CritChance",
+    "HealthThreshold",
+    "ManaRegen",
+    "StatOmnivamp_NotStatBar"
+   ],
+   "tags": [
+    "CritChance"
+   ]
+  },
+  "TFT_Item_UnstableTreasureChest": {
+   "name": "Unstable Treasure Chest",
+   "stat_effects": [
+    "Health",
+    "ItemsGranted"
+   ],
+   "tags": []
+  },
+  "TFT_Item_UnusableSlot": {
+   "name": "Unusable Slot",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_Vengeance": {
+   "name": "tft_item_name_SwordOfTheDivine2",
+   "stat_effects": [
+    "AS",
+    "AttackSpeedPerStack",
+    "CritChance"
+   ],
+   "tags": []
+  },
+  "TFT_Item_WarmogsArmor": {
+   "name": "Warmog's Armor",
+   "stat_effects": [
+    "BonusPercentHP",
+    "Health"
+   ],
+   "tags": [
+    "Health"
+   ]
+  },
+  "TFT_Item_YoumuusGhostblade": {
+   "name": "Youmuu's Ghostblade",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_Yuumi": {
+   "name": "TFT_item_name_Yuumi",
+   "stat_effects": [],
+   "tags": []
+  },
+  "TFT_Item_ZekesHerald": {
+   "name": "Zeke's Herald",
+   "stat_effects": [
+    "AttackSpeed",
+    "Health",
+    "HexRange"
+   ],
+   "tags": []
+  },
+  "TFT_Item_Zephyr": {
+   "name": "Zephyr",
+   "stat_effects": [
+    "AllyBonusAS",
+    "BanishDuration",
+    "Health"
+   ],
+   "tags": []
+  },
+  "TFT_Item_ZhonyasHourglass": {
+   "name": "TFT_item_name_ZhonyasHourglass",
+   "stat_effects": [
+    "AP",
+    "Armor",
+    "HealthPercent",
+    "StasisDuration"
+   ],
+   "tags": []
+  }
+ }
+}

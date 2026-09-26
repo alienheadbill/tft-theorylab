@@ -14,9 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from tftlab.cdragon import CommunityDragonClient, SetMetadata
+from tftlab.cdragon import CommunityDragonClient, SetMetadata, item_stats_snapshot
 
 ROSTER_FIXTURE = Path(__file__).parents[1] / "src" / "tftlab" / "data" / "set_roster.json"
+ITEM_STATS_FIXTURE = Path(__file__).parents[1] / "src" / "tftlab" / "data" / "item_stats.json"
 
 RUN_LIVE = os.environ.get("TFTLAB_LIVE_CDRAGON_TEST") == "1"
 
@@ -113,3 +114,123 @@ def test_live_game_art_refresh_integrity(tmp_path) -> None:
             live_hashes = {k: v["sha256"] for k, v in live[kind].items()}
             committed_hashes = {k: v["sha256"] for k, v in committed[kind].items()}
             assert live_hashes == committed_hashes, f"committed {kind} art is stale; run the Game art refresh workflow"
+
+
+def metadata_inventory(raw: dict) -> dict:
+    """What CommunityDragon exposes about champion roles and item stats for
+    the current set -- printed by the live test below so carry-eligibility
+    metadata can be checked against the real feed (field names, raw values,
+    coverage, special units). On 2026-09-26 (Set 18) every champion had a
+    `role` key but only 2 of 74 shop champions had a non-null value, so a
+    role-based carry rule could not be built on it; this test's output shows
+    when that changes."""
+    from collections import Counter
+
+    sets = raw.get("setData") or raw.get("sets") or []
+    current = max(sets, key=lambda s: int(s.get("number") or 0))
+    champions = current.get("champions", [])
+    champion_keys = Counter(k for c in champions for k in c)
+    role_like = sorted(k for k in champion_keys if "role" in k.lower() or "class" in k.lower() or "archetype" in k.lower())
+    shop = [c for c in champions if 1 <= int(c.get("cost") or 0) <= 5 and c.get("traits")]
+    items = [i for i in raw.get("items", []) if str(i.get("apiName", "")).startswith(("TFT_Item_", f"TFT{current.get('number')}_Item"))]
+    effect_keys = Counter(k for i in items for k in (i.get("effects") or {}))
+    tag_values = Counter(t for i in items for t in (i.get("tags") or []))
+    samples = [i for i in items if any(s in str(i.get("apiName")) for s in (
+        "Warmog", "Gargoyle", "DragonsClaw", "Rabadon", "InfinityEdge", "GuinsoosRageblade", "BrambleVest", "JeweledGauntlet",
+    ))] + [i for i in items if i.get("associatedTraits")][:4]
+    return {
+        "set_number": current.get("number"),
+        "champion_keys": dict(champion_keys),
+        "role_like_fields": {k: dict(Counter(str(c.get(k)) for c in champions)) for k in role_like},
+        "shop_champions": [
+            {k: c.get(k) for k in ("apiName", "name", "cost", *role_like, "traits")} for c in shop
+        ],
+        "non_shop_units": [
+            {k: c.get(k) for k in ("apiName", "name", "cost", *role_like, "traits")} for c in champions if c not in shop
+        ],
+        "shop_champions_missing_role_fields": [c.get("apiName") for c in shop if role_like and not all(c.get(k) for k in role_like)],
+        "item_keys": dict(Counter(k for i in items for k in i)),
+        "item_effect_keys": dict(effect_keys.most_common()),
+        "item_tag_values": dict(tag_values.most_common(40)),
+        "sample_items": [
+            {k: i.get(k) for k in ("apiName", "name", "composition", "effects", "tags", "associatedTraits", "incompatibleTraits", "unique")}
+            for i in samples
+        ],
+        "elise": [c for c in champions if "Elise" in str(c.get("apiName"))],
+        # Where emblems live in the bundle-wide item list (name/prefix/stats).
+        "item_prefixes": dict(Counter("_".join(str(i.get("apiName", "")).split("_")[:2]) for i in raw.get("items", [])).most_common(25)),
+        "emblems": [
+            {k: i.get(k) for k in ("apiName", "name", "composition", "effects", "tags", "associatedTraits", "isAugment")}
+            for i in raw.get("items", [])
+            if "emblem" in str(i.get("apiName", "")).lower() and str(current.get("number")) in str(i.get("apiName", ""))
+        ][:12],
+    }
+
+
+@requires_live_network
+def test_print_role_and_item_metadata_inventory(tmp_path, capsys) -> None:
+    with CommunityDragonClient(cache_dir=tmp_path) as client:
+        raw = client.fetch_raw("latest", use_cache=False)
+    inventory = metadata_inventory(raw)
+    with capsys.disabled():
+        print("\nCDRAGON METADATA INVENTORY")
+        print(json.dumps(inventory, indent=1, ensure_ascii=False, default=str))
+    assert inventory["shop_champions"]
+
+
+
+@requires_live_network
+def test_committed_item_stats_match_live_set(tmp_path) -> None:
+    """Carry eligibility reads item stats from a committed snapshot, never the
+    network. This catches the snapshot going stale; on a mismatch the message
+    contains the full live snapshot so the file can be refreshed from the log."""
+    with CommunityDragonClient(cache_dir=tmp_path) as client:
+        live = item_stats_snapshot(client.get_set_metadata("latest", use_cache=False))
+    committed = json.loads(ITEM_STATS_FIXTURE.read_text()) if ITEM_STATS_FIXTURE.exists() else {}
+    committed = {k: committed.get(k) for k in ("set_number", "items")}
+    assert committed == live, (
+        "src/tftlab/data/item_stats.json is out of date. Live snapshot:\n"
+        + "ITEM_STATS_SNAPSHOT_BEGIN\n" + json.dumps(live, ensure_ascii=False, separators=(",", ":")) + "\nITEM_STATS_SNAPSHOT_END"
+    )
+
+
+def da_namespace_inventory(raw: dict) -> dict:
+    """Every `DA_*` item in the bundle-wide items list (the namespace Set 18
+    Match-V1 boards store), with readable stats and any `TFT_Item_*` entry
+    sharing its display name."""
+    items = raw.get("items", [])
+    by_name: dict = {}
+    for i in items:
+        if str(i.get("apiName", "")).startswith("TFT_Item_"):
+            by_name.setdefault(i.get("name"), []).append(i["apiName"])
+
+    def readable(values):
+        return sorted(str(v) for v in (values or []) if not str(v).startswith("{"))
+
+    rows = []
+    for i in items:
+        api = str(i.get("apiName", ""))
+        if not api.startswith("DA_"):
+            continue
+        rows.append({
+            "apiName": api,
+            "name": i.get("name"),
+            "effects": readable((i.get("effects") or {}).keys()),
+            "tags": readable(i.get("tags")),
+            "hashed_tags": sum(1 for t in (i.get("tags") or []) if str(t).startswith("{")),
+            "composition": i.get("composition") or [],
+            "isAugment": i.get("isAugment"),
+            "tft_item_same_name": by_name.get(i.get("name"), []),
+        })
+    return {"count": len(rows), "items": rows}
+
+
+@requires_live_network
+def test_print_da_item_namespace(tmp_path, capsys) -> None:
+    with CommunityDragonClient(cache_dir=tmp_path) as client:
+        raw = client.fetch_raw("latest", use_cache=False)
+    inventory = da_namespace_inventory(raw)
+    with capsys.disabled():
+        print("\nDA ITEM NAMESPACE BEGIN")
+        print(json.dumps(inventory, ensure_ascii=False))
+        print("DA ITEM NAMESPACE END")

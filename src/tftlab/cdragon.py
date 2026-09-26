@@ -19,6 +19,11 @@ class ChampionMeta:
     #: Traits as CommunityDragon lists them (display names). Shop champions have at least
     #: one; some special units have none, others (with a cost) have traits too.
     traits: tuple[str, ...] = ()
+    #: CommunityDragon's champion `role` (e.g. "APTank", "ADTank", "APCaster")
+    #: exactly as served, or None when it is null. For Set 18 (checked
+    #: 2026-09-26) only 2 of 74 shop champions have a value, so nothing may
+    #: treat a missing role as meaning anything.
+    role: str | None = None
 
 
 @dataclass(frozen=True)
@@ -29,6 +34,15 @@ class ItemMeta:
     #: Component apiNames this item is built from (empty for components
     #: and uncraftable items).
     composition: tuple[str, ...] = ()
+    #: Named stat keys from CommunityDragon's `effects` (e.g. "AD", "AP",
+    #: "AS", "CritChance", "Health", "Armor", "MagicResist"); hashed
+    #: `{xxxxxxxx}` keys are dropped because their meaning is unknown.
+    stat_effects: tuple[str, ...] = ()
+    #: Readable `tags` (e.g. "AbilityPower", "AttackDamage", "Health");
+    #: hashed tags are dropped for the same reason.
+    tags: tuple[str, ...] = ()
+    #: Trait apiNames the item is tied to (`associatedTraits`, e.g. emblems).
+    associated_traits: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -65,6 +79,11 @@ def _icon_url(patch: str, relative_path: str | None) -> str | None:
     return f"{CDRAGON_BASE}/{patch}/game/{path}"
 
 
+def _readable(values: Any) -> tuple[str, ...]:
+    """Drop CommunityDragon's unresolved `{hash}` names, keep order."""
+    return tuple(str(v) for v in (values or []) if v and not str(v).startswith("{"))
+
+
 def _set_number_of(entry: dict[str, Any]) -> int:
     return int(entry.get("number") or 0)
 
@@ -99,6 +118,7 @@ def parse_set_metadata(
             cost=int(c.get("cost") or 0),
             icon_url=_icon_url(patch, c.get("squareIcon") or c.get("icon")),
             traits=tuple(str(t) for t in (c.get("traits") or []) if t),
+            role=str(c["role"]) if c.get("role") else None,
         )
         for c in chosen.get("champions", [])
         if c.get("apiName")
@@ -118,6 +138,9 @@ def parse_set_metadata(
             name=str(i.get("name") or i["apiName"]),
             icon_url=_icon_url(patch, i.get("icon")),
             composition=tuple(str(x) for x in (i.get("composition") or []) if x),
+            stat_effects=_readable(sorted((i.get("effects") or {}).keys())),
+            tags=_readable(i.get("tags")),
+            associated_traits=tuple(str(t) for t in (i.get("associatedTraits") or []) if t),
         )
         for i in payload.get("items", [])
         if i.get("apiName")
@@ -186,3 +209,64 @@ class CommunityDragonClient:
     ) -> SetMetadata:
         raw = self.fetch_raw(patch, use_cache=use_cache)
         return parse_set_metadata(raw, patch=patch, set_number=set_number)
+
+
+def item_stats_snapshot(meta: SetMetadata) -> dict[str, Any]:
+    """The committed-fixture shape of the current set's item stat metadata
+    (`src/tftlab/data/item_stats.json`, used offline by carry eligibility).
+
+    Keyed by the exact apiNames Match-V1 boards can store:
+
+    - the shared `TFT_Item_*` and this set's `TFT<n>_Item_*` items;
+    - this set's equipment in the `DA_*` namespace (Set 18 boards store e.g.
+      `DA_GargoyleStoneplate`): craftable `DA_*` items (those with a
+      composition), `DA_Component_*` components, `DA_<n>_Emblem*` emblems and
+      `DA_Item_*`. The rest of `DA_*` -- augments and augment-like entries,
+      some with stats such as `Health` -- is deliberately left out.
+
+    `DA_*` entries carry little readable metadata of their own (no named
+    `effects` at all; only some readable tags), so each also gets the
+    readable stats of its `TFT_Item_*` counterpart **only when that alias is
+    unambiguous**: same exact display name, component names not
+    contradicting, and every remaining candidate sharing one identical stat
+    signature (e.g. a Corrupted copy with the same stats). The display name,
+    not the id, is the bridge -- `DA_RedBuff` ("Red Buff") is
+    `TFT_Item_RapidFireCannon`, while `TFT_Item_RedBuff` is "Sunfire Cape".
+    Otherwise the item keeps only its own metadata (often none: unknown)."""
+    n = meta.set_number
+    tft = {i: m for i, m in meta.items.items() if i.startswith(("TFT_Item_", f"TFT{n}_Item_"))}
+    by_name: dict[str, list[str]] = {}
+    for item_id, item in tft.items():
+        by_name.setdefault(item.name, []).append(item_id)
+
+    def component_names(item: ItemMeta) -> list[str]:
+        return sorted((meta.items[c].name if c in meta.items else c).casefold() for c in item.composition)
+
+    def da_relevant(item_id: str, item: ItemMeta) -> bool:
+        if not item_id.startswith("DA_"):
+            return False
+        return bool(item.composition) or item_id.startswith(("DA_Component_", f"DA_{n}_Emblem", "DA_Item_"))
+
+    items: dict[str, dict[str, Any]] = {
+        item_id: {"name": item.name, "stat_effects": list(item.stat_effects), "tags": list(item.tags)}
+        for item_id, item in tft.items()
+    }
+    for item_id, item in meta.items.items():
+        if not da_relevant(item_id, item):
+            continue
+        candidates = [
+            c for c in by_name.get(item.name, [])
+            if not (item.composition and tft[c].composition and component_names(tft[c]) != component_names(item))
+        ]
+        signatures = {(tft[c].stat_effects, tft[c].tags) for c in candidates}
+        alias = sorted(candidates) if len(signatures) == 1 else []
+        effects, tags = (next(iter(signatures)) if alias else ((), ()))
+        items[item_id] = {
+            "name": item.name,
+            "stat_effects": sorted(set(item.stat_effects) | set(effects)),
+            "tags": sorted(set(item.tags) | set(tags)),
+            "own_stat_effects": list(item.stat_effects),
+            "own_tags": list(item.tags),
+            "alias_of": alias,
+        }
+    return {"set_number": n, "items": dict(sorted(items.items()))}

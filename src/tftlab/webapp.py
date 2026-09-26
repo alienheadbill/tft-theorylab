@@ -21,6 +21,7 @@ from .analytics import (
     item_package_stats,
     trait_breakpoint_associations,
 )
+from .carry import carry_commitment_sql
 from .demo import generate_demo_matches
 from .experiments import ExperimentNotFound, get_experiment, list_experiments, seed_demo_experiments
 from .game_art import enrich_candidate, experiment_art, field_note_art
@@ -146,13 +147,14 @@ def carry_partners(db: Database, character_id: str, balance_window: str) -> list
     combinations -- a naive join here would otherwise double- (or more-)
     count a game for every extra instance on either side.
     """
+    eligible_sql, eligible_params = carry_commitment_sql("c")
     return db.query_all(
-        """
+        f"""
         WITH carry_games AS (
             SELECT DISTINCT c.match_id, c.participant_index
             FROM units c
             JOIN matches m ON m.match_id = c.match_id
-            WHERE c.character_id = ? AND c.completed_item_count >= 2 AND m.balance_window = ?
+            WHERE c.character_id = ? AND {eligible_sql} AND m.balance_window = ?
         ),
         partner_games AS (
             SELECT DISTINCT cg.match_id, cg.participant_index, f.character_id, f.unit_name, f.cost
@@ -171,7 +173,7 @@ def carry_partners(db: Database, character_id: str, balance_window: str) -> list
         ORDER BY top4 DESC, together DESC
         LIMIT 8
         """,
-        (character_id, balance_window, character_id),
+        (character_id, *eligible_params, balance_window, character_id),
     )
 
 
@@ -180,6 +182,7 @@ def carry_item_sets(db: Database, character_id: str, balance_window: str) -> lis
     in the same game; `ranked`/`rn = 1` picks exactly one canonical instance
     per game (`CANONICAL_UNIT_TIEBREAK_SQL`) so that game contributes one
     item-set observation, not one per instance."""
+    eligible_sql, eligible_params = carry_commitment_sql("u")
     return db.query_all(
         f"""
         WITH ranked AS (
@@ -194,7 +197,7 @@ def carry_item_sets(db: Database, character_id: str, balance_window: str) -> lis
               ON p.match_id = u.match_id AND p.participant_index = u.participant_index
             JOIN matches m
               ON m.match_id = u.match_id
-            WHERE u.character_id = ? AND u.completed_item_count >= 2
+            WHERE u.character_id = ? AND {eligible_sql}
               AND m.balance_window = ?
         )
         SELECT items_json, COUNT(*) AS games,
@@ -206,7 +209,7 @@ def carry_item_sets(db: Database, character_id: str, balance_window: str) -> lis
         ORDER BY games DESC, top4 DESC
         LIMIT 5
         """,
-        (character_id, balance_window),
+        (character_id, *eligible_params, balance_window),
     )
 
 

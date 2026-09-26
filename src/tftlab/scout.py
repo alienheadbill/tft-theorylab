@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from .carry import carry_commitment_sql
 from .analytics import carry_commitment_games_with_partners, default_balance_window, discovery_candidate_for
 from .experiments import Experiment, add_field_note, list_field_notes
 from .roster import Roster, id_key, load_roster, name_key
@@ -230,15 +231,16 @@ def _trait_target_counts(
     means six Ravager units on the board, not trait tier 6)."""
     if not targets:
         return []
+    eligible_sql, eligible_params = carry_commitment_sql("c", _COMMITMENT_ITEMS)
     rows = db.query_all(
-        """SELECT c.match_id, c.participant_index, p.placement, t.trait_name, t.num_units
+        f"""SELECT c.match_id, c.participant_index, p.placement, t.trait_name, t.num_units
            FROM units c
            JOIN participants p ON p.match_id = c.match_id AND p.participant_index = c.participant_index
            JOIN matches m ON m.match_id = c.match_id
            LEFT JOIN traits t
              ON t.match_id = c.match_id AND t.participant_index = c.participant_index AND t.tier_current >= 1
-           WHERE c.character_id = ? AND c.completed_item_count >= ? AND m.balance_window = ?""",
-        (character_id, _COMMITMENT_ITEMS, window),
+           WHERE c.character_id = ? AND {eligible_sql} AND m.balance_window = ?""",
+        (character_id, *eligible_params, window),
     )
     placements: dict[tuple[str, int], int] = {}
     active: dict[tuple[str, int], dict[str, int]] = {}
