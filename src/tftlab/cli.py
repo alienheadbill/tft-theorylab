@@ -306,6 +306,7 @@ def ingest_riot(
             raise
         windows = available_balance_windows(db)
         total_participants = db.query_one("SELECT COUNT(*) FROM participants")[0]
+        component_backfill = db.completed_item_count_backfill
 
     def _rate(value: float | None) -> str:
         return "n/a" if value is None else f"{value:.1%}"
@@ -390,6 +391,10 @@ def ingest_riot(
     console.print(
         f"  Provenance rows finalized: {result.discovery_rows} "
         f"(for {result.matches_with_provenance} stored matches, each stored once)"
+    )
+    console.print(
+        "  Stored completed-item counts corrected on connect (component recognition): "
+        + ("already up to date" if component_backfill is None else f"{component_backfill} unit rows")
     )
     console.print(f"  Balance windows found: {', '.join(w for w, _, _ in windows) or 'none'}")
     console.print(f"  Total participants now stored: {total_participants}")

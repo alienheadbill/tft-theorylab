@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import time
 import sqlite3
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from .balance_window import resolve_balance_window
 from .experiments import EXPERIMENT_INDEXES_SQL, EXPERIMENT_TABLES_SQL, FIELD_NOTE_COLUMN_MIGRATIONS
+from .items import completed_item_count, component_ids_version
 from .normalize import CostLookup, normalize_match
 from .patch import patch_from_game_version
 from .unreal_patch import UNRESOLVED_UNREAL_PATCH, is_masked_unreal_version
@@ -135,6 +137,16 @@ CREATE TABLE IF NOT EXISTS ingest_runs (
 );
 """
 
+# One row per applied data migration that must run exactly once per database
+# (keyed by what it depends on). Only initializing connections read/write it.
+SCHEMA_MIGRATIONS_SQL = """
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    migration_key TEXT PRIMARY KEY,
+    applied_at BIGINT NOT NULL,
+    rows_changed INTEGER NOT NULL
+);
+"""
+
 #: `ingest_runs.status` values. Only COMPLETED counts for rotation.
 RUN_STARTED = "started"
 RUN_COMPLETED = "completed"
@@ -230,6 +242,10 @@ class Database:
         """
         target_str = str(target)
         self.read_only = not initialize_schema
+        #: Unit rows whose stored completed_item_count this connection
+        #: corrected (see `_backfill_completed_item_counts`); None when the
+        #: backfill did not run on this connection.
+        self.completed_item_count_backfill: int | None = None
         if _is_postgres_url(target_str):
             self.dialect = "postgres"
             self.path: Path | None = None
@@ -298,6 +314,7 @@ class Database:
         self._execute_script(EXPERIMENT_TABLES_SQL)
         self._execute_script(SAMPLING_TABLES_SQL)
         self._execute_script(INGEST_RUNS_SQL)
+        self._execute_script(SCHEMA_MIGRATIONS_SQL)
         self._run_migrations()
         self._execute_script(INDEXES_SQL)
         self._execute_script(EXPERIMENT_INDEXES_SQL)
@@ -332,6 +349,55 @@ class Database:
         self._backfill_unreal_patches()
         self._backfill_balance_window()
         self._migrate_units_unit_index()
+        self._backfill_completed_item_counts()
+
+    def _backfill_completed_item_counts(self) -> None:
+        """Recompute every stored `units.completed_item_count` from its
+        `items_json` with the current component recognition
+        (`tftlab.items.component_ids`) and update only rows that differ.
+
+        Needed because rows ingested before a set's own component ids were
+        recognized (Set 18's `DA_Component_*`) counted those components as
+        completed items. Runs once per database per component set: the key
+        includes `component_ids_version()`, so it is skipped on later
+        connects and re-runs automatically if the recognized set changes.
+        One transaction (updates + marker); `items_json` and every other
+        column are untouched. Only initializing connections get here --
+        `Database.open_existing` (the read-only web path) never does.
+        """
+        key = f"completed_item_count:{component_ids_version()}"
+        if self.query_one("SELECT 1 FROM schema_migrations WHERE migration_key = ?", (key,)) is not None:
+            return
+        updates: list[tuple[int, str, int, int]] = []
+        try:
+            rows = self.query_all(
+                "SELECT match_id, participant_index, unit_index, items_json, completed_item_count FROM units"
+            )
+            for match_id, participant_index, unit_index, items_json, stored in rows:
+                try:
+                    items = json.loads(items_json)
+                except (TypeError, ValueError):
+                    continue  # never guess: leave an unreadable row as stored
+                if not isinstance(items, list):
+                    continue
+                corrected = completed_item_count([str(i) for i in items if i])
+                if corrected != stored:
+                    updates.append((corrected, match_id, participant_index, unit_index))
+            self.executemany(
+                "UPDATE units SET completed_item_count = ? "
+                "WHERE match_id = ? AND participant_index = ? AND unit_index = ?",
+                updates,
+            )
+            self.execute(
+                "INSERT INTO schema_migrations (migration_key, applied_at, rows_changed) VALUES (?, ?, ?) "
+                "ON CONFLICT DO NOTHING",
+                (key, int(time.time() * 1000), len(updates)),
+            )
+        except Exception:
+            self.conn.rollback()
+            raise
+        self.conn.commit()
+        self.completed_item_count_backfill = len(updates)
 
     def _add_column_if_missing(self, table: str, column: str, column_type: str) -> None:
         if self.dialect == "sqlite":

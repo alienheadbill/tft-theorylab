@@ -45,9 +45,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from .items import is_component
-
-ITEM_STATS_PATH = Path(__file__).parent / "data" / "item_stats.json"
+from .items import ITEM_STATS_PATH, is_component
 
 #: Readable CommunityDragon stat names, normalized explicitly (never from
 #: an item's English display name).

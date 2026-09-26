@@ -230,7 +230,7 @@ def _sql_matches_python(db: Database) -> None:
     assert eligible == expected
     assert expected == {
         "TFT99_P0", "TFT99_P4", "TFT99_P5", "TFT99_P7", "TFT99_P8",
-        "TFT99_P12", "TFT99_P13", "TFT99_P14", "TFT99_P15",
+        "TFT99_P12", "TFT99_P13", "TFT99_P15",  # P14: Warmog's + two DA components = 1 completed item
     }
 
 
@@ -290,7 +290,7 @@ def _elise_db_pg() -> Database:
         ([D_WARMOG, "DA_BlueBuff"], True),  # ambiguous alias => unknown => include
         ([RAVAGER_EMBLEM, D_WARMOG], True),  # emblem unknown => include
         ([RAVAGER_EMBLEM, D_GARGOYLE, D_CLAW], True),
-        ([D_WARMOG, "DA_Component_ChainVest"], True),  # a component never counts as defensive evidence
+        ([D_WARMOG, "DA_Component_ChainVest"], False),  # 1 completed item: a component is not an item slot filled
     ],
 )
 def test_real_match_v1_da_namespace(items, expected) -> None:
