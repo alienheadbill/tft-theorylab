@@ -14,9 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from tftlab.cdragon import CommunityDragonClient, SetMetadata
+from tftlab.cdragon import CommunityDragonClient, SetMetadata, item_stats_snapshot
 
 ROSTER_FIXTURE = Path(__file__).parents[1] / "src" / "tftlab" / "data" / "set_roster.json"
+ITEM_STATS_FIXTURE = Path(__file__).parents[1] / "src" / "tftlab" / "data" / "item_stats.json"
 
 RUN_LIVE = os.environ.get("TFTLAB_LIVE_CDRAGON_TEST") == "1"
 
@@ -169,3 +170,18 @@ def test_print_role_and_item_metadata_inventory(tmp_path, capsys) -> None:
         print(json.dumps(inventory, indent=1, ensure_ascii=False, default=str))
     assert inventory["shop_champions"]
 
+
+
+@requires_live_network
+def test_committed_item_stats_match_live_set(tmp_path) -> None:
+    """Carry eligibility reads item stats from a committed snapshot, never the
+    network. This catches the snapshot going stale; on a mismatch the message
+    contains the full live snapshot so the file can be refreshed from the log."""
+    with CommunityDragonClient(cache_dir=tmp_path) as client:
+        live = item_stats_snapshot(client.get_set_metadata("latest", use_cache=False))
+    committed = json.loads(ITEM_STATS_FIXTURE.read_text()) if ITEM_STATS_FIXTURE.exists() else {}
+    committed = {k: committed.get(k) for k in ("set_number", "items")}
+    assert committed == live, (
+        "src/tftlab/data/item_stats.json is out of date. Live snapshot:\n"
+        + "ITEM_STATS_SNAPSHOT_BEGIN\n" + json.dumps(live, indent=1, ensure_ascii=False) + "\nITEM_STATS_SNAPSHOT_END"
+    )

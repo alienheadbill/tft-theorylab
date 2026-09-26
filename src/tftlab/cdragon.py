@@ -209,3 +209,20 @@ class CommunityDragonClient:
     ) -> SetMetadata:
         raw = self.fetch_raw(patch, use_cache=use_cache)
         return parse_set_metadata(raw, patch=patch, set_number=set_number)
+
+
+def item_stats_snapshot(meta: SetMetadata) -> dict[str, Any]:
+    """The committed-fixture shape of the current set's item stat metadata
+    (`src/tftlab/data/item_stats.json`, used offline by carry eligibility).
+
+    Keeps the shared `TFT_Item_*` items and this set's `TFT<n>_Item_*` items
+    (emblems included), with their readable stat effects and tags only."""
+    prefixes = ("TFT_Item_", f"TFT{meta.set_number}_Item_")
+    return {
+        "set_number": meta.set_number,
+        "items": {
+            item_id: {"name": item.name, "stat_effects": list(item.stat_effects), "tags": list(item.tags)}
+            for item_id, item in sorted(meta.items.items())
+            if item_id.startswith(prefixes)
+        },
+    }
