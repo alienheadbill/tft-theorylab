@@ -215,14 +215,58 @@ def item_stats_snapshot(meta: SetMetadata) -> dict[str, Any]:
     """The committed-fixture shape of the current set's item stat metadata
     (`src/tftlab/data/item_stats.json`, used offline by carry eligibility).
 
-    Keeps the shared `TFT_Item_*` items and this set's `TFT<n>_Item_*` items
-    (emblems included), with their readable stat effects and tags only."""
-    prefixes = ("TFT_Item_", f"TFT{meta.set_number}_Item_")
-    return {
-        "set_number": meta.set_number,
-        "items": {
-            item_id: {"name": item.name, "stat_effects": list(item.stat_effects), "tags": list(item.tags)}
-            for item_id, item in sorted(meta.items.items())
-            if item_id.startswith(prefixes)
-        },
+    Keyed by the exact apiNames Match-V1 boards can store:
+
+    - the shared `TFT_Item_*` and this set's `TFT<n>_Item_*` items;
+    - this set's equipment in the `DA_*` namespace (Set 18 boards store e.g.
+      `DA_GargoyleStoneplate`): craftable `DA_*` items (those with a
+      composition), `DA_Component_*` components, `DA_<n>_Emblem*` emblems and
+      `DA_Item_*`. The rest of `DA_*` -- augments and augment-like entries,
+      some with stats such as `Health` -- is deliberately left out.
+
+    `DA_*` entries carry little readable metadata of their own (no named
+    `effects` at all; only some readable tags), so each also gets the
+    readable stats of its `TFT_Item_*` counterpart **only when that alias is
+    unambiguous**: same exact display name, component names not
+    contradicting, and every remaining candidate sharing one identical stat
+    signature (e.g. a Corrupted copy with the same stats). The display name,
+    not the id, is the bridge -- `DA_RedBuff` ("Red Buff") is
+    `TFT_Item_RapidFireCannon`, while `TFT_Item_RedBuff` is "Sunfire Cape".
+    Otherwise the item keeps only its own metadata (often none: unknown)."""
+    n = meta.set_number
+    tft = {i: m for i, m in meta.items.items() if i.startswith(("TFT_Item_", f"TFT{n}_Item_"))}
+    by_name: dict[str, list[str]] = {}
+    for item_id, item in tft.items():
+        by_name.setdefault(item.name, []).append(item_id)
+
+    def component_names(item: ItemMeta) -> list[str]:
+        return sorted((meta.items[c].name if c in meta.items else c).casefold() for c in item.composition)
+
+    def da_relevant(item_id: str, item: ItemMeta) -> bool:
+        if not item_id.startswith("DA_"):
+            return False
+        return bool(item.composition) or item_id.startswith(("DA_Component_", f"DA_{n}_Emblem", "DA_Item_"))
+
+    items: dict[str, dict[str, Any]] = {
+        item_id: {"name": item.name, "stat_effects": list(item.stat_effects), "tags": list(item.tags)}
+        for item_id, item in tft.items()
     }
+    for item_id, item in meta.items.items():
+        if not da_relevant(item_id, item):
+            continue
+        candidates = [
+            c for c in by_name.get(item.name, [])
+            if not (item.composition and tft[c].composition and component_names(tft[c]) != component_names(item))
+        ]
+        signatures = {(tft[c].stat_effects, tft[c].tags) for c in candidates}
+        alias = sorted(candidates) if len(signatures) == 1 else []
+        effects, tags = (next(iter(signatures)) if alias else ((), ()))
+        items[item_id] = {
+            "name": item.name,
+            "stat_effects": sorted(set(item.stat_effects) | set(effects)),
+            "tags": sorted(set(item.tags) | set(tags)),
+            "own_stat_effects": list(item.stat_effects),
+            "own_tags": list(item.tags),
+            "alias_of": alias,
+        }
+    return {"set_number": n, "items": dict(sorted(items.items()))}
