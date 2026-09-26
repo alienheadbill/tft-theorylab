@@ -27,9 +27,11 @@ from typing import Any, Iterator, Mapping
 from . import carry
 from .analytics import carry_commitment_stats, discover_candidates
 from .analytics.commitment import default_balance_window
+from .analytics.item_packages import _completed_items
 from .items import ITEM_INTENT_PATH, ITEM_STATS_PATH, is_component
 from .scout import LOW_SAMPLE_COMMITMENT_GAMES
 from .storage import Database
+from .validate import classify_participants_without_units, validate_live_data
 
 # ---------------------------------------------------------------- evidence bands
 
@@ -128,21 +130,27 @@ def assert_read_only(db: Database) -> str:
 
 
 def dataset_summary(db: Database, balance_window: str) -> dict[str, Any]:
-    """Counts and integrity checks, store-wide and for `balance_window`."""
+    """Counts and integrity checks, for `balance_window` and store-wide.
+
+    The integrity definitions are `tftlab.validate`'s own (one source of
+    truth): `validate_live_data` for the store-wide checks, and
+    `classify_participants_without_units` -- scoped to the window here --
+    to split participants without stored units into source-empty (Riot's
+    own payload entry has no units) and unexpected (the payload lists units,
+    or the raw/stored mapping can't be trusted). Having no stored unit row
+    alone never counts as source-empty."""
+    integrity = validate_live_data(db, balance_window=balance_window, metadata=None)
+    source_empty, unexpected = classify_participants_without_units(db, balance_window=balance_window)
     q1 = lambda sql, params=(): db.query_one(sql, params)  # noqa: E731
-    window_matches, earliest, latest = q1(
-        "SELECT COUNT(*), MIN(game_datetime), MAX(game_datetime) FROM matches WHERE balance_window = ?", (balance_window,)
+    earliest, latest = q1(
+        "SELECT MIN(game_datetime), MAX(game_datetime) FROM matches WHERE balance_window = ?", (balance_window,)
     )
-    participants, unit_observable = q1(
-        """SELECT COUNT(*),
-                  SUM(CASE WHEN EXISTS (SELECT 1 FROM units u WHERE u.match_id = p.match_id
-                                        AND u.participant_index = p.participant_index) THEN 1 ELSE 0 END)
-           FROM participants p JOIN matches m ON m.match_id = p.match_id WHERE m.balance_window = ?""",
+    without_units = q1(
+        """SELECT COUNT(*) FROM participants p JOIN matches m ON m.match_id = p.match_id
+           WHERE m.balance_window = ? AND NOT EXISTS (SELECT 1 FROM units u WHERE u.match_id = p.match_id
+                                                      AND u.participant_index = p.participant_index)""",
         (balance_window,),
-    )
-    rows = db.query_all("SELECT patch, COUNT(*) FROM matches GROUP BY patch ORDER BY patch")
-    windows = db.query_all("SELECT balance_window, COUNT(*) FROM matches GROUP BY balance_window ORDER BY balance_window")
-    total, distinct = q1("SELECT COUNT(*), COUNT(DISTINCT match_id) FROM matches")
+    )[0]
     bad_placements = q1(
         """SELECT COUNT(*) FROM participants p JOIN matches m ON m.match_id = p.match_id
            WHERE m.balance_window = ? AND (p.placement IS NULL OR p.placement < 1 OR p.placement > 8)""",
@@ -157,21 +165,43 @@ def dataset_summary(db: Database, balance_window: str) -> dict[str, Any]:
            ) t""",
         (balance_window,),
     )[0]
+    store_participants = q1("SELECT COUNT(*) FROM participants")[0]
+    missing_window = integrity.matches_missing_balance_window
     return {
         "balance_window": balance_window,
-        "window_matches": int(window_matches or 0),
-        "window_participants": int(participants or 0),
-        "window_unit_observable_participants": int(unit_observable or 0),
-        "window_source_empty_participants": int((participants or 0) - (unit_observable or 0)),
+        "window_matches": int(integrity.total_matches),
+        "window_participants": int(integrity.total_participants),
+        "window_unit_observable_participants": int(integrity.total_participants - without_units),
+        "window_participants_without_units": int(without_units),
+        "window_source_empty_participants": int(source_empty),
+        "window_unexpected_participants_without_units": int(unexpected),
         "window_earliest_game_datetime_ms": earliest,
         "window_latest_game_datetime_ms": latest,
-        "store_matches": int(total or 0),
-        "store_duplicate_match_ids": int((total or 0) - (distinct or 0)),
-        "store_patch_distribution": {str(p): int(n) for p, n in rows},
-        "store_balance_window_distribution": {str(w): int(n) for w, n in windows},
-        "store_matches_without_balance_window": int(sum(n for w, n in windows if w is None)),
         "window_malformed_placements": int(bad_placements or 0),
         "window_matches_not_8_distinct_placements": int(irregular or 0),
+        "store_matches": int(sum(integrity.balance_window_distribution.values())),
+        "store_participants": int(store_participants or 0),
+        "store_duplicate_match_ids": int(integrity.duplicate_match_ids),
+        "store_matches_without_balance_window": int(missing_window),
+        # NULL window by design: masked-Unreal matches outside any usable registry window.
+        "store_expected_unresolved_unreal_matches": int(missing_window - integrity.unexpected_missing_balance_window),
+        "store_unexpected_missing_balance_window": int(integrity.unexpected_missing_balance_window),
+        "store_malformed_placements": int(integrity.malformed_placements),
+        "store_participants_without_units": int(integrity.participants_without_units),
+        "store_source_empty_participants": int(integrity.source_empty_participants),
+        "store_unexpected_participants_without_units": int(integrity.unexpected_participants_without_units),
+        "store_earliest_game_datetime_ms": integrity.earliest_game_datetime,
+        "store_latest_game_datetime_ms": integrity.latest_game_datetime,
+        "store_patch_distribution": {str(k): int(v) for k, v in sorted(integrity.client_patch_distribution.items(), key=lambda kv: str(kv[0]))},
+        "store_balance_window_distribution": {str(k): int(v) for k, v in sorted(integrity.balance_window_distribution.items(), key=lambda kv: str(kv[0]))},
+        "checkpoint": {
+            "unexpected_missing_balance_windows": int(integrity.unexpected_missing_balance_window),
+            "malformed_placements": int(integrity.malformed_placements),
+            "duplicate_match_ids": int(integrity.duplicate_match_ids),
+            "source_empty_participants_in_window": int(source_empty),
+            "unexpected_participants_without_units_in_window": int(unexpected),
+            "unexpected_participants_without_units_store_wide": int(integrity.unexpected_participants_without_units),
+        },
     }
 
 
@@ -225,40 +255,56 @@ def _candidates(db: Database, window: str, top_n: int) -> dict[str, dict[str, An
 # ---------------------------------------------------------------- baseline comparison
 
 
-def _packages(items_json: str) -> tuple[str, ...]:
-    return tuple(sorted(i for i in json.loads(items_json or "[]") if i and not is_component(i)))
+def canonical_unit_key(completed_item_count: int, tier: int, unit_index: int) -> tuple[int, int, int]:
+    """Python sort key for `CANONICAL_UNIT_TIEBREAK_SQL` ("completed_item_count
+    DESC, tier DESC, unit_index ASC"): the copy that represents a board."""
+    return (-int(completed_item_count or 0), -int(tier or 0), int(unit_index))
 
 
 def _package_changes(db: Database, window: str, baseline: Mapping[str, Mapping[str, Any]], top: int) -> dict[str, Any]:
-    """Per champion, the unit-instance item packages that qualify under only
-    one rule, most common first, with each item's current Riot intent and
-    PR #21 stat class -- the exact reason a commitment moved."""
+    """Per champion, the champion boards whose commitment differs between
+    the two rules, attributed to one item package each.
+
+    Same granularity as `carry_commitment_stats`: one observation per
+    (match_id, participant_index, character_id). A board commits under a
+    rule when ANY copy of the champion qualifies; it is lost when it
+    commits under PR #21 and not now, gained the other way round. A board
+    where one copy stops qualifying but another still does is unchanged
+    and never reported. The attributed package is that of the canonical
+    copy (`canonical_unit_key`) among those qualifying under the rule that
+    still counted it -- PR #21 for a lost board, the current rule for a
+    gained one -- shown with each item's current Riot intent and PR #21
+    class."""
     current = carry.load_item_intent()
+    boards: dict[tuple[str, int, str], list[tuple[tuple[int, int, int], str]]] = defaultdict(list)
+    for match_id, participant_index, character_id, unit_index, tier, completed, items_json in db.query_all(
+        """SELECT u.match_id, u.participant_index, u.character_id, u.unit_index, u.tier, u.completed_item_count, u.items_json
+           FROM units u JOIN matches m ON m.match_id = u.match_id WHERE m.balance_window = ?""",
+        (window,),
+    ):
+        boards[(match_id, int(participant_index), character_id)].append(
+            (canonical_unit_key(completed, tier, unit_index), items_json or "[]")
+        )
     lost: dict[str, Counter] = defaultdict(Counter)
     gained: dict[str, Counter] = defaultdict(Counter)
-    rows = db.query_all(
-        "SELECT u.character_id, u.items_json FROM units u JOIN matches m ON m.match_id = u.match_id WHERE m.balance_window = ?",
-        (window,),
-    )
-    for character_id, items_json in rows:
-        items = json.loads(items_json or "[]")
-        old = carry.is_carry_observation(items, item_intents=baseline)
-        new = carry.is_carry_observation(items, item_intents=current)
+    for (_, _, character_id), copies in boards.items():
+        old = [c for c in copies if carry.is_carry_observation(json.loads(c[1]), item_intents=baseline)]
+        new = [c for c in copies if carry.is_carry_observation(json.loads(c[1]), item_intents=current)]
         if old and not new:
-            lost[character_id][_packages(items_json)] += 1
+            lost[character_id][_completed_items(min(old)[1])] += 1
         elif new and not old:
-            gained[character_id][_packages(items_json)] += 1
+            gained[character_id][_completed_items(min(new)[1])] += 1
 
     def describe(counter: Counter) -> list[dict[str, Any]]:
         return [
-            {"items": list(package), "unit_instances": n,
+            {"items": list(package), "boards": n,
              "current_intents": {i: carry.item_intent(i, current) for i in package},
              "pr21_defensive": {i: i in baseline for i in package}}
             for package, n in counter.most_common(top)
         ]
 
     champions = sorted(set(lost) | set(gained))
-    return {c: {"lost_unit_instances": sum(lost[c].values()), "gained_unit_instances": sum(gained[c].values()),
+    return {c: {"lost_commitment_boards": sum(lost[c].values()), "gained_commitment_boards": sum(gained[c].values()),
                 "top_lost_packages": describe(lost[c]), "top_gained_packages": describe(gained[c])} for c in champions}
 
 

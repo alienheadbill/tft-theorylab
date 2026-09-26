@@ -81,9 +81,9 @@ def test_report_is_read_only_and_explains_the_semantic_change(store: Path) -> No
     assert (totals["total_commitment_games_pr21"], totals["total_commitment_games_pr22"], totals["absolute_change"]) == (23, 11, -12)
 
     change = report["pr21_package_changes"]["TFT99_Leona"]
-    assert change["lost_unit_instances"] == 12 and change["gained_unit_instances"] == 0
+    assert change["lost_commitment_boards"] == 12 and change["gained_commitment_boards"] == 0
     package = change["top_lost_packages"][0]
-    assert package["items"] == [VISAGE, STEADFAST] and package["unit_instances"] == 12  # sorted ids
+    assert package["items"] == [VISAGE, STEADFAST] and package["boards"] == 12  # sorted ids
     assert package["current_intents"] == {STEADFAST: "known_unlisted", VISAGE: "tank"}
     assert package["pr21_defensive"] == {STEADFAST: False, VISAGE: True}  # PR #21 read Steadfast as offensive
 
@@ -92,11 +92,81 @@ def test_dataset_summary_counts_and_integrity(store: Path) -> None:
     with Database.open_existing(store) as db:
         d = build_report(db, baseline=False)["dataset"]
     assert (d["window_matches"], d["window_participants"]) == (29, 29)
-    assert (d["window_unit_observable_participants"], d["window_source_empty_participants"]) == (28, 1)
-    assert d["store_duplicate_match_ids"] == 0 and d["window_malformed_placements"] == 0
-    assert d["store_matches_without_balance_window"] == 0
+    assert (d["window_unit_observable_participants"], d["window_participants_without_units"]) == (28, 1)
+    assert (d["window_source_empty_participants"], d["window_unexpected_participants_without_units"]) == (1, 0)
+    assert d["store_duplicate_match_ids"] == 0 and d["window_malformed_placements"] == d["store_malformed_placements"] == 0
+    assert d["store_matches_without_balance_window"] == d["store_unexpected_missing_balance_window"] == 0
     assert d["window_matches_not_8_distinct_placements"] == 29  # single-participant fixtures: flagged, as intended
     assert sum(d["store_balance_window_distribution"].values()) == d["store_matches"] == 29
+    assert d["checkpoint"] == {
+        "unexpected_missing_balance_windows": 0, "malformed_placements": 0, "duplicate_match_ids": 0,
+        "source_empty_participants_in_window": 1, "unexpected_participants_without_units_in_window": 0,
+        "unexpected_participants_without_units_store_wide": 0,
+    }
+
+
+OTHER_VERSION = "Version 14.5.570.1111 (Sep 01 2024/13:00:00) [PUBLIC] <Releases/14.5>"
+
+
+def test_source_empty_vs_unexpected_uses_the_raw_payload_and_the_window(tmp_path: Path) -> None:
+    """No stored units alone is not source-empty: Riot's own payload entry
+    decides. Counts are scoped to the reported window; store-wide ones are
+    reported separately."""
+    path = tmp_path / "integrity.sqlite3"
+    with Database(path) as db:
+        db.ingest_match(_board("OK", "TFT99_Elise", [RAVAGER, GUINSOO], 2))
+        db.ingest_match(make_match("SRC_EMPTY", placement=8, units=[]))  # Riot sent units=[] -> source-empty
+        db.ingest_match(_board("LOST", "TFT99_Elise", [GUINSOO, TITAN], 3))  # Riot sent units ...
+        db.ingest_match(make_match("OLDLOST", placement=4, game_version=OTHER_VERSION,
+                                   units=[make_unit("TFT99_Elise", rarity=0, items=[GUINSOO])]))
+        for match_id in ("LOST", "OLDLOST"):  # ... but storage has none -> unexpected
+            db.execute("DELETE FROM units WHERE match_id = ?", (match_id,))
+        db.commit()
+    with Database.open_existing(path) as db:
+        window = db.query_one("SELECT balance_window FROM matches WHERE match_id = 'OK'")[0]
+        d = build_report(db, balance_window=window, baseline=False)["dataset"]
+    assert (d["window_matches"], d["window_participants"], d["window_participants_without_units"]) == (3, 3, 2)
+    assert (d["window_source_empty_participants"], d["window_unexpected_participants_without_units"]) == (1, 1)
+    assert d["window_unit_observable_participants"] == 1
+    # The other window's lost participant counts store-wide only.
+    assert (d["store_participants_without_units"], d["store_source_empty_participants"],
+            d["store_unexpected_participants_without_units"]) == (3, 1, 2)
+    assert d["checkpoint"]["unexpected_participants_without_units_in_window"] == 1
+    assert d["checkpoint"]["unexpected_participants_without_units_store_wide"] == 2
+
+
+def test_classifier_scope_is_optional_and_store_wide_by_default(tmp_path: Path) -> None:
+    from tftlab.validate import classify_participants_without_units
+
+    path = tmp_path / "scope.sqlite3"
+    with Database(path) as db:
+        db.ingest_match(make_match("E1", placement=8, units=[]))
+        db.ingest_match(make_match("E2", placement=8, units=[], game_version=OTHER_VERSION))
+        db.commit()
+        w1 = db.query_one("SELECT balance_window FROM matches WHERE match_id = 'E1'")[0]
+        assert classify_participants_without_units(db) == (2, 0)
+        assert classify_participants_without_units(db, balance_window=w1) == (1, 0)
+        assert classify_participants_without_units(db, balance_window="no such window") == (0, 0)
+
+
+def test_null_balance_window_expected_unreal_gap_vs_unexpected(tmp_path: Path) -> None:
+    from tftlab.unreal_patch import UNRESOLVED_UNREAL_PATCH
+
+    path = tmp_path / "windows.sqlite3"
+    with Database(path) as db:
+        db.ingest_match(_board("OK", "TFT99_Elise", [RAVAGER, GUINSOO], 2))
+        db.ingest_match(_board("UNREAL", "TFT99_Elise", [RAVAGER, GUINSOO], 2))
+        db.ingest_match(_board("BROKEN", "TFT99_Elise", [RAVAGER, GUINSOO], 2))
+        db.execute("UPDATE matches SET balance_window = NULL, patch = ? WHERE match_id = 'UNREAL'", (UNRESOLVED_UNREAL_PATCH,))
+        db.execute("UPDATE matches SET balance_window = NULL WHERE match_id = 'BROKEN'")  # patch kept: genuinely broken
+        db.commit()
+    with Database.open_existing(path) as db:
+        d = build_report(db, baseline=False)["dataset"]
+    assert d["store_matches_without_balance_window"] == 2
+    assert d["store_expected_unresolved_unreal_matches"] == 1  # the intentional rollout gap
+    assert d["store_unexpected_missing_balance_window"] == 1  # the broken one
+    assert d["checkpoint"]["unexpected_missing_balance_windows"] == 1
+    assert d["window_matches"] == 1
 
 
 def test_refuses_a_writable_connection(store: Path) -> None:
@@ -145,6 +215,52 @@ def test_cli_never_creates_a_missing_database(tmp_path: Path) -> None:
     missing = tmp_path / "nope.sqlite3"
     result = CliRunner().invoke(app, ["discovery-report", "--db", str(missing), "--out-dir", str(tmp_path / "o")])
     assert result.exit_code != 0 and not missing.exists()
+
+
+def _two_copies(match_id: str, first: list[str], second: list[str]) -> dict:
+    return make_match(match_id, placement=3, units=[
+        make_unit("TFT99_Dup", rarity=0, tier=2, items=first), make_unit("TFT99_Dup", rarity=0, tier=2, items=second),
+    ])
+
+
+def test_duplicate_copy_still_qualifying_means_no_lost_commitment(tmp_path: Path) -> None:
+    """Copy A qualifies only under PR #21, copy B under both: the board
+    commits under both rules, so nothing is lost or attributed."""
+    path = tmp_path / "dup_keep.sqlite3"
+    with Database(path) as db:
+        db.ingest_match(_two_copies("D1", [VISAGE, STEADFAST], [RAVAGER, GUINSOO]))
+    with Database.open_existing(path) as db:
+        report = build_report(db)
+    row = next(r for r in report["pr21_comparison"]["champions"] if r["character_id"] == "TFT99_Dup")
+    assert (row["appearances"], row["commitment_games_pr21"], row["commitment_games_pr22"], row["commitment_change"]) == (1, 1, 1, 0)
+    assert "TFT99_Dup" not in report["pr21_package_changes"]
+
+
+def test_duplicate_copies_all_losing_eligibility_is_one_lost_board_with_the_canonical_package(tmp_path: Path) -> None:
+    """Every PR #21-eligible copy fails the current rule: one lost board,
+    attributed to the canonical copy (most completed items, then tier, then
+    lowest unit_index)."""
+    path = tmp_path / "dup_lost.sqlite3"
+    three = [STEADFAST, "DA_Crownguard", VISAGE]
+    with Database(path) as db:
+        db.ingest_match(_two_copies("D2", [VISAGE, STEADFAST], three))
+    with Database.open_existing(path) as db:
+        report = build_report(db)
+    row = next(r for r in report["pr21_comparison"]["champions"] if r["character_id"] == "TFT99_Dup")
+    assert (row["commitment_games_pr21"], row["commitment_games_pr22"], row["commitment_change"]) == (1, 0, -1)
+    change = report["pr21_package_changes"]["TFT99_Dup"]
+    assert (change["lost_commitment_boards"], change["gained_commitment_boards"]) == (1, 0)
+    assert len(change["top_lost_packages"]) == 1
+    assert change["top_lost_packages"][0]["items"] == sorted(three) and change["top_lost_packages"][0]["boards"] == 1
+
+
+def test_canonical_unit_key_matches_the_sql_tiebreak() -> None:
+    from tftlab.analytics import CANONICAL_UNIT_TIEBREAK_SQL
+    from tftlab.research_report import canonical_unit_key
+
+    assert CANONICAL_UNIT_TIEBREAK_SQL == "completed_item_count DESC, tier DESC, unit_index ASC"
+    copies = {"a": (2, 3, 0), "b": (3, 1, 1), "c": (3, 2, 2), "d": (3, 2, 1)}
+    assert min(copies, key=lambda k: canonical_unit_key(*copies[k])) == "d"
 
 
 POSTGRES_TEST_URL = os.environ.get("TFTLAB_TEST_DATABASE_URL")
