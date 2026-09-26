@@ -10,7 +10,13 @@ from .riot_limits import DEFAULT_SAFETY_UTILIZATION, RateLimiter, RateWindow, Ri
 
 
 class RiotApiError(RuntimeError):
-    pass
+    """A Riot request that failed after the client's own bounded retries.
+    `status` is the HTTP status when Riot answered (None for network
+    errors and exhausted rate-limit retries)."""
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 #: Riot's `queue_id` for standard Ranked Teamfight Tactics, per Riot's public
@@ -104,6 +110,34 @@ class RiotBudgetExhausted(RuntimeError):
     new work instead of counting it as one failed request."""
 
 
+#: Client-error statuses that are NOT fatal to a collection run: 404 means
+#: one resource does not exist (a match ID or PUUID Riot no longer serves),
+#: 429 is rate limiting (the scope stays paused, so the next request waits).
+#: Every other 4xx -- 400, 401, 403, ... -- says the credential or the
+#: request construction itself is wrong, so it would fail the same way for
+#: every remaining seed or match.
+NONFATAL_CLIENT_STATUSES = frozenset({404, 429})
+
+
+def riot_error_status(exc: BaseException) -> int | None:
+    """HTTP status of a RiotApiError: its `status`, else parsed from the
+    standard "Riot API returned <status> for ..." message."""
+    status = getattr(exc, "status", None)
+    if status is None:
+        match = _STATUS_RE.search(str(exc))
+        status = int(match.group(1)) if match else None
+    return status
+
+
+def is_fatal_riot_error(exc: BaseException) -> bool:
+    """True when continuing a long collection after `exc` would only repeat
+    a request that cannot succeed: any 4xx except 404 and 429 (so 400, 401
+    and 403 are fatal). Network errors, exhausted 429/5xx retries and 404
+    are not: they are isolated or transient and can be counted and skipped."""
+    status = riot_error_status(exc)
+    return status is not None and 400 <= status < 500 and status not in NONFATAL_CLIENT_STATUSES
+
+
 class RiotClient:
     """TFT API client that paces itself to Riot's advertised rate limits.
 
@@ -119,8 +153,12 @@ class RiotClient:
     and is retried a bounded number of times.
 
     `max_requests` / `deadline` (a `clock()` value) are hard operator
-    budgets: a request that would exceed one raises RiotBudgetExhausted
-    instead of being sent (or waiting past the deadline). The API key is
+    budgets, checked immediately before every HTTP attempt -- first
+    attempts and 429/5xx/network retries alike: a request that would
+    exceed one raises RiotBudgetExhausted instead of being sent, and no
+    pacing or backoff sleep starts if it would reach the deadline. The
+    deadline is exclusive: at `clock() >= deadline` the budget is spent,
+    so a request strictly before it may go out, one at it may not. The API key is
     only ever sent as a header; it never appears in errors or telemetry.
     """
 
@@ -181,8 +219,16 @@ class RiotClient:
     def _redact(self, text: str) -> str:
         return text.replace(self.api_key, "[redacted]") if self.api_key else text
 
-    def _error(self, message: str) -> RiotApiError:
-        return RiotApiError(self._redact(message))
+    def _error(self, message: str, status: int | None = None) -> RiotApiError:
+        return RiotApiError(self._redact(message), status=status)
+
+    def _check_budgets(self, method: str, now: float) -> None:
+        """The authoritative budget check, run right before a request is
+        allowed to leave the process (and before any wait for one)."""
+        if self.max_requests is not None and self.telemetry.requests >= self.max_requests:
+            raise RiotBudgetExhausted(f"request budget reached ({self.max_requests} Riot requests)")
+        if self.deadline is not None and now >= self.deadline:
+            raise RiotBudgetExhausted(f"wall-clock budget reached before a {method} request")
 
     def _wait_for_capacity(self, host: str, method: str, service: str) -> None:
         """Sleep until every scope of this request has room. Each sleep
@@ -193,7 +239,7 @@ class RiotClient:
             wait, reason = self.limiter.wait_time(host, method, service, now)
             if wait <= 1e-9:
                 return
-            if self.deadline is not None and now + wait > self.deadline:
+            if self.deadline is not None and now + wait >= self.deadline:
                 raise RiotBudgetExhausted(
                     f"wall-clock budget reached: the next {method} request would have to wait {wait:.1f}s"
                 )
@@ -204,7 +250,7 @@ class RiotClient:
                 self.telemetry.pacing_sleep_s += wait
 
     def _backoff(self, seconds: float) -> None:
-        if self.deadline is not None and self._clock() + seconds > self.deadline:
+        if self.deadline is not None and self._clock() + seconds >= self.deadline:
             raise RiotBudgetExhausted("wall-clock budget reached during retry backoff")
         self._sleep(seconds)
         self.telemetry.backoff_sleep_s += seconds
@@ -215,11 +261,11 @@ class RiotClient:
         telemetry = self.telemetry
         rate_limited = 0
         transient = 0
-        while True:
-            if self.max_requests is not None and telemetry.requests >= self.max_requests:
-                raise RiotBudgetExhausted(f"request budget reached ({self.max_requests} Riot requests)")
+        while True:  # every iteration is one HTTP attempt: the first, or a retry
+            self._check_budgets(method, self._clock())
             self._wait_for_capacity(host, method, service)
             now = self._clock()
+            self._check_budgets(method, now)  # nothing is sent past a budget
             if telemetry.started_monotonic is None:
                 telemetry.started_monotonic = now
             self.limiter.record(host, method, service, now)
@@ -276,7 +322,7 @@ class RiotClient:
                 continue
             request = getattr(response, "request", None)
             shown = request.url if request is not None else url
-            raise self._error(f"Riot API returned {status} for {shown}: {response.text[:300]}")
+            raise self._error(f"Riot API returned {status} for {shown}: {response.text[:300]}", status)
 
     def challenger(self) -> dict[str, Any]:
         return self._get(

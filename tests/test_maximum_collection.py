@@ -609,3 +609,190 @@ def test_cli_bounded_mode_is_unchanged_and_writes_telemetry(monkeypatch, tmp_pat
     assert "Ingest report" in result.output
     assert [c[3] for c in client.of("history")] == [3, 3]  # count = matches per player, one page each
     assert json.loads(out.read_text())["collection"]["matches_inserted"] == 1
+
+
+# ---------------------------------------------------------------- fatal vs nonfatal Riot errors
+
+
+class ErrorStub(MaxStub):
+    """MaxStub whose history/match requests can answer with an HTTP error
+    status, raised exactly as RiotClient raises it."""
+
+    def __init__(self, *, history_errors=None, match_errors=None, **kwargs):
+        super().__init__(**kwargs)
+        self.history_errors = history_errors or {}
+        self.match_errors = match_errors or {}
+
+    def match_ids(self, puuid, **kwargs):
+        if puuid in self.history_errors:
+            self.calls.append(("history", puuid, kwargs.get("start", 0), 20, None, None))
+            status = self.history_errors[puuid]
+            raise RiotApiError(f"Riot API returned {status} for fake/{puuid}/ids: denied", status=status)
+        return super().match_ids(puuid, **kwargs)
+
+    def match(self, match_id):
+        if match_id in self.match_errors:
+            self.calls.append(("match", match_id))
+            status = self.match_errors[match_id]
+            raise RiotApiError(f"Riot API returned {status} for fake/{match_id}: denied", status=status)
+        return super().match(match_id)
+
+
+def _state(db: Database) -> dict:
+    return {
+        "runs": db.query_all("SELECT run_id, status FROM ingest_runs ORDER BY run_id"),
+        "ledger": sorted(db.seed_last_sampled()),
+        "matches": sorted(m for (m,) in db.query_all("SELECT match_id FROM matches")),
+        "provenance": sorted(db.query_all("SELECT match_id, run_id, puuid FROM match_discoveries")),
+    }
+
+
+@pytest.mark.parametrize("status", [401, 403, 400])
+def test_fatal_history_error_aborts_the_run(tmp_path: Path, status: int) -> None:
+    # One wave of three seeds, queue order c0, c2, c1 (spread order); c2's history is refused.
+    client = ErrorStub(apex={"challenger": _apex("c", 3)}, histories={"c0": ["A"], "c1": ["B"]},
+                       matches={"A": _m("A"), "B": _m("B")}, history_errors={"c2": status})
+    with Database(tmp_path / "db.sqlite3") as db:
+        with pytest.raises(RiotApiError) as exc_info:
+            _collect(client, db, wave_size=3)
+        state = _state(db)
+    assert exc_info.value.status == status
+    assert [c[1] for c in client.of("history")] == ["c0", "c2"]  # c1 never requested
+    assert client.of("match") == []  # nothing fetched after the failure
+    assert state == {"runs": [("max-w001", "failed")], "ledger": [], "matches": [], "provenance": []}
+
+
+@pytest.mark.parametrize("status", [401, 403, 400])
+def test_fatal_match_error_aborts_the_run_and_the_match_is_not_handled(tmp_path: Path, status: int) -> None:
+    client = ErrorStub(apex={"challenger": _apex("c", 2)}, histories={"c0": ["A", "B", "C"], "c1": ["D"]},
+                       matches={m: _m(m) for m in "ACD"}, match_errors={"B": status})
+    with Database(tmp_path / "db.sqlite3") as db:
+        with pytest.raises(RiotApiError):
+            _collect(client, db, wave_size=2)
+        state = _state(db)
+    assert [c[1] for c in client.of("match")] == ["A", "B"]  # C and D never requested
+    # A was stored before the failure and stays stored; the wave (and so
+    # any ledger/provenance for c0, whose B was never handled) is failed.
+    assert state == {"runs": [("max-w001", "failed")], "ledger": [], "matches": ["A"], "provenance": []}
+
+
+def test_fatal_error_detail_propagates_as_the_result_is_not_returned(tmp_path: Path) -> None:
+    """The fatal failure's handled/unhandled accounting: B is not handled."""
+    client = ErrorStub(apex={"challenger": _apex("c", 1)}, histories={"c0": ["A", "B"]},
+                       matches={"A": _m("A")}, match_errors={"B": 401})
+    handled_after = {}
+    import tftlab.collection as collection
+
+    original = collection._collect_waves
+
+    def spy(*args, **kwargs):
+        try:
+            return original(*args, **kwargs)
+        finally:
+            handled_after.update(handled=set(kwargs["handled"]), unretrieved=set(kwargs["unretrieved"]))
+
+    with Database(tmp_path / "db.sqlite3") as db, pytest.MonkeyPatch.context() as mp:
+        mp.setattr(collection, "_collect_waves", spy)
+        with pytest.raises(RiotApiError):
+            _collect(client, db)
+    assert handled_after == {"handled": {"A"}, "unretrieved": set()}
+
+
+def test_earlier_waves_survive_a_later_fatal_auth_failure(tmp_path: Path) -> None:
+    # wave 1 = c0, wave 2 = c2 (key expires here), wave 3 = c1 (never reached)
+    client = ErrorStub(apex={"challenger": _apex("c", 3)}, histories={"c0": ["A"], "c1": ["B"], "c2": ["C"]},
+                       matches={m: _m(m) for m in "ABC"}, match_errors={"C": 401})
+    with Database(tmp_path / "db.sqlite3") as db:
+        with pytest.raises(RiotApiError):
+            _collect(client, db, wave_size=1)
+        state = _state(db)
+    assert state == {
+        "runs": [("max-w001", "completed"), ("max-w002", "failed")],
+        "ledger": ["c0"],
+        "matches": ["A"],
+        "provenance": [("A", "max-w001", "c0")],
+    }
+    assert [c[1] for c in client.of("history")] == ["c0", "c2"]  # wave 3 never started
+    assert [c[1] for c in client.of("match")] == ["A", "C"]
+
+
+def test_fatal_error_through_the_real_client_aborts(tmp_path: Path) -> None:
+    """End to end: RiotClient's own 401 (not retried) stops the collector."""
+    clock = FakeClock()
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        requests.append(path)
+        headers = {"X-App-Rate-Limit": "100:1", "X-Method-Rate-Limit": "100:1"}
+        if path.endswith("/challenger"):
+            body = {"entries": _apex("c", 3)}
+        elif "/league/v1/" in path:
+            body = [] if "/entries/" in path else {"entries": []}
+        elif path.endswith("/ids"):
+            return httpx.Response(401, headers=headers, content=b'{"status": {"message": "Unauthorized"}}')
+        else:
+            raise AssertionError("no match request expected")
+        return httpx.Response(200, headers=headers, content=json.dumps(body).encode())
+
+    with Database(tmp_path / "db.sqlite3") as db, RiotClient(
+        "fake-key", clock=clock, sleep=clock.sleep, transport=httpx.MockTransport(handler)
+    ) as client:
+        with pytest.raises(RiotApiError) as exc_info:
+            _collect(client, db, clock=clock)
+        state = _state(db)
+    assert exc_info.value.status == 401
+    assert sum(1 for p in requests if p.endswith("/ids")) == 1  # one attempt, then stop
+    assert state["runs"] == [("max-w001", "failed")] and state["ledger"] == []
+
+
+def test_isolated_404_match_is_skipped_and_handled(tmp_path: Path) -> None:
+    client = ErrorStub(apex={"challenger": _apex("c", 2)}, histories={"c0": ["GONE", "A"], "c1": ["B"]},
+                       matches={m: _m(m) for m in "AB"}, match_errors={"GONE": 404})
+    with Database(tmp_path / "db.sqlite3") as db:
+        result = _collect(client, db)
+        state = _state(db)
+    assert result.stop_reason == STOP_COMPLETE
+    assert result.failed_match_fetches == 1 and result.matches_not_found == 1
+    assert state["ledger"] == ["c0", "c1"]  # nothing left to retrieve for GONE
+    assert state["matches"] == ["A", "B"] and state["runs"] == [("max-w001", "completed")]
+
+
+def test_isolated_404_history_is_skipped(tmp_path: Path) -> None:
+    client = ErrorStub(apex={"challenger": _apex("c", 2)}, histories={"c1": ["B"]}, matches={"B": _m("B")},
+                       history_errors={"c0": 404})
+    with Database(tmp_path / "db.sqlite3") as db:
+        result = _collect(client, db)
+        state = _state(db)
+    assert result.stop_reason == STOP_COMPLETE and result.seeds_failed == 1
+    assert state["ledger"] == ["c1"] and state["matches"] == ["B"]
+
+
+def test_transient_match_failure_is_counted_not_handled_and_not_retried(tmp_path: Path) -> None:
+    """A 5xx after the client's retries: the run goes on, but the match was
+    never retrieved, so no seed that surfaced it is ledgered."""
+    client = ErrorStub(apex={"challenger": _apex("c", 3)},
+                       histories={"c0": ["FLAKY", "A"], "c1": ["FLAKY"], "c2": ["C"]},
+                       matches={m: _m(m) for m in "AC"}, match_errors={"FLAKY": 503})
+    with Database(tmp_path / "db.sqlite3") as db:
+        result = _collect(client, db, wave_size=1)
+        state = _state(db)
+    assert result.stop_reason == STOP_COMPLETE
+    assert [c[1] for c in client.of("match")].count("FLAKY") == 1  # not retried for c1
+    assert result.failed_match_fetches == 1 and result.matches_not_found == 0
+    assert result.unhandled_match_ids == 1
+    assert state["ledger"] == ["c2"]  # c0 and c1 wait for a later run
+    assert state["matches"] == ["A", "C"]
+    assert [s for _, s in state["runs"]] == ["completed"] * 3
+
+
+def test_cli_maximum_run_fails_visibly_on_an_expired_key(monkeypatch, tmp_path) -> None:
+    client = ErrorStub(apex={"challenger": _apex("c", 2)}, histories={"c1": ["B"]}, matches={"B": _m("B")},
+                       history_errors={"c0": 401})
+    out = tmp_path / "telemetry.json"
+    result, _ = _cli(monkeypatch, tmp_path, [*MAX_ARGS, "--telemetry-out", str(out)], client=client)
+    assert result.exit_code != 0
+    assert isinstance(result.exception, RiotApiError)
+    assert cli.EXPIRED_KEY_MESSAGE in result.output.replace("\n", "")
+    assert "remains incomplete" in result.output
+    assert json.loads(out.read_text())["outcome"] == "failed (RiotApiError)"

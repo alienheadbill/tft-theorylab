@@ -529,3 +529,114 @@ def test_limiter_rejects_invalid_utilization() -> None:
     for bad in (0, -0.1, 1.5):
         with pytest.raises(ValueError):
             RateLimiter(utilization=bad)
+
+
+# ---------------------------------------------------------------- hard wall-clock deadline
+#
+# The deadline is exclusive: at clock() >= deadline no HTTP attempt leaves
+# the client -- first attempts and 429 / 5xx / network retries alike.
+
+OK_HEADERS = {"X-App-Rate-Limit": "100:10", "X-Method-Rate-Limit": "100:10"}
+
+
+def test_no_request_once_the_deadline_is_reached() -> None:
+    clock = FakeClock()
+    riot = FakeRiot(clock, lambda r: (200, OK_HEADERS, []))
+    with _client(clock, riot, deadline=clock()) as client:  # exactly at the deadline
+        with pytest.raises(RiotBudgetExhausted):
+            client.match("M")
+    assert riot.calls == [] and client.telemetry.requests == 0
+
+
+def test_no_request_after_a_response_that_ran_past_the_deadline() -> None:
+    clock = FakeClock()
+
+    def slow(request):
+        clock.now += 30  # the response itself took the rest of the budget
+        return 200, OK_HEADERS, []
+
+    riot = FakeRiot(clock, slow)
+    with _client(clock, riot, deadline=clock() + 30) as client:
+        client.match("M")  # capacity is free, so no pacing wait would catch this
+        with pytest.raises(RiotBudgetExhausted, match="before a tft-match-v1.getMatch request"):
+            client.match("M")
+    assert len(riot.calls) == 1 and client.telemetry.requests == 1
+
+
+def test_5xx_cannot_retry_after_the_deadline() -> None:
+    clock = FakeClock()
+
+    def failing(request):
+        clock.now += 10
+        return 503, OK_HEADERS, {}
+
+    riot = FakeRiot(clock, failing)
+    with _client(clock, riot, deadline=clock() + 10.5) as client:
+        with pytest.raises(RiotBudgetExhausted):
+            client.match("M")  # the 1 s backoff would end past the deadline
+    assert len(riot.calls) == 1 and client.telemetry.requests == 1
+    assert clock() == 1010.0  # the backoff sleep never started
+
+
+def test_network_failure_cannot_retry_after_the_deadline() -> None:
+    clock = FakeClock()
+    attempts = []
+
+    def handler(request):
+        attempts.append(clock())
+        clock.now += 20  # a timeout that used up the budget
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    with RiotClient(KEY, clock=clock, sleep=clock.sleep, transport=httpx.MockTransport(handler),
+                    deadline=clock() + 20) as client:
+        with pytest.raises(RiotBudgetExhausted):
+            client.match("M")
+    assert attempts == [1000.0] and client.telemetry.requests == 1
+
+
+def test_429_cannot_retry_after_the_deadline() -> None:
+    """Retry-After: 0 means no pause and free capacity -- only the hard
+    pre-send check can stop this retry."""
+    clock = FakeClock()
+
+    def limited(request):
+        clock.now += 5
+        return 429, {**OK_HEADERS, "Retry-After": "0", "X-Rate-Limit-Type": "method"}, {}
+
+    riot = FakeRiot(clock, limited)
+    with _client(clock, riot, deadline=clock() + 5) as client:
+        with pytest.raises(RiotBudgetExhausted, match="before a"):
+            client.match("M")
+    assert len(riot.calls) == 1 and client.telemetry.requests == 1
+
+
+def test_requests_just_before_the_deadline_are_still_sent() -> None:
+    clock = FakeClock()
+    responses = [(429, {**OK_HEADERS, "Retry-After": "0", "X-Rate-Limit-Type": "method"}, {}),
+                 (200, OK_HEADERS, ["ok"])]
+
+    def respond(request):
+        clock.now += 4.99  # leaves 0.01 s before the deadline
+        return responses.pop(0)
+
+    riot = FakeRiot(clock, respond)
+    with _client(clock, riot, deadline=clock() + 5) as client:
+        assert client.match("M") == ["ok"]  # the retry leaves at deadline - 0.01
+    assert [t for t, _ in riot.calls] == [1000.0, 1004.99]
+    assert client.telemetry.requests == 2
+
+
+def test_a_pacing_sleep_that_overshoots_cannot_send_past_the_deadline() -> None:
+    """The last check runs after any wait, with the send time itself."""
+    clock = FakeClock()
+    riot = FakeRiot(clock, lambda r: (200, {"X-App-Rate-Limit": "1:10", "X-Method-Rate-Limit": "100:10"}, []))
+
+    def oversleep(seconds):
+        clock.sleep(seconds + 1.0)  # the OS woke us late
+
+    with RiotClient(KEY, clock=clock, sleep=oversleep, transport=httpx.MockTransport(riot.handler),
+                    safety_utilization=1.0, deadline=clock() + 10.5) as client:
+        client.match("M")
+        with pytest.raises(RiotBudgetExhausted, match="before a"):
+            client.match("M")  # 10 s wait fits (ends 1010 < 1010.5) but wakes at 1011
+    assert len(riot.calls) == 1 and client.telemetry.requests == 1

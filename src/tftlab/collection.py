@@ -38,8 +38,21 @@ cohort x M recent matches each), maximum mode:
 Ledger truthfulness (extends PR #20): a seed gets a `seed_samples` row only
 when its history reading reached a terminal point (exhausted, a guard, or
 the per-seed page cap -- reported separately) *and* every new match ID it
-surfaced was handled (stored, already stored, non-ranked, or a counted
-failed fetch). A seed interrupted by a budget, or whose history request
+surfaced was handled: stored, already stored, non-ranked, or answered 404
+(Riot no longer serves it). A match whose fetch failed transiently
+(network error or 5xx / 429 after the client's bounded retries) is *not*
+handled: it is counted, not retried again this run, and the seeds that
+surfaced it stay unledgered so a later run reads them again.
+
+Riot errors at this boundary (`tftlab.riot.is_fatal_riot_error`): 401,
+403, 400 and every other 4xx except 404/429 are FATAL -- the credential or
+the request construction is wrong, so every remaining seed or match would
+fail the same way. The collection stops at once: nothing further is
+requested, the current wave is marked failed (no ledger or provenance rows
+for it, the affected seed is not ledgered), and the exception propagates
+so the CLI and workflow fail visibly. Earlier finalized waves and every
+stored match stay as they are. Network errors, exhausted 429/5xx retries
+and 404 are isolated or transient: counted, skipped, run continues. A seed interrupted by a budget, or whose history request
 failed, is not ledgered and stays at the front of the rotation.
 Provenance (`match_discoveries`) is written for every stored match a seed
 surfaced, including matches another seed surfaced first. A cohort is
@@ -55,7 +68,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .ingest import DEADLOCK_RETRY_DELAYS, _DeadlockStats, _ingest_with_deadlock_retry, default_run_id
 from .normalize import CostLookup
-from .riot import RANKED_TFT_QUEUE_ID, RiotApiError, RiotBudgetExhausted
+from .riot import RANKED_TFT_QUEUE_ID, RiotApiError, RiotBudgetExhausted, is_fatal_riot_error, riot_error_status
 from .sampling import COHORTS, DIVISION_TIERS, DIVISIONS, LADDER_TIERS, rank_entries
 from .storage import Database
 
@@ -280,6 +293,9 @@ class MaximumCollectionResult:
     matches_inserted: int = 0
     non_target_matches_skipped: int = 0
     failed_match_fetches: int = 0
+    #: Of those, 404s (handled: nothing to retrieve); the rest were
+    #: transient and leave their seeds unledgered.
+    matches_not_found: int = 0
     unhandled_match_ids: int = 0
     seed_ledger_rows: int = 0
     discovery_rows: int = 0
@@ -391,13 +407,14 @@ def _budget_reason(exc: RiotBudgetExhausted) -> str:
 def _collect(client, db, result: MaximumCollectionResult, **kwargs) -> None:
     seen: set[str] = set()  # every match ID seen this run
     handled: set[str] = set()  # of those, the ones fully dealt with
+    unretrieved: set[str] = set()  # transient fetch failures: not handled, not retried this run
     try:
-        _collect_waves(client, db, result, seen=seen, handled=handled, **kwargs)
+        _collect_waves(client, db, result, seen=seen, handled=handled, unretrieved=unretrieved, **kwargs)
     finally:
         result.unhandled_match_ids = len(seen - handled)
 
 
-def _collect_waves(client, db, result: MaximumCollectionResult, *, seen, handled, budgets, bounds, cost_lookup,
+def _collect_waves(client, db, result: MaximumCollectionResult, *, seen, handled, unretrieved, budgets, bounds, cost_lookup,
                    wave_size, max_history_pages, max_division_pages, now_ms, check_time, retry_delays) -> None:
     # 1. Ladders: every cohort, highest first; cross-cohort dedupe.
     ranked: dict[str, list[str]] = {}
@@ -448,7 +465,7 @@ def _collect_waves(client, db, result: MaximumCollectionResult, *, seen, handled
         try:
             try:
                 _read_histories(client, wave, result, bounds, max_history_pages, seen, check_time)
-                _fetch_matches(client, db, wave, result, budgets, seen, stored, handled, cost_lookup,
+                _fetch_matches(client, db, wave, result, budgets, seen, stored, handled, unretrieved, cost_lookup,
                                retry_delays, deadlocks, inserted_times, check_time)
             except _Stop as exc:
                 stop = exc
@@ -484,11 +501,13 @@ def _read_histories(client, wave: list[_Seed], result, bounds, max_history_pages
                 check_time()
                 try:
                     page = client.match_ids(seed.puuid, count=HISTORY_PAGE_SIZE, start=seed.next_start, **bounds)
-                except RiotApiError:
-                    seed.outcome = FAILED
-                    result.seeds_failed += 1
+                except RiotApiError as exc:
                     result.history_requests += 1
                     result.cohorts[seed.cohort].history_requests += 1
+                    if is_fatal_riot_error(exc):
+                        raise  # the seed stays INTERRUPTED; the wave is marked failed
+                    seed.outcome = FAILED
+                    result.seeds_failed += 1
                     continue
                 seed.pages += 1
                 result.history_requests += 1
@@ -526,11 +545,11 @@ def _read_histories(client, wave: list[_Seed], result, bounds, max_history_pages
                 result.seeds_interrupted += 1
 
 
-def _fetch_matches(client, db, wave, result, budgets, seen, stored, handled, cost_lookup, retry_delays, deadlocks,
-                   inserted_times, check_time) -> None:
+def _fetch_matches(client, db, wave, result, budgets, seen, stored, handled, unretrieved, cost_lookup, retry_delays,
+                   deadlocks, inserted_times, check_time) -> None:
     for seed in wave:
         for match_id in seed.ids:
-            if match_id in handled:
+            if match_id in handled or match_id in unretrieved:
                 continue
             check_time()
             if db.has_match(match_id):
@@ -542,10 +561,16 @@ def _fetch_matches(client, db, wave, result, budgets, seen, stored, handled, cos
                 raise _Stop(STOP_MATCH_FETCHES)
             try:
                 payload = client.match(match_id)
-            except RiotApiError:
+            except RiotApiError as exc:
                 result.match_fetches += 1
                 result.failed_match_fetches += 1
-                handled.add(match_id)
+                if is_fatal_riot_error(exc):
+                    raise  # not handled: the seeds that surfaced it are never ledgered
+                if riot_error_status(exc) == 404:
+                    result.matches_not_found += 1
+                    handled.add(match_id)
+                else:
+                    unretrieved.add(match_id)
                 continue
             result.match_fetches += 1
             result.matches_fetched += 1

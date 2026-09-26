@@ -645,8 +645,9 @@ def _print_maximum_report(result: MaximumCollectionResult, riot: dict, window_la
     console.print(f"  Match-ID references {result.match_id_references}, unique match IDs {result.unique_match_ids}, "
                   f"already stored (not fetched) {result.already_stored_skipped}")
     console.print(f"  Matches fetched {result.matches_fetched}, inserted {result.matches_inserted}, non-ranked skipped "
-                  f"{result.non_target_matches_skipped}, failed fetches {result.failed_match_fetches}, "
-                  f"left unfetched at stop {result.unhandled_match_ids}")
+                  f"{result.non_target_matches_skipped}, failed fetches {result.failed_match_fetches} "
+                  f"(404 not found: {result.matches_not_found}), not retrieved (budget stop or transient "
+                  f"failure) {result.unhandled_match_ids}")
     console.print(f"  Earliest inserted match: {_format_epoch_ms(result.earliest_inserted_game_datetime)}")
     console.print(f"  Latest inserted match: {_format_epoch_ms(result.latest_inserted_game_datetime)}")
     console.print(f"  Seed ledger rows {result.seed_ledger_rows}, provenance rows {result.discovery_rows}")
