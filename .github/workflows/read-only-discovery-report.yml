@@ -1,0 +1,75 @@
+name: Read-only discovery report
+
+# Manually-triggered, read-only Discovery research report against the
+# production database (DATABASE_URL lives only in this repository's Actions
+# secrets). It runs exactly one command, `tftlab discovery-report`, which
+# opens the database with Database.open_existing only: the session is
+# started with default_transaction_read_only=on, the report refuses to run
+# unless the server reports transaction_read_only = on, and no schema
+# creation, migration, backfill, ingest, Riot or CommunityDragon call
+# happens. The JSON/CSV output (aggregates and item/champion/trait ids only)
+# is uploaded as a workflow artifact, never committed.
+on:
+  workflow_dispatch:
+    inputs:
+      balance_window:
+        description: "Balance window to report (empty = the latest one in the store)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: read-only-discovery-report
+  cancel-in-progress: false
+
+jobs:
+  discovery-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Before checkout and before any database access. Static messages
+      # only -- never echoes DATABASE_URL. No Riot key: it never talks to Riot.
+      - name: Validate production configuration
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This workflow must be run with 'main' explicitly selected as the branch (got ${GITHUB_REF})." >&2
+            exit 1
+          fi
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "::error::DATABASE_URL repository secret is not set. Refusing to proceed: the CLI's local-SQLite fallback must never be used against production." >&2
+            exit 1
+          fi
+          case "${DATABASE_URL}" in
+            postgres://*|postgresql://*) ;;
+            *)
+              echo "::error::DATABASE_URL must start with postgres:// or postgresql://." >&2
+              exit 1
+              ;;
+          esac
+          echo "Production configuration looks valid."
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Run discovery report (read-only)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BALANCE_WINDOW: ${{ github.event.inputs.balance_window }}
+        run: tftlab discovery-report --out-dir discovery-report ${BALANCE_WINDOW:+--balance-window "$BALANCE_WINDOW"}
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: discovery-report
+          path: discovery-report/
+          retention-days: 30
