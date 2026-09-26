@@ -83,6 +83,8 @@ def test_inputs_reach_shell_only_through_env_vars() -> None:
     only as `NAME: ${{ inputs.x }}` environment entries."""
     for line in _text().splitlines():
         if "${{ inputs." in line:
+            if line.strip().startswith("timeout-minutes:"):  # job setting, never a shell
+                continue
             assert re.match(r"^\s+[A-Z_]+: \$\{\{ inputs\.[a-z_]+ \}\}$", line), line
 
 
@@ -104,6 +106,10 @@ def _run_preflight(**env: str) -> subprocess.CompletedProcess:
         "DIAMOND_SEEDS": "0",
         "PLATINUM_SEEDS": "0",
         "MATCHES_PER_PLAYER": "5",
+        "COLLECTION_MODE": "bounded",
+        "MAX_DURATION_MINUTES": "60",
+        "MAX_REQUESTS": "3000",
+        "MAX_MATCH_FETCHES": "2000",
     }
     return subprocess.run(
         ["bash", "-e", "-c", _preflight_script()], env={**base, **env}, capture_output=True, text=True
@@ -131,6 +137,7 @@ def test_preflight_accepts_in_bounds_inputs(env: dict) -> None:
 
 def test_preflight_prints_every_cohort_and_the_total() -> None:
     result = _run_preflight(**_TWENTY_EACH)
+    assert "Collection mode: bounded." in result.stdout
     assert (
         "Planned seed cohorts: challenger=20 grandmaster=20 master=20 diamond=20 platinum=20 (total 100)"
         in result.stdout
@@ -247,7 +254,96 @@ def test_permissions_are_read_only() -> None:
 
 def test_job_has_a_bounded_timeout() -> None:
     """A hung network call or exhausted rate-limit retry loop must not be
-    able to leave this production workflow running indefinitely."""
+    able to leave this production workflow running indefinitely: 60
+    minutes for bounded runs, 240 for maximum runs (whose ingest stops
+    itself at max_duration_minutes <= 200)."""
     text = _text()
-    minutes = int(re.search(r"timeout-minutes: (\d+)", text).group(1))
-    assert 30 <= minutes <= 60
+    line = next(l for l in text.splitlines() if "timeout-minutes:" in l)
+    assert line.strip() == "timeout-minutes: ${{ inputs.collection_mode == 'maximum' && 240 || 60 }}"
+    assert "check_range max_duration_minutes \"${MAX_DURATION_MINUTES}\" 1 200" in text
+
+
+def _ingest_commands() -> list[str]:
+    return [line.strip() for line in _text().splitlines() if line.strip().startswith("tftlab ingest-riot")]
+
+
+def test_maximum_mode_is_opt_in_with_explicit_budget_inputs() -> None:
+    text = _text()
+    inputs = text[text.index("inputs:") : text.index("permissions:")]
+    mode = inputs[inputs.index("      collection_mode:") :]
+    assert "type: choice" in mode.split("default:")[0]
+    assert "- bounded" in mode and "- maximum" in mode
+    assert mode.split("default:", 1)[1].split("\n", 1)[0].strip() == "bounded"
+    for name, default in (("max_duration_minutes", "60"), ("max_requests", "3000"), ("max_match_fetches", "2000")):
+        block = inputs[inputs.index(f"      {name}:") :]
+        assert "type: number" in block.split("default:")[0]
+        assert block.split("default:", 1)[1].split("\n", 1)[0].strip() == default
+    # Stay within the 10-input workflow_dispatch limit GitHub long enforced.
+    assert len(re.findall(r"^      [a-z_]+:$", inputs, flags=re.M)) <= 10
+
+
+def test_both_modes_are_bounded_rate_capped_and_emit_telemetry() -> None:
+    bounded, maximum = _ingest_commands()
+    assert "--collection-mode" not in bounded
+    for command in (bounded, maximum):
+        assert "--current-trusted-window" in command
+        assert '--rate-ceiling "${RIOT_RATE_CEILING}"' in command
+        assert "--telemetry-out ingest-telemetry/telemetry.json" in command
+        assert "--allow-degraded-costs" not in command and "--start-time" not in command
+    assert "--collection-mode maximum" in maximum
+    for flag, var in (("--max-duration-minutes", "MAX_DURATION_MINUTES"), ("--max-requests", "MAX_REQUESTS"),
+                      ("--max-match-fetches", "MAX_MATCH_FETCHES")):
+        assert f'{flag} "${{{var}}}"' in maximum
+    assert "-seeds" not in maximum and "--matches-per-player" not in maximum
+    text = _text()
+    assert 'RIOT_RATE_CEILING: "10:10"' in text
+    assert "rate_ceiling:" not in text  # a reviewed code change, never a dispatch-time knob
+    upload = text[text.index("Upload collection telemetry") :]
+    assert "if: always()" in upload.split("- name:")[0]
+    assert "if-no-files-found: ignore" in upload
+
+
+def test_never_launches_or_retries_runs() -> None:
+    text = _text()
+    for forbidden in ("gh workflow", "workflow_run", "repository_dispatch", "createWorkflowDispatch",
+                      "schedule:", "cron:", "continue-on-error", "retry"):
+        commands = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+        assert forbidden not in commands, forbidden
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"COLLECTION_MODE": "maximum"},
+        {"COLLECTION_MODE": "maximum", "MAX_DURATION_MINUTES": "200", "MAX_REQUESTS": "12000", "MAX_MATCH_FETCHES": "12000"},
+        {"COLLECTION_MODE": "maximum", "MAX_DURATION_MINUTES": "1", "MAX_REQUESTS": "1", "MAX_MATCH_FETCHES": "0"},
+    ],
+)
+def test_preflight_accepts_maximum_mode_within_budget_bounds(env: dict) -> None:
+    result = _run_preflight(**env)
+    assert result.returncode == 0, result.stderr
+    assert "Collection mode: maximum" in result.stdout
+    assert "ignored in maximum mode" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"COLLECTION_MODE": "huge"},
+        {"COLLECTION_MODE": ""},
+        {"MAX_DURATION_MINUTES": "0"},
+        {"MAX_DURATION_MINUTES": "201"},
+        {"MAX_DURATION_MINUTES": "90.5"},
+        {"MAX_REQUESTS": "0"},
+        {"MAX_REQUESTS": "12001"},
+        {"MAX_REQUESTS": "999999"},
+        {"MAX_REQUESTS": "0100"},
+        {"MAX_MATCH_FETCHES": "-1"},
+        {"MAX_MATCH_FETCHES": "12001"},
+        {"MAX_MATCH_FETCHES": "5; echo hacked"},
+    ],
+)
+def test_preflight_rejects_bad_mode_or_budgets(env: dict) -> None:
+    result = _run_preflight(**env)
+    assert result.returncode == 1
+    assert "hacked" not in result.stdout

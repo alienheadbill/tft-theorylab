@@ -14,6 +14,15 @@ name: Live ingest
 # production ceiling is 100 seed players in total x 10 matches each. Seeds
 # rotate through the sampling ledger (never-sampled players first), so
 # repeated runs reach different players.
+#
+# collection_mode=maximum (opt-in, never the default) ignores the seed and
+# matches inputs: it enumerates all five cohorts, reads every seed's history
+# inside the current trusted window to exhaustion, breadth-first, and stops
+# cleanly at the first of three explicit budgets (minutes, Riot requests,
+# match-detail fetches). Each wave of seeds is finalized as its own ingest
+# run, so a stopped or failed run loses at most one wave's bookkeeping and
+# the next dispatch continues the rotation. Nothing here dispatches another
+# run, retries a run, or runs on a schedule.
 on:
   workflow_dispatch:
     inputs:
@@ -41,6 +50,25 @@ on:
         description: "Recent matches read per seed player (1-10). Total seeds across all cohorts must be 1-100."
         type: number
         default: 5
+      collection_mode:
+        description: "bounded = the seed/matches inputs above; maximum = exhaust all cohorts within the budgets below"
+        type: choice
+        options:
+          - bounded
+          - maximum
+        default: bounded
+      max_duration_minutes:
+        description: "Maximum mode only: wall-clock budget in minutes (1-200)"
+        type: number
+        default: 60
+      max_requests:
+        description: "Maximum mode only: Riot request budget (1-12000)"
+        type: number
+        default: 3000
+      max_match_fetches:
+        description: "Maximum mode only: match-detail fetch budget (0-12000)"
+        type: number
+        default: 2000
 
 # The workflow can be started against any branch from the Actions UI, but
 # it must only ever run against production config from `main` -- enforced
@@ -57,8 +85,12 @@ concurrency:
 jobs:
   live-ingest:
     runs-on: ubuntu-latest
-    # Room for a 100 x 10 run at Riot development-key rate limits.
-    timeout-minutes: 60
+    # Bounded: room for a 100 x 10 run at Riot development-key rate limits.
+    # Maximum: the ingest step stops itself at max_duration_minutes (at most
+    # 200, validated below); 240 leaves room for install, verify-riot,
+    # validation and the smoke test, and is the hard backstop if anything
+    # hangs. Both stay well under GitHub's 360-minute job limit.
+    timeout-minutes: ${{ inputs.collection_mode == 'maximum' && 240 || 60 }}
     steps:
       # Runs before checkout/install and before any Riot or database access:
       # cheap fail-fast so a bad branch selection or missing/malformed
@@ -76,6 +108,10 @@ jobs:
           DIAMOND_SEEDS: ${{ inputs.diamond_seeds }}
           PLATINUM_SEEDS: ${{ inputs.platinum_seeds }}
           MATCHES_PER_PLAYER: ${{ inputs.matches_per_player }}
+          COLLECTION_MODE: ${{ inputs.collection_mode }}
+          MAX_DURATION_MINUTES: ${{ inputs.max_duration_minutes }}
+          MAX_REQUESTS: ${{ inputs.max_requests }}
+          MAX_MATCH_FETCHES: ${{ inputs.max_match_fetches }}
         run: |
           if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
             echo "::error::This workflow must be run with 'main' explicitly selected as the branch (got ${GITHUB_REF})." >&2
@@ -130,9 +166,39 @@ jobs:
             echo "::error::matches_per_player must be a whole number from 1 to 10." >&2
             exit 1
           fi
+          # Whole number, no leading zero, at most five digits, then min-max.
+          check_range() {
+            case "$2" in
+              ''|*[!0-9]*|0?*|??????*)
+                echo "::error::$1 must be a whole number from $3 to $4." >&2
+                exit 1
+                ;;
+            esac
+            if [ "$2" -lt "$3" ] || [ "$2" -gt "$4" ]; then
+              echo "::error::$1 must be a whole number from $3 to $4." >&2
+              exit 1
+            fi
+          }
+          case "${COLLECTION_MODE}" in
+            bounded|maximum) ;;
+            *)
+              echo "::error::collection_mode must be bounded or maximum." >&2
+              exit 1
+              ;;
+          esac
+          check_range max_duration_minutes "${MAX_DURATION_MINUTES}" 1 200
+          check_range max_requests "${MAX_REQUESTS}" 1 12000
+          check_range max_match_fetches "${MAX_MATCH_FETCHES}" 0 12000
           echo "Production configuration looks valid."
-          echo "Planned seed cohorts: challenger=${CHALLENGER_SEEDS} grandmaster=${GRANDMASTER_SEEDS} master=${MASTER_SEEDS} diamond=${DIAMOND_SEEDS} platinum=${PLATINUM_SEEDS} (total ${TOTAL_SEEDS})"
-          echo "Planned histories: ${MATCHES_PER_PLAYER} matches per seed player."
+          if [ "${COLLECTION_MODE}" = "maximum" ]; then
+            echo "Collection mode: maximum (all five cohorts, histories exhausted inside the current trusted window)."
+            echo "Budgets: ${MAX_DURATION_MINUTES} minutes, ${MAX_REQUESTS} Riot requests, ${MAX_MATCH_FETCHES} match-detail fetches."
+            echo "The seed and matches_per_player inputs are ignored in maximum mode."
+          else
+            echo "Collection mode: bounded."
+            echo "Planned seed cohorts: challenger=${CHALLENGER_SEEDS} grandmaster=${GRANDMASTER_SEEDS} master=${MASTER_SEEDS} diamond=${DIAMOND_SEEDS} platinum=${PLATINUM_SEEDS} (total ${TOTAL_SEEDS})"
+            echo "Planned histories: ${MATCHES_PER_PLAYER} matches per seed player."
+          fi
 
       - uses: actions/checkout@v4
 
@@ -169,7 +235,19 @@ jobs:
           DIAMOND_SEEDS: ${{ inputs.diamond_seeds }}
           PLATINUM_SEEDS: ${{ inputs.platinum_seeds }}
           MATCHES_PER_PLAYER: ${{ inputs.matches_per_player }}
-        # Sizes were bounds-checked in "Validate production configuration".
+          COLLECTION_MODE: ${{ inputs.collection_mode }}
+          MAX_DURATION_MINUTES: ${{ inputs.max_duration_minutes }}
+          MAX_REQUESTS: ${{ inputs.max_requests }}
+          MAX_MATCH_FETCHES: ${{ inputs.max_match_fetches }}
+          # Operator policy cap per routing host, applied on top of the
+          # limits Riot advertises in its response headers (which the
+          # client paces to at 90%). Riot's API Terms cap Development keys
+          # at 10 calls per 10 seconds; the key's type is not verified from
+          # here, so the cap stays until a reviewed change confirms the key
+          # is a Personal or Production key. Deliberately not an input.
+          RIOT_RATE_CEILING: "10:10"
+        # Sizes and budgets were bounds-checked in "Validate production
+        # configuration".
         # --current-trusted-window: each seed's history request is bounded to
         # the current verified+sourced patch window in
         # tftlab.unreal_patch.UNREAL_PATCH_REGISTRY (Riot startTime/endTime),
@@ -180,8 +258,22 @@ jobs:
         # placement or performance. No --allow-degraded-costs: if
         # CommunityDragon can't be reached, this must fail rather than
         # silently ingesting rarity+1 fallback costs as if authoritative.
+        # Aggregate telemetry (no ids, no secrets) goes to an artifact.
         run: |
-          tftlab ingest-riot --challenger-seeds "${CHALLENGER_SEEDS}" --grandmaster-seeds "${GRANDMASTER_SEEDS}" --master-seeds "${MASTER_SEEDS}" --diamond-seeds "${DIAMOND_SEEDS}" --platinum-seeds "${PLATINUM_SEEDS}" --matches-per-player "${MATCHES_PER_PLAYER}" --current-trusted-window
+          if [ "${COLLECTION_MODE}" != "maximum" ]; then
+            tftlab ingest-riot --challenger-seeds "${CHALLENGER_SEEDS}" --grandmaster-seeds "${GRANDMASTER_SEEDS}" --master-seeds "${MASTER_SEEDS}" --diamond-seeds "${DIAMOND_SEEDS}" --platinum-seeds "${PLATINUM_SEEDS}" --matches-per-player "${MATCHES_PER_PLAYER}" --current-trusted-window --rate-ceiling "${RIOT_RATE_CEILING}" --telemetry-out ingest-telemetry/telemetry.json
+          else
+            tftlab ingest-riot --collection-mode maximum --current-trusted-window --max-duration-minutes "${MAX_DURATION_MINUTES}" --max-requests "${MAX_REQUESTS}" --max-match-fetches "${MAX_MATCH_FETCHES}" --rate-ceiling "${RIOT_RATE_CEILING}" --telemetry-out ingest-telemetry/telemetry.json
+          fi
+
+      - name: Upload collection telemetry
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingest-telemetry
+          path: ingest-telemetry/
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Validate ingested data
         env:
