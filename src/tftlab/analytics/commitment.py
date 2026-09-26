@@ -104,9 +104,10 @@ def carry_commitment_stats(
     """Return low-usage carry stats from final-board Match-V1 data.
 
     A participant is a commitment game for a unit when that unit finishes with
-    >= `commitment_items` non-component items and that itemization is not
-    entirely defensive (`tftlab.carry.is_carry_observation`; e.g. Warmog's +
-    Gargoyle is a tank, not a carry, at any star level). This deliberately
+    >= `commitment_items` non-component items and at least one of them has
+    Riot-backed carry evidence (`tftlab.carry.is_carry_observation`; e.g.
+    Warmog's + Gargoyle or Spirit Visage + Steadfast Heart is not a carry, at
+    any star level). This deliberately
     includes 2-star misses, avoiding the survivorship bias of analyzing only
     successful 3-stars. Appearances count every board the champion is on.
 
@@ -144,8 +145,8 @@ def carry_commitment_stats(
     if not total_participants:
         return []
 
-    # Carry commitment = >= commitment_items completed items AND not an
-    # all-defensive itemization (tftlab.carry). Appearance is unaffected:
+    # Carry commitment = >= commitment_items completed items AND at least one
+    # with Riot carry evidence (tftlab.carry). Appearance is unaffected:
     # every unit row still counts as an appearance below.
     eligible_sql, eligible_params = carry_commitment_sql("u", commitment_items)
     rows = db.query_all(

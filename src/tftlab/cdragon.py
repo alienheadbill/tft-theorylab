@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -200,6 +201,15 @@ class CommunityDragonClient:
             cache_path.write_text(json.dumps(data))
         return data
 
+    def fetch_game_json(self, path: str, patch: str = "latest") -> Any:
+        """One raw game-data file as CommunityDragon exports it, e.g.
+        `MAP22_BIN_PATH`. Never cached and never called by analytics or the
+        web app: only the explicit snapshot refresh (the opt-in live tests)
+        reads these."""
+        response = self._client.get(f"{CDRAGON_BASE}/{patch}/game/{path}")
+        response.raise_for_status()
+        return response.json()
+
     def get_set_metadata(
         self,
         patch: str = "latest",
@@ -270,3 +280,205 @@ def item_stats_snapshot(meta: SetMetadata) -> dict[str, Any]:
             "alias_of": alias,
         }
     return {"set_number": n, "items": dict(sorted(items.items()))}
+
+
+# ---------------------------------------------------------------- Riot item intent
+
+#: Riot's TFT map data (CommunityDragon's export of `data/maps/shipping/
+#: map22/map22.bin`): holds every `TFTCharacterRoleData` object -- a role's
+#: internal `name`, its UI string keys and its recommended `items`.
+MAP22_BIN_PATH = "data/maps/shipping/map22/map22.bin.json"
+#: Riot's English TFT string table: resolves role UI string keys to the
+#: names the client shows ("Magic Tank", "Attack Marksman", ...).
+TFT_STRINGTABLE_PATH = "en_us/data/menu/en_us/tft.stringtable.json"
+#: A role's recommended items are links to TftItemData entries by path.
+ROLE_ITEM_PREFIX = "Maps/Shipping/Map22/Items/"
+#: The UI string key of a role in Riot's current role vocabulary
+#: ("TFT_CharacterRole_RolesRevamped_APTank_Name" -> "Magic Tank"). It sits
+#: under a hashed field name, so it is found by value, not by field.
+_ROLE_NAME_KEY = re.compile(r"^TFT_CharacterRole_RolesRevamped_[A-Za-z0-9]+_Name$")
+TANK_FAMILY = "tank"
+NON_TANK_FAMILY = "non_tank"
+#: Riot's current role UI names are "<Attack|Magic|Hybrid> <family>"; the
+#: family word decides Tank vs non-Tank. Every family Riot used on
+#: 2026-09-26 is listed; a new word fails the snapshot build loudly
+#: instead of being guessed.
+ROLE_FAMILIES: dict[str, str] = {
+    "Tank": TANK_FAMILY,
+    "Assassin": NON_TANK_FAMILY,
+    "Caster": NON_TANK_FAMILY,
+    "Fighter": NON_TANK_FAMILY,
+    "Marksman": NON_TANK_FAMILY,
+    "Specialist": NON_TANK_FAMILY,
+}
+
+
+def riot_roles(map_bin: dict[str, Any], strings: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Every `TFTCharacterRoleData` in Riot's map data, by internal role name.
+
+    A role in the current vocabulary has one `RolesRevamped` UI name key; its
+    English name gives the family. Legacy role objects without one (e.g.
+    `ADCarryCrit`, `TutorialADCarry`) are kept for provenance with
+    `family: None` and contribute no item evidence. Raises ValueError when a
+    current role cannot be classified (missing UI string, unknown family
+    word, conflicting name keys, duplicate role names)."""
+    entries = strings.get("entries", strings) if isinstance(strings, dict) else {}
+    ui_text = {str(k).lower(): str(v) for k, v in entries.items()}
+    roles: dict[str, dict[str, Any]] = {}
+    for key, obj in sorted(map_bin.items()):
+        if not isinstance(obj, dict) or obj.get("__type") != "TFTCharacterRoleData":
+            continue
+        name = str(obj.get("name") or key)
+        if name in roles:
+            raise ValueError(f"two TFTCharacterRoleData objects are named {name!r}")
+        items, unresolved = [], []
+        for ref in obj.get("items") or []:
+            ref = str(ref)
+            rest = ref[len(ROLE_ITEM_PREFIX):] if ref.startswith(ROLE_ITEM_PREFIX) else ""
+            (items if rest and "/" not in rest else unresolved).append(rest or ref)
+        name_keys = sorted({v for v in obj.values() if isinstance(v, str) and _ROLE_NAME_KEY.match(v)})
+        role: dict[str, Any] = {"object": key, "ui_name_key": None, "ui_name": None, "family": None,
+                                "recommended_items": items, "unresolved_items": unresolved}
+        if len(name_keys) > 1:
+            raise ValueError(f"role {name!r} has conflicting UI name keys {name_keys}")
+        if name_keys:
+            ui_name = ui_text.get(name_keys[0].lower())
+            if not ui_name:
+                raise ValueError(f"role {name!r}: UI string {name_keys[0]} is missing from the TFT string table")
+            family = ROLE_FAMILIES.get(ui_name.split()[-1])
+            if family is None:
+                raise ValueError(f"role {name!r} ({ui_name!r}) has no known Tank/non-Tank family")
+            role.update(ui_name_key=name_keys[0], ui_name=ui_name, family=family)
+        roles[name] = role
+    return roles
+
+
+def _normalized_name(text: str) -> str:
+    """Display names compared without case or punctuation ("Warmogs Armor"
+    is "Warmog's Armor")."""
+    return re.sub(r"[^0-9a-z]", "", text.casefold())
+
+
+def item_intent_snapshot(meta: SetMetadata, map_bin: dict[str, Any], strings: dict[str, Any]) -> dict[str, Any]:
+    """The committed-fixture shape of Riot item-intent evidence for the
+    current set (`src/tftlab/data/item_intent.json`, used offline by
+    `tftlab.carry`).
+
+    Items are the completed items of `item_stats_snapshot(meta)` (the exact
+    ids Match-V1 boards store; components are left out). Riot's role lists
+    name `TFT_Item_*` ids, so:
+
+    - a `TFT_Item_*`/`TFT<n>_Item_*` id is its own Riot item;
+    - a `DA_*` id is bridged to the `TFT_Item_*` items with the same display
+      name (case and punctuation ignored), dropping candidates whose
+      component names contradict -- every Corrupted/Academy copy of a name
+      shares its evidence. No candidate (e.g. trait emblems) means
+      unresolved, i.e. UNKNOWN.
+
+    Absence from every role list is only evidence inside Riot's
+    recommendation domain, which comes from Riot's own item tags (map22
+    `TftItemData.ItemTags`): the tags every role-recommended item carries are
+    required, and only tags some recommended item carries are allowed. An
+    ordinary completed item (tag `{7ea41d13}`, shared by all 36 Set 18
+    craftables) is inside; trait emblems (`TraitItem`), Tactician's items
+    (`TacticiansItem`), artifacts (`{44ace175}`) and Thief's Gloves (two tags
+    no recommended item has) are outside, so "no role recommends it" means
+    UNKNOWN for them, not KNOWN_UNLISTED.
+
+    Each item keeps its evidence: the Riot items it resolved to, exactly
+    which Tank and non-Tank roles recommend them, its own Riot item tags and
+    domain membership, plus the derived intent
+    (`tftlab.carry.intent_from_recommendations`). Raises ValueError when a
+    recommended item has no TftItemData record or the recommended items
+    share no tag (no domain can be defined)."""
+    from .carry import intent_from_recommendations
+    from .items import LEGACY_COMPONENT_IDS
+
+    roles = riot_roles(map_bin, strings)
+    recommended: dict[str, dict[str, set[str]]] = {}
+    for role_name, role in roles.items():
+        if role["family"] is None:
+            continue
+        for item_id in role["recommended_items"]:
+            recommended.setdefault(item_id, {TANK_FAMILY: set(), NON_TANK_FAMILY: set()})[role["family"]].add(role_name)
+
+    item_tags: dict[str, set[str]] = {}
+    for obj in map_bin.values():
+        if isinstance(obj, dict) and obj.get("__type") == "TftItemData" and obj.get("mName"):
+            item_tags.setdefault(str(obj["mName"]), set()).update(str(t) for t in obj.get("ItemTags") or ())
+    recommended_ids = sorted(recommended)
+    missing = [i for i in recommended_ids if i not in item_tags]
+    if missing:
+        raise ValueError(f"recommended items without a TftItemData record: {missing}")
+    required_tags = set.intersection(*(item_tags[i] for i in recommended_ids)) if recommended_ids else set()
+    allowed_tags = set.union(*(item_tags[i] for i in recommended_ids)) if recommended_ids else set()
+    if not required_tags:
+        raise ValueError("role-recommended items share no Riot item tag; the recommendation domain is undefined")
+
+    def in_domain(item_id: str) -> bool:
+        return item_id in item_tags and required_tags <= item_tags[item_id] <= allowed_tags
+
+    stats = item_stats_snapshot(meta)["items"]
+    riot_ids = {i for i in stats if not i.startswith("DA_")}
+    by_name: dict[str, list[str]] = {}
+    for item_id in riot_ids:
+        by_name.setdefault(_normalized_name(stats[item_id]["name"]), []).append(item_id)
+
+    def component_names(item_id: str) -> list[str]:
+        item = meta.items.get(item_id)
+        return sorted(_normalized_name(meta.items[c].name if c in meta.items else c) for c in (item.composition if item else ()))
+
+    items: dict[str, dict[str, Any]] = {}
+    for item_id, stat in stats.items():
+        if item_id in LEGACY_COMPONENT_IDS or "component" in (stat.get("tags") or ()):
+            continue
+        if item_id in riot_ids:
+            resolved = [item_id]
+        else:
+            own = component_names(item_id)
+            resolved = sorted(
+                c for c in by_name.get(_normalized_name(stat["name"]), [])
+                if not (own and component_names(c) and component_names(c) != own)
+            )
+        tank = sorted({r for c in resolved for r in recommended.get(c, {}).get(TANK_FAMILY, ())})
+        non_tank = sorted({r for c in resolved for r in recommended.get(c, {}).get(NON_TANK_FAMILY, ())})
+        items[item_id] = {
+            "name": stat["name"],
+            "riot_items": resolved,
+            "recommended_by_tank_roles": tank,
+            "recommended_by_non_tank_roles": non_tank,
+            "riot_item_tags": sorted(item_tags[item_id]) if item_id in item_tags else None,
+            "in_recommendation_domain": in_domain(item_id),
+            "intent": intent_from_recommendations(
+                resolved=bool(resolved), tank_roles=tank, non_tank_roles=non_tank,
+                in_recommendation_domain=in_domain(item_id),
+            ),
+        }
+    return {
+        "set_number": meta.set_number,
+        "roles": roles,
+        "recommendation_domain": {"required_item_tags": sorted(required_tags), "allowed_item_tags": sorted(allowed_tags)},
+        "items": dict(sorted(items.items())),
+    }
+
+
+def champion_role_coverage(
+    meta: SetMetadata, map_bin: dict[str, Any], records: dict[str, dict[str, Any] | None]
+) -> dict[str, Any]:
+    """How many current-set shop champions (cost 1-5 with traits) Riot links
+    to a role via `TFTCharacterRecord.CharacterRole`. `records` maps each
+    shop champion id to its record (None when its character file is
+    missing). Report-only: carry eligibility never reads champion roles."""
+    role_names = {k: str(o.get("name")) for k, o in map_bin.items()
+                  if isinstance(o, dict) and o.get("__type") == "TFTCharacterRoleData"}
+    shop = sorted(c for c, m in meta.champions.items() if 1 <= m.cost <= 5 and m.traits)
+    linked: dict[str, str] = {}
+    for champion in shop:
+        link = (records.get(champion) or {}).get("CharacterRole")
+        if link:
+            linked[champion] = role_names.get(str(link), str(link))
+    return {
+        "shop_champions": len(shop),
+        "with_role": dict(sorted(linked.items())),
+        "missing_record": sorted(c for c in shop if records.get(c) is None),
+    }

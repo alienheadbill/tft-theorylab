@@ -14,10 +14,20 @@ from pathlib import Path
 
 import pytest
 
-from tftlab.cdragon import CommunityDragonClient, SetMetadata, item_stats_snapshot
+from tftlab.cdragon import (
+    MAP22_BIN_PATH,
+    TFT_STRINGTABLE_PATH,
+    CommunityDragonClient,
+    SetMetadata,
+    champion_role_coverage,
+    item_intent_snapshot,
+    item_stats_snapshot,
+    riot_roles,
+)
 
 ROSTER_FIXTURE = Path(__file__).parents[1] / "src" / "tftlab" / "data" / "set_roster.json"
 ITEM_STATS_FIXTURE = Path(__file__).parents[1] / "src" / "tftlab" / "data" / "item_stats.json"
+ITEM_INTENT_FIXTURE = Path(__file__).parents[1] / "src" / "tftlab" / "data" / "item_intent.json"
 
 RUN_LIVE = os.environ.get("TFTLAB_LIVE_CDRAGON_TEST") == "1"
 
@@ -234,3 +244,78 @@ def test_print_da_item_namespace(tmp_path, capsys) -> None:
         print("\nDA ITEM NAMESPACE BEGIN")
         print(json.dumps(inventory, ensure_ascii=False))
         print("DA ITEM NAMESPACE END")
+
+
+# ---------------------------------------------------------------- Riot role / item-intent metadata
+
+
+@pytest.fixture(scope="module")
+def riot_game_data(tmp_path_factory):
+    """(current-set metadata, Riot map22 data, TFT string table), read once."""
+    if not RUN_LIVE:
+        pytest.skip("Set TFTLAB_LIVE_CDRAGON_TEST=1 (from an environment with network access) to run this")
+    import httpx
+
+    with CommunityDragonClient(cache_dir=tmp_path_factory.mktemp("cdragon"), client=httpx.Client(timeout=240.0, follow_redirects=True)) as client:
+        meta = client.get_set_metadata("latest", use_cache=False)
+        return meta, client.fetch_game_json(MAP22_BIN_PATH), client.fetch_game_json(TFT_STRINGTABLE_PATH)
+
+
+@requires_live_network
+def test_riot_role_vocabulary_is_classified_and_resolves(riot_game_data, capsys) -> None:
+    """Every TFTCharacterRoleData object is found; each current role has a
+    Riot UI name and a Tank/non-Tank family (riot_roles raises otherwise);
+    every item a current role recommends is a known item id."""
+    meta, map_bin, strings = riot_game_data
+    roles = riot_roles(map_bin, strings)
+    current = {n: r for n, r in roles.items() if r["family"]}
+    assert current and {r["family"] for r in current.values()} == {"tank", "non_tank"}
+    known = set(item_stats_snapshot(meta)["items"])
+    unknown = sorted({(n, i) for n, r in current.items() for i in r["recommended_items"] if i not in known})
+    assert not unknown, f"recommended items missing from the item snapshot: {unknown}"
+    assert not [n for n, r in current.items() if r["unresolved_items"]]
+    with capsys.disabled():
+        print("\nRIOT ROLES:", json.dumps({n: [r["ui_name"], r["family"], len(r["recommended_items"])]
+                                          for n, r in sorted(roles.items())}, ensure_ascii=False))
+
+
+@requires_live_network
+def test_committed_item_intent_matches_live_set(riot_game_data) -> None:
+    """Carry eligibility reads Riot item intent from a committed snapshot,
+    never the network. This catches Riot changing roles or recommendations;
+    on a mismatch the message holds the full live snapshot for the refresh."""
+    live = item_intent_snapshot(*riot_game_data)
+    committed = json.loads(ITEM_INTENT_FIXTURE.read_text()) if ITEM_INTENT_FIXTURE.exists() else {}
+    committed = {k: committed.get(k) for k in ("set_number", "roles", "recommendation_domain", "items")}
+    assert committed == live, (
+        "src/tftlab/data/item_intent.json is out of date. Live snapshot:\n"
+        + "ITEM_INTENT_SNAPSHOT_BEGIN\n" + json.dumps(live, ensure_ascii=False, separators=(",", ":")) + "\nITEM_INTENT_SNAPSHOT_END"
+    )
+
+
+@requires_live_network
+def test_champion_role_coverage_matches_baseline(riot_game_data, capsys) -> None:
+    """Riot links almost no Set 18 shop champion to a role, so carry
+    eligibility never uses champion roles. This fails (printing the live
+    coverage) as soon as that changes, which is when champion-role-aware
+    logic can be reconsidered."""
+    import httpx
+
+    meta, map_bin, _ = riot_game_data
+    shop = sorted(c for c, m in meta.champions.items() if 1 <= m.cost <= 5 and m.traits)
+    records = {}
+    with httpx.Client(timeout=120.0, follow_redirects=True) as client:
+        for champion in shop:
+            r = client.get(f"https://raw.communitydragon.org/latest/game/characters/{champion.lower()}.cdtb.bin.json")
+            records[champion] = next(
+                (e for e in r.json().values() if isinstance(e, dict) and e.get("__type") == "TFTCharacterRecord"), None
+            ) if r.status_code == 200 else None
+    live = champion_role_coverage(meta, map_bin, records)
+    baseline = json.loads(ITEM_INTENT_FIXTURE.read_text()).get("champion_role_coverage") if ITEM_INTENT_FIXTURE.exists() else None
+    with capsys.disabled():
+        share = len(live["with_role"]) / live["shop_champions"] if live["shop_champions"] else 0.0
+        print(f"\nCHAMPION ROLE COVERAGE: {len(live['with_role'])}/{live['shop_champions']} ({share:.1%}); "
+              f"roles seen: {sorted(set(live['with_role'].values()))}")
+        print("CHAMPION_ROLE_COVERAGE " + json.dumps(live, ensure_ascii=False, separators=(",", ":")))
+    assert live == baseline, "Riot champion CharacterRole coverage changed; see CHAMPION_ROLE_COVERAGE above"
+

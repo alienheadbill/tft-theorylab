@@ -1,12 +1,14 @@
-"""Item-only carry eligibility (tftlab.carry) and its analytics integration.
+"""Riot item-intent carry eligibility (tftlab.carry) and its analytics integration.
 
-Uses the committed Set 18 item-stat snapshot (src/tftlab/data/item_stats.json)
--- the same metadata production analytics reads -- plus hand-built metadata
-for the unknown/hashed cases. No production data, no network.
+Uses the committed Set 18 item-intent snapshot (src/tftlab/data/item_intent.json,
+built from Riot's TFTCharacterRoleData recommended-item lists) -- the same
+metadata production analytics reads -- plus hand-built intents for edge
+cases. No production data, no network.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -15,23 +17,168 @@ import pytest
 
 from tftlab import carry
 from tftlab.analytics import carry_commitment_stats, discover_candidates, item_package_stats
-from tftlab.carry import classify_item, defensive_item_ids, is_carry_observation, load_item_stats
+from tftlab.carry import (
+    CARRY_EVIDENCE,
+    DAMAGE,
+    KNOWN_UNLISTED,
+    MIXED,
+    TANK,
+    UNKNOWN,
+    intent_from_recommendations,
+    is_carry_observation,
+    item_intent,
+    load_item_intent,
+    no_carry_evidence_item_ids,
+)
+from tftlab.items import ITEM_INTENT_PATH, ITEM_STATS_PATH, is_component
 from tftlab.storage import Database
 from tftlab.webapp import carry_item_sets
 
 from _helpers import make_match, make_unit
 
-IE, LW = "TFT_Item_InfinityEdge", "TFT_Item_LastWhisper"
-RABADON, GUINSOO = "TFT_Item_RabadonsDeathcap", "TFT_Item_GuinsoosRageblade"
-WARMOG, GARGOYLE = "TFT_Item_WarmogsArmor", "TFT_Item_GargoyleStoneplate"
-CLAW, VISAGE = "TFT_Item_DragonsClaw", "TFT_Item_Redemption"  # Redemption's display name is Spirit Visage
-TITAN, STERAK = "TFT_Item_TitansResolve", "TFT_Item_SteraksGage"
-RAVAGER_EMBLEM = "DA_18_EmblemSlayer"  # "Ravager Emblem": no readable stats in CommunityDragon
+# The namespace Set 18 Match-V1 boards actually store.
+VISAGE, STEADFAST, WARMOG, GARGOYLE = "DA_SpiritVisage", "DA_SteadfastHeart", "DA_WarmogsArmor", "DA_GargoyleStoneplate"
+TITAN, STERAK, GUINSOO, CROWNGUARD = "DA_TitansResolve", "DA_SteraksGage", "DA_GuinsoosRageblade", "DA_Crownguard"
+ADAPTIVE, IONIC, CLAW, LW = "DA_AdaptiveHelm", "DA_IonicSpark", "DA_DragonsClaw", "DA_LastWhisper"
+RAVAGER_EMBLEM = "DA_18_EmblemSlayer"  # "Ravager Emblem": no Riot counterpart in the recommendation namespace
+# Known special items outside Riot's role-recommendation domain (their own map22 ItemTags differ).
+TALISMAN, THIEFS = "DA_Item_Artifact_TalismanOfAscension", "DA_ThiefsGloves"
+TAC_CAPE, TAC_CROWN, TAC_SHIELD = "DA_TacticiansCape", "DA_TacticiansCrown", "DA_TacticiansShield"
 ELISE = "DA_18_Elise"
 
-# The namespace Set 18 Match-V1 boards actually store (production 18.3 data).
-D_GARGOYLE, D_CLAW, D_WARMOG, D_VISAGE = "DA_GargoyleStoneplate", "DA_DragonsClaw", "DA_WarmogsArmor", "DA_SpiritVisage"
-D_GUINSOO, D_TITAN, D_STERAK, D_LW = "DA_GuinsoosRageblade", "DA_TitansResolve", "DA_SteraksGage", "DA_LastWhisper"
+# The same items under their TFT_Item_* ids (the ids Riot's role lists name).
+T_WARMOG, T_GARGOYLE, T_VISAGE = "TFT_Item_WarmogsArmor", "TFT_Item_GargoyleStoneplate", "TFT_Item_Redemption"
+T_GUINSOO, T_TITAN, T_STERAK = "TFT_Item_GuinsoosRageblade", "TFT_Item_TitansResolve", "TFT_Item_SteraksGage"
+T_STEADFAST, T_CROWNGUARD = "TFT_Item_NightHarvester", "TFT_Item_Crownguard"
+
+
+def _snapshot() -> dict:
+    return json.loads(ITEM_INTENT_PATH.read_text())
+
+
+# ---------------------------------------------------------------- item intent
+
+
+@pytest.mark.parametrize(
+    "resolved, tank, non_tank, in_domain, expected",
+    [
+        (True, [], ["ADCarry"], True, DAMAGE),
+        (True, ["APTank"], [], True, TANK),
+        (True, ["HTank"], ["ADFighter"], True, MIXED),
+        (True, [], [], True, KNOWN_UNLISTED),  # Riot considered this kind of item and recommends it nowhere
+        (True, [], [], False, UNKNOWN),  # outside the domain: absence of a recommendation says nothing
+        (True, [], ["ADCarry"], False, DAMAGE),  # a recommendation is positive evidence wherever it appears
+        (False, [], [], False, UNKNOWN),
+    ],
+)
+def test_intent_states(resolved, tank, non_tank, in_domain, expected) -> None:
+    assert intent_from_recommendations(
+        resolved=resolved, tank_roles=tank, non_tank_roles=non_tank, in_recommendation_domain=in_domain
+    ) == expected
+
+
+def test_named_set18_items_classify_from_riot_recommendations() -> None:
+    expected = {
+        VISAGE: TANK, WARMOG: TANK, GARGOYLE: TANK, CLAW: TANK,
+        STEADFAST: KNOWN_UNLISTED, CROWNGUARD: KNOWN_UNLISTED,  # no role recommends them: not "tank"
+        TITAN: MIXED, IONIC: MIXED,
+        STERAK: DAMAGE, GUINSOO: DAMAGE, ADAPTIVE: DAMAGE, LW: DAMAGE,
+        RAVAGER_EMBLEM: UNKNOWN,
+        # known, but outside the recommendation domain: not negative evidence
+        TALISMAN: UNKNOWN, TAC_CAPE: UNKNOWN, TAC_CROWN: UNKNOWN, TAC_SHIELD: UNKNOWN, THIEFS: UNKNOWN,
+    }
+    assert {i: item_intent(i) for i in expected} == expected
+
+
+def test_every_intent_state_occurs_in_the_real_snapshot() -> None:
+    assert {m["intent"] for m in load_item_intent().values()} == {DAMAGE, TANK, MIXED, KNOWN_UNLISTED, UNKNOWN}
+
+
+def test_classification_keeps_its_riot_evidence() -> None:
+    """Why is Warmog's TANK? Riot recommends it for exactly these Tank roles
+    and no non-Tank role. Why is Titan's MIXED? A Tank role and non-Tank
+    roles both list it."""
+    items = load_item_intent()
+    warmog = items[WARMOG]
+    assert warmog["riot_items"] == ["TFT_Item_CorruptedWarmogsArmor", T_WARMOG]
+    assert warmog["recommended_by_tank_roles"] == ["ADTank", "APTank", "HTank"] and warmog["recommended_by_non_tank_roles"] == []
+    titan = items[TITAN]
+    assert titan["recommended_by_tank_roles"] == ["HTank"]
+    assert {"ADFighter", "APFighter", "HFighter"} <= set(titan["recommended_by_non_tank_roles"])
+    assert items[STEADFAST]["riot_items"] == [T_STEADFAST]  # known to Riot, recommended by nobody
+    assert items[STEADFAST]["recommended_by_tank_roles"] == items[STEADFAST]["recommended_by_non_tank_roles"] == []
+    assert items[RAVAGER_EMBLEM]["riot_items"] == []  # unresolved: absence of evidence is not evidence
+    # Steadfast Heart / Crownguard are ordinary completed items (inside the domain); the special items
+    # resolve to known Riot items but carry Riot item tags outside it.
+    assert items[STEADFAST]["in_recommendation_domain"] and items[CROWNGUARD]["in_recommendation_domain"]
+    for special in (TALISMAN, TAC_CAPE, TAC_CROWN, TAC_SHIELD, THIEFS):
+        assert items[special]["riot_items"] and items[special]["in_recommendation_domain"] is False, special
+
+
+def test_snapshot_evidence_is_consistent_with_riot_roles() -> None:
+    """Every stored intent follows from its stored evidence, and every cited
+    role really is that family and really recommends one of the item's
+    Riot items -- so the file explains itself after Riot changes a list."""
+    snap = _snapshot()
+    roles = snap["roles"]
+    for item_id, meta in snap["items"].items():
+        assert meta["intent"] == intent_from_recommendations(
+            resolved=bool(meta["riot_items"]), tank_roles=meta["recommended_by_tank_roles"],
+            non_tank_roles=meta["recommended_by_non_tank_roles"], in_recommendation_domain=meta["in_recommendation_domain"],
+        ), item_id
+        domain = snap["recommendation_domain"]
+        tags = set(meta["riot_item_tags"] or ())
+        assert meta["in_recommendation_domain"] == (
+            meta["riot_item_tags"] is not None
+            and set(domain["required_item_tags"]) <= tags <= set(domain["allowed_item_tags"])
+        ), item_id
+        for family, key in (("tank", "recommended_by_tank_roles"), ("non_tank", "recommended_by_non_tank_roles")):
+            for role in meta[key]:
+                assert roles[role]["family"] == family, (item_id, role)
+                assert set(roles[role]["recommended_items"]) & set(meta["riot_items"]), (item_id, role)
+    # Only roles in Riot's current vocabulary give evidence; each is classified.
+    current = {n: r for n, r in roles.items() if r["family"]}
+    assert {r["ui_name"].split()[-1] for r in current.values()} == {"Tank", "Assassin", "Caster", "Fighter", "Marksman", "Specialist"}
+    assert {n for n, r in current.items() if r["family"] == "tank"} == {"ADTank", "APTank", "HTank"}
+    assert all(r["ui_name_key"] is None for r in roles.values() if not r["family"])  # legacy objects: no evidence
+
+
+def test_every_recommended_item_resolves_to_a_snapshot_item() -> None:
+    snap = _snapshot()
+    stats = json.loads(ITEM_STATS_PATH.read_text())["items"]
+    recommended = {i for r in snap["roles"].values() if r["family"] for i in r["recommended_items"]}
+    assert recommended and recommended <= set(stats)
+    # ... and each is reachable from the Match-V1 DA_ namespace.
+    da_resolved = {r for i, m in snap["items"].items() if i.startswith("DA_") for r in m["riot_items"]}
+    assert recommended <= da_resolved
+
+
+def test_da_ids_classify_like_their_tft_item_counterparts() -> None:
+    pairs = {
+        WARMOG: T_WARMOG, GARGOYLE: T_GARGOYLE, VISAGE: T_VISAGE, GUINSOO: T_GUINSOO, TITAN: T_TITAN,
+        STERAK: T_STERAK, STEADFAST: T_STEADFAST, CROWNGUARD: T_CROWNGUARD,
+        "DA_SunfireCape": "TFT_Item_RedBuff",  # legacy api name: TFT_Item_RedBuff *is* Sunfire Cape
+        "DA_RedBuff": "TFT_Item_RapidFireCannon",  # ... and "Red Buff" is TFT_Item_RapidFireCannon
+    }
+    for da_id, tft_id in pairs.items():
+        assert item_intent(da_id) == item_intent(tft_id), da_id
+    items = load_item_intent()
+    for item_id, meta in items.items():  # a DA_ item's evidence is exactly its Riot items' evidence
+        if item_id.startswith("DA_") and meta["riot_items"]:
+            for key in ("recommended_by_tank_roles", "recommended_by_non_tank_roles"):
+                assert meta[key] == sorted({r for t in meta["riot_items"] for r in items[t][key]}), item_id
+
+
+def test_components_and_unknown_ids() -> None:
+    items = load_item_intent()
+    assert not any(is_component(i) for i in items)
+    assert not any(is_component(i) for i in no_carry_evidence_item_ids())
+    assert item_intent("DA_SomethingNewNextPatch") == UNKNOWN
+    # Every DA_ UNKNOWN is a trait emblem or a special item outside the recommendation domain.
+    assert all(i.startswith("DA_18_Emblem") or not m["in_recommendation_domain"]
+               for i, m in items.items() if i.startswith("DA_") and m["intent"] == UNKNOWN)
+    # Every KNOWN_UNLISTED item is inside the domain.
+    assert all(m["in_recommendation_domain"] for m in items.values() if m["intent"] == KNOWN_UNLISTED)
 
 
 # ---------------------------------------------------------------- the rule
@@ -40,70 +187,50 @@ D_GUINSOO, D_TITAN, D_STERAK, D_LW = "DA_GuinsoosRageblade", "DA_TitansResolve",
 @pytest.mark.parametrize(
     "items, expected",
     [
-        ([IE, LW], True),  # 1 damage itemized
-        ([RABADON, GUINSOO], True),  # 2 AP itemized
-        ([WARMOG, GARGOYLE], False),  # 3 defensive package
-        ([WARMOG, GARGOYLE, CLAW], False),  # 4 defensive package
-        ([GARGOYLE, VISAGE], False),  # defensive package
-        ([WARMOG, WARMOG, GARGOYLE], False),  # duplicates are still all-defensive
-        ([GARGOYLE, GUINSOO], True),  # 6 mixed package
-        ([TITAN, STERAK], True),  # 7 bruiser: offensive signal alongside defensive stats
-        ([RAVAGER_EMBLEM, GUINSOO], True),
-        ([RAVAGER_EMBLEM, GUINSOO, TITAN], True),
-        ([GARGOYLE, GUINSOO, TITAN], True),
-        ([RAVAGER_EMBLEM, WARMOG], True),  # emblem has no readable stats => unknown => include
-        ([WARMOG, "TFT_Item_ChainVest", "TFT_Item_NegatronCloak"], False),  # components never count
-        ([WARMOG], False),  # below the >=2 completed-item threshold
+        ([VISAGE, STEADFAST], False),  # TANK + KNOWN_UNLISTED: the Leona regression
+        ([WARMOG, GARGOYLE], False),  # TANK + TANK
+        ([WARMOG, GARGOYLE, CLAW], False),
+        ([WARMOG, WARMOG, GARGOYLE], False),  # duplicates do not change it
+        ([STEADFAST, CROWNGUARD], False),  # KNOWN_UNLISTED + KNOWN_UNLISTED
+        ([CROWNGUARD, WARMOG], False),  # not enough Riot evidence of carry intent
+        ([TITAN, STERAK], True),  # MIXED + DAMAGE
+        ([TITAN, WARMOG], True),  # MIXED alone is carry evidence
+        ([RAVAGER_EMBLEM, GUINSOO], True),  # UNKNOWN + DAMAGE
+        ([RAVAGER_EMBLEM, WARMOG], True),  # UNKNOWN + TANK: conservative
+        ([GARGOYLE, GUINSOO], True),
+        ([STEADFAST, GUINSOO], True),
+        ([WARMOG, "DA_NotInTheSnapshot"], True),
+        ([TALISMAN, WARMOG], True),  # artifact: outside the domain => UNKNOWN => conservative
+        ([TAC_CROWN, WARMOG], True), ([TAC_CAPE, WARMOG], True), ([TAC_SHIELD, GARGOYLE], True),
+        ([THIEFS, WARMOG], True), ([THIEFS, STEADFAST], True),  # not excluded for lacking a recommendation
+        ([WARMOG, "DA_Component_ChainVest"], False),  # 1 completed item
+        ([GUINSOO, "DA_Component_RecurveBow"], False),  # components never count
+        ([WARMOG, GARGOYLE, "DA_Component_ChainVest"], False),
+        ([GUINSOO], False),
+        # TFT_Item_* ids: the same answers
+        ([T_VISAGE, T_STEADFAST], False), ([T_WARMOG, T_GARGOYLE], False), ([T_CROWNGUARD, T_WARMOG], False),
+        ([T_TITAN, T_STERAK], True), ([RAVAGER_EMBLEM, T_GUINSOO], True),
     ],
 )
-def test_real_set18_metadata(items, expected) -> None:
+def test_rule(items, expected) -> None:
     assert is_carry_observation(items) is expected
 
 
-def test_classification_of_named_items_from_the_real_snapshot() -> None:
-    stats = load_item_stats()
-    for item in (IE, LW, RABADON, GUINSOO, TITAN, STERAK):
-        assert classify_item(stats[item]) == "offensive", item
-    for item in (WARMOG, GARGOYLE, CLAW, VISAGE):
-        assert classify_item(stats[item]) == "defensive", item
-    assert classify_item(stats[RAVAGER_EMBLEM]) == "unknown"  # present, but no readable stats
-    # Offensive signal from a variant stat name, not a display name.
-    assert classify_item(stats["TFT_Item_Spite"]) == "offensive"  # ADIncrease / APIncrease + Health
-    # Ally-buff stats are not the holder's offense.
-    assert classify_item(stats["TFT_Item_Zephyr"]) == "defensive"  # AllyBonusAS + Health
-
-
-def test_unknown_item_never_causes_exclusion() -> None:
-    assert is_carry_observation([WARMOG, "TFT_Item_SomethingNewThisPatch"]) is True
-
-
-def test_hashed_or_ambiguous_metadata_does_not_cause_exclusion() -> None:
-    stats = {
-        WARMOG: {"stat_effects": ["Health"], "tags": ["Health"]},
-        "Hashed_Only": {"stat_effects": [], "tags": []},  # only {hash} names upstream
-        "Passive_Only": {"stat_effects": ["ICD", "Duration"], "tags": []},  # no stat evidence
-        "Hashed_Plus_Armor": {"stat_effects": ["Armor"], "tags": []},  # hashes dropped, Armor remains
-    }
-    assert is_carry_observation([WARMOG, "Hashed_Only"], item_stats=stats) is True
-    assert is_carry_observation([WARMOG, "Passive_Only"], item_stats=stats) is True
-    # Enough readable evidence remains to prove the whole package defensive.
-    assert is_carry_observation([WARMOG, "Hashed_Plus_Armor"], item_stats=stats) is False
-
-
-def test_no_champion_allowlist_role_table_or_tank_list() -> None:
+def test_no_champion_role_table_or_raw_stat_rule() -> None:
     source = "\n".join(
         line for line in Path(carry.__file__).read_text().splitlines() if not line.lstrip().startswith("#")
     )
     code = re.sub(r'"""(?:.|\n)*?"""', "", source)  # docstrings may mention examples
-    assert not re.search(r"DA_\d+_|TFT\d+_[A-Z]|character_id|\brole\b|tank", code, re.IGNORECASE)
+    assert not re.search(r"DA_\d+_|TFT\d+_[A-Z]|character_id|CritChance|stat_effects|Leona|Steadfast", code)
     assert re.search(r"def is_carry_observation\(\s*item_ids", source)  # items only, no champion argument
 
 
 def test_metadata_is_a_committed_file_not_a_network_call() -> None:
     source = Path(carry.__file__).read_text()
     assert "httpx" not in source and "CommunityDragonClient" not in source
-    assert carry.ITEM_STATS_PATH.name == "item_stats.json" and carry.ITEM_STATS_PATH.exists()
-    assert len(defensive_item_ids()) > 0
+    assert carry.ITEM_INTENT_PATH.name == "item_intent.json" and carry.ITEM_INTENT_PATH.exists()
+    assert set(no_carry_evidence_item_ids()) >= {VISAGE, STEADFAST, WARMOG, GARGOYLE, CROWNGUARD}
+    assert not set(no_carry_evidence_item_ids()) & {TITAN, STERAK, GUINSOO, RAVAGER_EMBLEM}
 
 
 # ---------------------------------------------------------------- analytics
@@ -120,86 +247,104 @@ def _stats_by_id(db: Database) -> dict:
     return {s.character_id: s for s in carry_commitment_stats(db, min_samples=1, max_cost=5)}
 
 
-def _elise_db(path: Path) -> Database:
-    """Elise with real Match-V1 (DA_*) item ids: 3 defensive boards, 3
-    offensive boards (two with the Ravager emblem), 1 unitemized board."""
-    db = Database(path)
-    for i, items in enumerate(([D_WARMOG, D_GARGOYLE], [D_WARMOG, D_GARGOYLE, D_CLAW], [D_GARGOYLE, D_VISAGE])):
-        db.ingest_match(_board(f"DEF{i}", ELISE, items, placement=6, tier=3 if i == 0 else 2))
-    for i, items in enumerate(([RAVAGER_EMBLEM, D_GUINSOO], [RAVAGER_EMBLEM, D_GUINSOO, D_TITAN], [D_GARGOYLE, D_GUINSOO, D_TITAN])):
-        db.ingest_match(_board(f"OFF{i}", ELISE, items, placement=2))
-    db.ingest_match(_board("BARE", ELISE, [], placement=5))
+TANK_BOARDS = ([WARMOG, GARGOYLE], [WARMOG, GARGOYLE, CLAW], [VISAGE, STEADFAST])
+CARRY_BOARDS = ([RAVAGER_EMBLEM, GUINSOO], [RAVAGER_EMBLEM, GUINSOO, TITAN], [GARGOYLE, GUINSOO, TITAN])
+
+
+def _elise_boards(db: Database, prefix: str = "") -> Database:
+    """Elise with real Match-V1 item ids: 3 boards without carry evidence,
+    3 carry boards (two with the Ravager emblem), 1 unitemized board."""
+    for i, items in enumerate(TANK_BOARDS):
+        db.ingest_match(_board(f"{prefix}DEF{i}", ELISE, items, placement=6, tier=3 if i == 0 else 2))
+    for i, items in enumerate(CARRY_BOARDS):
+        db.ingest_match(_board(f"{prefix}OFF{i}", ELISE, items, placement=2))
+    db.ingest_match(_board(f"{prefix}BARE", ELISE, [], placement=5))
     return db
 
 
-def test_elise_defensive_boards_excluded_offensive_boards_included(tmp_path: Path) -> None:
-    with _elise_db(tmp_path / "elise.sqlite3") as db:
+def test_elise_tank_boards_excluded_carry_boards_included(tmp_path: Path) -> None:
+    with _elise_boards(Database(tmp_path / "elise.sqlite3")) as db:
         elise = _stats_by_id(db)[ELISE]
     assert elise.appearances == 7  # every board she was on
-    assert elise.commitment_games == 3  # only the offensive builds
-    assert elise.avg_placement == pytest.approx(2.0)  # defensive 6th places no longer count as carry games
-    assert elise.hit_3star_rate == 0.0  # the 3-star defensive board is not a carry hit
+    assert elise.commitment_games == 3  # only the boards with carry evidence
+    assert elise.avg_placement == pytest.approx(2.0)
+    assert elise.hit_3star_rate == 0.0  # the 3-star tank board is not a carry hit
     assert elise.carry_conversion_rate == pytest.approx(3 / 7)
 
 
-def test_appearance_unchanged_and_commitment_drops_only_for_defensive_boards(
+def test_appearance_unchanged_and_commitment_drops_only_where_intent_changes_eligibility(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    with _elise_db(tmp_path / "before_after.sqlite3") as db:
+    with _elise_boards(Database(tmp_path / "before_after.sqlite3")) as db:
         after = _stats_by_id(db)[ELISE]
-        monkeypatch.setattr(carry, "load_item_stats", lambda path=None: {})  # the old >=2-item rule
+        monkeypatch.setattr(carry, "load_item_intent", lambda path=None: {})  # every item unknown: the bare >=2 rule
         before = _stats_by_id(db)[ELISE]
     assert (before.appearances, before.appearance_rate) == (after.appearances, after.appearance_rate)
-    assert before.commitment_games - after.commitment_games == 3  # exactly the three defensive boards
-    assert (before.commitment_games, after.commitment_games) == (6, 3)
+    assert (before.commitment_games, after.commitment_games) == (6, 3)  # exactly the three tank boards
 
 
-def test_three_star_defensive_board_is_still_not_a_carry(tmp_path: Path) -> None:
-    with Database(tmp_path / "3star.sqlite3") as db:
-        for i in range(3):
-            db.ingest_match(_board(f"T{i}", "TFT99_Wall", [WARMOG, GARGOYLE, CLAW], tier=3, placement=1))
-        assert "TFT99_Wall" not in _stats_by_id(db)
-
-
-def test_two_star_offensive_misses_still_count(tmp_path: Path) -> None:
+def test_two_star_misses_still_count(tmp_path: Path) -> None:
     with Database(tmp_path / "miss.sqlite3") as db:
-        db.ingest_match(_board("M1", "TFT99_Reroll", [IE, LW], tier=2, placement=5))
-        db.ingest_match(_board("M2", "TFT99_Reroll", [IE, LW], tier=3, placement=1))
+        db.ingest_match(_board("M1", "TFT99_Reroll", [GUINSOO, LW], tier=2, placement=5))
+        db.ingest_match(_board("M2", "TFT99_Reroll", [GUINSOO, LW], tier=3, placement=1))
+        db.ingest_match(_board("M3", "TFT99_Reroll", [WARMOG, GARGOYLE], tier=3, placement=1))  # 3-star tank: not a hit
         stat = _stats_by_id(db)["TFT99_Reroll"]
-    assert (stat.commitment_games, stat.miss_games, stat.hit_games) == (2, 1, 1)
+    assert (stat.appearances, stat.commitment_games, stat.miss_games, stat.hit_games) == (3, 2, 1, 1)
+
+
+def test_duplicate_copies_count_once_and_commit_if_any_copy_qualifies(tmp_path: Path) -> None:
+    def two_copies(match_id: str, first: list[str], second: list[str]) -> dict:
+        return make_match(match_id, placement=3, units=[
+            make_unit(ELISE, rarity=1, tier=2, items=first), make_unit(ELISE, rarity=1, tier=2, items=second),
+        ])
+
+    with Database(tmp_path / "dupes.sqlite3") as db:
+        db.ingest_match(two_copies("D1", [VISAGE, STEADFAST], [RAVAGER_EMBLEM, GUINSOO]))  # one copy qualifies
+        db.ingest_match(two_copies("D2", [VISAGE, STEADFAST], [WARMOG, GARGOYLE]))  # neither does
+        elise = _stats_by_id(db)[ELISE]
+    assert (elise.appearances, elise.commitment_games) == (2, 1)
 
 
 def test_downstream_evidence_uses_only_qualifying_boards(tmp_path: Path) -> None:
-    with _elise_db(tmp_path / "downstream.sqlite3") as db:
+    with _elise_boards(Database(tmp_path / "downstream.sqlite3")) as db:
         window = db.query_one("SELECT balance_window FROM matches LIMIT 1")[0]
         package_sets = {row[0] for row in carry_item_sets(db, ELISE, window)}
         packages = item_package_stats(db, ELISE, window, min_pair_games=1, min_package_games=1)
-    assert all(D_WARMOG not in s for s in package_sets) and len(package_sets) == 3
+    assert len(package_sets) == 3 and all(WARMOG not in s and STEADFAST not in s for s in package_sets)
     individual = {a.key for a in packages["items"]}
-    assert D_WARMOG not in individual and D_GUINSOO in individual
+    assert not individual & {WARMOG, VISAGE, STEADFAST, "DA_Component_ChainVest"} and GUINSOO in individual
 
 
-def test_current_sample_regression_tank_spam_removed_offmeta_carry_kept(
+def test_discovery_regression_leona_like_board_excluded_offmeta_conversion_kept(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A champion with many defensive >=2-item boards no longer shows up as a
-    carry; a normally defensive champion built offensively stays discoverable."""
+    """The production Discovery run that motivated this: a frontliner on
+    Spirit Visage + Steadfast Heart ranked #1. PR #21 read Steadfast Heart's
+    raw CritChance stat as offensive, so the board looked like a carry. No
+    Riot role recommends Steadfast Heart and only Tank roles recommend Spirit
+    Visage, so the package has no carry evidence. A tank-shaped unit built
+    as a carry (emblem + Guinsoo's) stays discoverable."""
+    stats = json.loads(ITEM_STATS_PATH.read_text())["items"]
+    assert "CritChance" in stats[STEADFAST]["stat_effects"]  # what PR #21 treated as offensive
     with Database(tmp_path / "regression.sqlite3") as db:
-        for i in range(12):  # the frontliner everyone slams tank items on
-            db.ingest_match(_board(f"WALL{i}", "TFT99_Wall", [D_WARMOG, D_GARGOYLE] + ([D_CLAW] if i % 2 else []), placement=4))
-        for i in range(6):  # the same kind of unit, built as a carry
-            db.ingest_match(_board(f"FLIP{i}", "TFT99_OffMeta", [D_GARGOYLE, D_GUINSOO, D_TITAN], placement=2))
+        for i in range(12):
+            db.ingest_match(_board(f"LEONA{i}", "TFT99_Leona", [VISAGE, STEADFAST], placement=3))
+        for i in range(6):
+            db.ingest_match(_board(f"FLIP{i}", "TFT99_OffMeta", [RAVAGER_EMBLEM, GUINSOO], placement=2))
         for i in range(4):
-            db.ingest_match(_board(f"FLIPDEF{i}", "TFT99_OffMeta", [D_WARMOG, D_GARGOYLE], placement=6))
+            db.ingest_match(_board(f"FLIPDEF{i}", "TFT99_OffMeta", [WARMOG, GARGOYLE], placement=6))
         after = {c.character_id for c in discover_candidates(db, max_cost=5, min_samples=3)}
-        monkeypatch.setattr(carry, "load_item_stats", lambda path=None: {})
+        leona = _stats_by_id(db)["TFT99_Leona"] if "TFT99_Leona" in _stats_by_id(db) else None
+        # PR #21's outcome for these boards (Steadfast Heart counted as offensive) == every board eligible.
+        monkeypatch.setattr(carry, "load_item_intent", lambda path=None: {})
         before = {c.character_id for c in discover_candidates(db, max_cost=5, min_samples=3)}
-    assert before == {"TFT99_Wall", "TFT99_OffMeta"}
+    assert before == {"TFT99_Leona", "TFT99_OffMeta"}
     assert after == {"TFT99_OffMeta"}
+    assert leona is None  # no commitment games at all, so not a carry candidate
 
 
 def test_discovery_still_evaluates_every_champion_with_qualifying_boards(tmp_path: Path) -> None:
-    carries = {f"TFT99_C{i}": [IE, LW] if i % 2 else [RABADON, GUINSOO] for i in range(6)}
+    carries = {f"TFT99_C{i}": [GUINSOO, LW] if i % 2 else [ADAPTIVE, "DA_RabadonsDeathcap"] for i in range(6)}
     with Database(tmp_path / "every.sqlite3") as db:
         n = 0
         for cid, items in carries.items():
@@ -213,11 +358,10 @@ def test_discovery_still_evaluates_every_champion_with_qualifying_boards(tmp_pat
 # ---------------------------------------------------------------- SQL == Python, on SQLite and Postgres
 
 PACKAGES = [
-    [IE, LW], [WARMOG, GARGOYLE], [WARMOG, WARMOG, GARGOYLE], [WARMOG, GARGOYLE, CLAW], [GARGOYLE, GUINSOO],
-    [RAVAGER_EMBLEM, WARMOG], [WARMOG, "TFT_Item_ChainVest"], [WARMOG, "TFT_Item_New"], [TITAN, STERAK], [],
-    # Match-V1 DA_ namespace
-    [D_GARGOYLE, D_CLAW], [D_WARMOG, D_WARMOG, D_GARGOYLE], [D_GUINSOO, D_TITAN], [D_GARGOYLE, D_GUINSOO],
-    [D_WARMOG, "DA_Component_ChainVest", "DA_Component_NegatronCloak"], [D_WARMOG, "DA_NotInTheSnapshot"],
+    [VISAGE, STEADFAST], [WARMOG, GARGOYLE], [WARMOG, WARMOG, GARGOYLE], [CROWNGUARD, WARMOG], [TITAN, STERAK],
+    [RAVAGER_EMBLEM, GUINSOO], [RAVAGER_EMBLEM, WARMOG], [WARMOG, "DA_NotInTheSnapshot"], [GARGOYLE, GUINSOO],
+    [WARMOG, "DA_Component_ChainVest", "DA_Component_NegatronCloak"], [], [T_WARMOG, T_GARGOYLE], [T_TITAN, T_STERAK],
+    [STEADFAST, CROWNGUARD, VISAGE], [IONIC, WARMOG], [TALISMAN, WARMOG], [TAC_CROWN, GARGOYLE], [THIEFS, VISAGE],
 ]
 
 
@@ -228,10 +372,8 @@ def _sql_matches_python(db: Database) -> None:
     eligible = {r[0] for r in db.query_all(f"SELECT u.character_id FROM units u WHERE {sql}", params)}
     expected = {f"TFT99_P{i}" for i, items in enumerate(PACKAGES) if is_carry_observation(items)}
     assert eligible == expected
-    assert expected == {
-        "TFT99_P0", "TFT99_P4", "TFT99_P5", "TFT99_P7", "TFT99_P8",
-        "TFT99_P12", "TFT99_P13", "TFT99_P15",  # P14: Warmog's + two DA components = 1 completed item
-    }
+    assert expected == {"TFT99_P4", "TFT99_P5", "TFT99_P6", "TFT99_P7", "TFT99_P8", "TFT99_P12", "TFT99_P14",
+                        "TFT99_P15", "TFT99_P16", "TFT99_P17"}
 
 
 def test_sql_rule_matches_python_rule_on_sqlite(tmp_path: Path) -> None:
@@ -253,109 +395,35 @@ def test_sql_rule_matches_python_rule_and_elise_on_postgres() -> None:
         for table in ("traits", "units", "participants", "matches"):
             db.execute(f"DELETE FROM {table}")
         db.commit()
+        _elise_boards(db, prefix="PG")
+        elise = _stats_by_id(db)[ELISE]
+        assert (elise.appearances, elise.commitment_games) == (7, 3)
     finally:
         db.close()
-    elise_db = _elise_db_pg()
-    try:
-        elise = _stats_by_id(elise_db)[ELISE]
-    finally:
-        elise_db.close()
-    assert (elise.appearances, elise.commitment_games) == (7, 3)
 
 
-def _elise_db_pg() -> Database:
-    db = Database(POSTGRES_TEST_URL)
-    for i, items in enumerate(([D_WARMOG, D_GARGOYLE], [D_WARMOG, D_GARGOYLE, D_CLAW], [D_GARGOYLE, D_VISAGE])):
-        db.ingest_match(_board(f"PGDEF{i}", ELISE, items, placement=6))
-    for i, items in enumerate(([RAVAGER_EMBLEM, D_GUINSOO], [RAVAGER_EMBLEM, D_GUINSOO, D_TITAN], [D_GARGOYLE, D_GUINSOO, D_TITAN])):
-        db.ingest_match(_board(f"PGOFF{i}", ELISE, items, placement=2))
-    db.ingest_match(_board("PGBARE", ELISE, [], placement=5))
-    return db
+def test_every_no_evidence_id_is_counted_in_sql() -> None:
+    sql, params = carry.carry_commitment_sql("u")
+    ids = no_carry_evidence_item_ids()
+    assert params[0] == 2
+    assert [p for p in params[1:] if p.startswith('"') and not p.endswith('"')] == ['"DA_', '"TFT_']  # one guard each
+    counted = [p for p in params[1:] if p.startswith('"') and p.endswith('"')]
+    assert sorted(set(counted)) == sorted(json.dumps(i) for i in ids) and len(counted) == 2 * len(ids)
+    assert all(load_item_intent()[i]["intent"] not in CARRY_EVIDENCE for i in ids)
+    assert max(len(m) for m in re.findall(r"(?:REPLACE\()+", sql)) <= len("REPLACE(") * 17  # bounded nesting
 
 
-# ---------------------------------------------------------------- the Match-V1 DA_ namespace
-
-
-@pytest.mark.parametrize(
-    "items, expected",
-    [
-        ([D_GARGOYLE, D_CLAW], False),  # real defensive pair
-        ([D_WARMOG, D_GARGOYLE, D_CLAW], False),
-        ([D_WARMOG, D_WARMOG, D_GARGOYLE], False),
-        ([D_GUINSOO, D_TITAN], True),  # real offensive pair
-        ([D_GARGOYLE, D_GUINSOO], True),  # mixed
-        ([D_TITAN, D_STERAK], True),  # bruiser
-        ([D_GARGOYLE, D_LW], True),  # Last Whisper: offensive via its verified alias
-        ([D_WARMOG, "DA_NotInTheSnapshot"], True),  # unknown DA_ id: never excluded
-        ([D_WARMOG, "DA_BlueBuff"], True),  # ambiguous alias => unknown => include
-        ([RAVAGER_EMBLEM, D_WARMOG], True),  # emblem unknown => include
-        ([RAVAGER_EMBLEM, D_GARGOYLE, D_CLAW], True),
-        ([D_WARMOG, "DA_Component_ChainVest"], False),  # 1 completed item: a component is not an item slot filled
-    ],
-)
-def test_real_match_v1_da_namespace(items, expected) -> None:
-    assert is_carry_observation(items) is expected
-
-
-def test_da_ids_classify_like_their_tft_item_counterparts() -> None:
-    stats = load_item_stats()
-    pairs = {
-        D_GARGOYLE: "TFT_Item_GargoyleStoneplate", D_CLAW: "TFT_Item_DragonsClaw", D_VISAGE: "TFT_Item_Redemption",
-        D_GUINSOO: "TFT_Item_GuinsoosRageblade", D_TITAN: "TFT_Item_TitansResolve", D_STERAK: "TFT_Item_SteraksGage",
-        D_LW: "TFT_Item_LastWhisper",
-        "DA_SunfireCape": "TFT_Item_RedBuff",  # legacy api name: TFT_Item_RedBuff *is* Sunfire Cape
-        "DA_RedBuff": "TFT_Item_RapidFireCannon",  # ... and "Red Buff" is TFT_Item_RapidFireCannon
+def test_no_evidence_count_is_exact_for_duplicates_and_prefix_lookalikes(tmp_path: Path) -> None:
+    intents = {"DA_Wall": {"intent": TANK}, "DA_WallPlus": {"intent": DAMAGE}, "TFT_Item_Wall": {"intent": TANK}}
+    cases = {
+        "A": ["DA_Wall", "DA_Wall", "DA_Wall"],  # 3 no-evidence
+        "B": ["DA_Wall", "DA_WallPlus"],  # quoted match: DA_Wall is not counted inside DA_WallPlus
+        "C": ["TFT_Item_Wall", "DA_Wall"],
+        "D": ["DA_Wall", "TFT_Item_Wall", "DA_New"],
     }
-    for da_id, tft_id in pairs.items():
-        assert classify_item(stats[da_id]) == classify_item(stats[tft_id]), da_id
-        assert tft_id in stats[da_id]["alias_of"], da_id
-    # Every verified alias agrees with its counterparts' classification.
-    for item_id, meta in stats.items():
-        for alias in meta.get("alias_of") or []:
-            if classify_item({"stat_effects": meta["own_stat_effects"], "tags": meta["own_tags"]}) == "unknown":
-                assert classify_item(meta) == classify_item(stats[alias]), (item_id, alias)
-
-
-def test_emblems_stay_unknown_unless_the_feed_gives_offensive_stats() -> None:
-    stats = load_item_stats()
-    emblems = {k: v for k, v in stats.items() if k.startswith("DA_18_Emblem")}
-    assert RAVAGER_EMBLEM in emblems and stats[RAVAGER_EMBLEM]["name"] == "Ravager Emblem"
-    assert all(classify_item(v) == "unknown" for v in emblems.values())
-    assert not any(k in defensive_item_ids() for k in emblems)
-
-
-def test_snapshot_covers_the_match_v1_da_namespace() -> None:
-    """Regression guard: the committed Set 18 snapshot must never again hold
-    zero Match-V1 (DA_) items."""
-    stats = load_item_stats()
-    da = [k for k in stats if k.startswith("DA_")]
-    assert len(da) >= 60
-    for item_id in (D_GARGOYLE, D_CLAW, D_WARMOG, D_GUINSOO, D_TITAN, D_STERAK, D_LW, "DA_Morellonomicon",
-                    "DA_VoidStaff", "DA_Deathblade", "DA_SpearOfShojin", "DA_EdgeOfNight", RAVAGER_EMBLEM):
-        assert item_id in stats, item_id
-    defensive = set(defensive_item_ids())
-    assert {D_GARGOYLE, D_CLAW, D_WARMOG} <= defensive
-    assert not any(k.startswith(("DA_Component_", "TFT_Item_ChainVest")) for k in defensive)
-    # Only equipment: components, emblems, DA_Item_*, and craftables (no set-suffixed augment ids).
-    for k in da:
-        assert k.startswith(("DA_Component_", "DA_18_Emblem", "DA_Item_")) or not k.startswith("DA_18_"), k
-        assert k.startswith("DA_18_Emblem") or not k.endswith("18"), k
-    for augment in ("DA_Hugify18", "DA_18_YordleSpirit", "DA_18_FOURcing", "DA_Barrier18"):
-        assert augment not in stats
-
-
-def test_da_namespace_analytics_appearance_unchanged_commitment_only_offensive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    with Database(tmp_path / "da.sqlite3") as db:
-        for i in range(4):
-            db.ingest_match(_board(f"DAD{i}", "TFT99_Front", [D_GARGOYLE, D_CLAW], placement=5))
-        for i in range(3):
-            db.ingest_match(_board(f"DAO{i}", "TFT99_Front", [D_GUINSOO, D_TITAN], placement=2))
-        after = _stats_by_id(db)["TFT99_Front"]
-        monkeypatch.setattr(carry, "load_item_stats", lambda path=None: {})
-        before = _stats_by_id(db)["TFT99_Front"]
-    assert after.appearances == before.appearances == 7
-    assert after.appearance_rate == before.appearance_rate
-    assert (before.commitment_games, after.commitment_games) == (7, 3)  # the 4 defensive DA_ boards dropped
-    assert after.avg_placement == pytest.approx(2.0)
+    with Database(tmp_path / "exact.sqlite3") as db:
+        for cid, items in cases.items():
+            db.ingest_match(_board(f"X{cid}", cid, items))
+        sql, params = carry.carry_commitment_sql("u", item_intents=intents)
+        eligible = {r[0] for r in db.query_all(f"SELECT u.character_id FROM units u WHERE {sql}", params)}
+    assert eligible == {cid for cid, items in cases.items() if is_carry_observation(items, item_intents=intents)} == {"B", "D"}
