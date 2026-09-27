@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -405,10 +406,15 @@ def test_sql_rule_matches_python_rule_and_elise_on_postgres() -> None:
 def test_every_no_evidence_id_is_counted_in_sql() -> None:
     sql, params = carry.carry_commitment_sql("u")
     ids = no_carry_evidence_item_ids()
+    adaptive, corroborating = carry.adaptive_helm_item_ids(), carry.adaptive_helm_corroborating_item_ids()
     assert params[0] == 2
-    assert [p for p in params[1:] if p.startswith('"') and not p.endswith('"')] == ['"DA_', '"TFT_']  # one guard each
-    counted = [p for p in params[1:] if p.startswith('"') and p.endswith('"')]
-    assert sorted(set(counted)) == sorted(json.dumps(i) for i in ids) and len(counted) == 2 * len(ids)
+    # One namespace guard each: first for the Adaptive Helm corroboration check, then for the no-evidence count.
+    assert [p for p in params[1:] if p.startswith('"') and not p.endswith('"')] == ['"DA_', '"TFT_', '"DA_', '"TFT_']
+    quoted = Counter(p for p in params[1:] if p.startswith('"') and p.endswith('"'))
+    expected = Counter({json.dumps(i): 2 for i in ids})  # no-evidence ids: counted (chain used twice)
+    expected.update(json.dumps(i) for i in adaptive)  # Adaptive Helm: presence check
+    expected.update(json.dumps(i) for i in corroborating)  # corroborating ids: presence check
+    assert quoted == expected
     assert all(load_item_intent()[i]["intent"] not in CARRY_EVIDENCE for i in ids)
     assert max(len(m) for m in re.findall(r"(?:REPLACE\()+", sql)) <= len("REPLACE(") * 17  # bounded nesting
 
@@ -427,3 +433,184 @@ def test_no_evidence_count_is_exact_for_duplicates_and_prefix_lookalikes(tmp_pat
         sql, params = carry.carry_commitment_sql("u", item_intents=intents)
         eligible = {r[0] for r in db.query_all(f"SELECT u.character_id FROM units u WHERE {sql}", params)}
     assert eligible == {cid for cid, items in cases.items() if is_carry_observation(items, item_intents=intents)} == {"B", "D"}
+
+
+# ---------------------------------------------------------------- Adaptive Helm: contextual carry evidence
+#
+# Riot's recommendations make Adaptive Helm DAMAGE, and the snapshot keeps it
+# that way. Carry eligibility treats it contextually: on its own it is weak
+# evidence (frontliners hold it next to defensive items), so a unit with
+# Adaptive Helm needs another, non-Adaptive DAMAGE or MIXED completed item.
+
+T_ADAPTIVE, DEATHCAP = "TFT_Item_AdaptiveHelm", "DA_RabadonsDeathcap"
+NOT_IN_SNAPSHOT = "DA_NotInTheSnapshot"
+
+
+def test_adaptive_helm_keeps_its_riot_derived_intent() -> None:
+    items = load_item_intent()
+    for item_id in (ADAPTIVE, T_ADAPTIVE):
+        meta = items[item_id]
+        assert meta["intent"] == DAMAGE == item_intent(item_id)  # source semantics untouched
+        assert meta["riot_items"] == [T_ADAPTIVE]
+        assert meta["recommended_by_non_tank_roles"] and not meta["recommended_by_tank_roles"]
+        assert item_id not in no_carry_evidence_item_ids()  # not reclassified as a no-evidence item
+    assert carry.adaptive_helm_item_ids() == (ADAPTIVE, T_ADAPTIVE)  # every id resolving to Riot's Adaptive Helm
+    corroborating = set(carry.adaptive_helm_corroborating_item_ids())
+    assert not corroborating & {ADAPTIVE, T_ADAPTIVE}
+    assert {GUINSOO, DEATHCAP, TITAN, IONIC, T_GUINSOO, T_TITAN} <= corroborating
+    assert not corroborating & {WARMOG, GARGOYLE, VISAGE, STEADFAST, CROWNGUARD, RAVAGER_EMBLEM, TALISMAN, THIEFS}
+    assert all(item_intent(i) in (DAMAGE, MIXED) for i in corroborating)
+
+
+def test_intents_of_the_items_used_below() -> None:
+    assert {item_intent(i) for i in (WARMOG, GARGOYLE, VISAGE)} == {TANK}
+    assert item_intent(STEADFAST) == KNOWN_UNLISTED
+    assert {item_intent(i) for i in (RAVAGER_EMBLEM, TALISMAN, NOT_IN_SNAPSHOT)} == {UNKNOWN}
+    assert {item_intent(i) for i in (GUINSOO, DEATHCAP, LW)} == {DAMAGE}
+    assert {item_intent(i) for i in (TITAN, IONIC)} == {MIXED}
+
+
+@pytest.mark.parametrize(
+    "items, expected",
+    [
+        # Adaptive Helm alone never makes a carry observation.
+        ([ADAPTIVE, WARMOG], False),  # 1. Adaptive + TANK
+        ([ADAPTIVE, GARGOYLE], False),
+        ([ADAPTIVE, WARMOG, GARGOYLE], False),  # 2. Adaptive + TANK + TANK
+        ([ADAPTIVE, VISAGE, STEADFAST], False),  # Adaptive + TANK + KNOWN_UNLISTED
+        ([ADAPTIVE, STEADFAST, WARMOG], False),  # 3. Adaptive + KNOWN_UNLISTED + TANK
+        ([ADAPTIVE, RAVAGER_EMBLEM, WARMOG], False),  # 4. Adaptive + UNKNOWN + TANK: UNKNOWN does not corroborate
+        ([ADAPTIVE, RAVAGER_EMBLEM, NOT_IN_SNAPSHOT], False),  # 5. Adaptive + UNKNOWN + UNKNOWN
+        ([ADAPTIVE, TALISMAN, GARGOYLE], False),  # special item outside the domain: UNKNOWN
+        ([ADAPTIVE, ADAPTIVE], False),  # Adaptive Helm does not corroborate itself
+        ([ADAPTIVE, T_ADAPTIVE, WARMOG], False),  # ... under either id
+        ([T_ADAPTIVE, T_WARMOG], False),  # TFT_Item_* id: same answer
+        # Corroborated by another, non-Adaptive DAMAGE or MIXED item.
+        ([ADAPTIVE, GUINSOO], True),  # 6. Adaptive + DAMAGE
+        ([ADAPTIVE, GUINSOO, WARMOG], True),  # 7. Adaptive + DAMAGE + TANK
+        ([ADAPTIVE, TITAN], True),  # 8. Adaptive + MIXED
+        ([ADAPTIVE, TITAN, GARGOYLE], True),  # 9. Adaptive + MIXED + TANK
+        ([ADAPTIVE, DEATHCAP, WARMOG], True),
+        ([ADAPTIVE, IONIC, VISAGE], True),
+        ([ADAPTIVE, RAVAGER_EMBLEM, GUINSOO], True),  # UNKNOWN neither helps nor hurts once corroborated
+        ([T_ADAPTIVE, T_GUINSOO], True), ([T_ADAPTIVE, T_TITAN, T_WARMOG], True),
+        # The minimum completed-item count still applies first.
+        ([ADAPTIVE, "DA_Component_RecurveBow"], False),
+        ([ADAPTIVE], False),
+        # Controls without Adaptive Helm: ordinary rule, UNKNOWN still conservative.
+        ([GUINSOO, WARMOG], True),  # 10. DAMAGE + TANK
+        ([TITAN, WARMOG], True),  # 11. MIXED + TANK
+        ([RAVAGER_EMBLEM, WARMOG], True),  # 12. UNKNOWN + TANK
+        ([NOT_IN_SNAPSHOT, GARGOYLE], True),
+        ([WARMOG, GARGOYLE], False),
+    ],
+)
+def test_adaptive_helm_needs_corroborating_carry_evidence(items, expected) -> None:
+    assert is_carry_observation(items) is expected
+
+
+def test_adaptive_helm_rule_needs_the_snapshot() -> None:
+    """Without a snapshot every item is UNKNOWN and nothing is excluded --
+    Adaptive Helm included (it is recognized through the snapshot)."""
+    assert carry.adaptive_helm_item_ids({}) == ()
+    assert is_carry_observation([ADAPTIVE, WARMOG], item_intents={}) is True
+
+
+ADAPTIVE_PACKAGES = {
+    "TFT99_A_TANK": [ADAPTIVE, WARMOG],
+    "TFT99_A_TANK_TANK": [ADAPTIVE, WARMOG, GARGOYLE],
+    "TFT99_A_UNLISTED_TANK": [ADAPTIVE, STEADFAST, WARMOG],
+    "TFT99_A_UNKNOWN_TANK": [ADAPTIVE, RAVAGER_EMBLEM, WARMOG],
+    "TFT99_A_UNKNOWN_UNKNOWN": [ADAPTIVE, RAVAGER_EMBLEM, NOT_IN_SNAPSHOT],
+    "TFT99_A_A": [ADAPTIVE, ADAPTIVE],
+    "TFT99_TA_TANK": [T_ADAPTIVE, T_WARMOG],
+    "TFT99_A_DAMAGE": [ADAPTIVE, GUINSOO],
+    "TFT99_A_DAMAGE_TANK": [ADAPTIVE, DEATHCAP, WARMOG],
+    "TFT99_A_MIXED": [ADAPTIVE, TITAN],
+    "TFT99_A_MIXED_TANK": [ADAPTIVE, TITAN, GARGOYLE],
+    "TFT99_TA_DAMAGE": [T_ADAPTIVE, T_GUINSOO],
+    "TFT99_A_COMPONENT": [ADAPTIVE, "DA_Component_RecurveBow"],
+    "TFT99_DAMAGE_TANK": [GUINSOO, WARMOG],
+    "TFT99_MIXED_TANK": [TITAN, WARMOG],
+    "TFT99_UNKNOWN_TANK": [RAVAGER_EMBLEM, WARMOG],
+}
+ADAPTIVE_ELIGIBLE = {"TFT99_A_DAMAGE", "TFT99_A_DAMAGE_TANK", "TFT99_A_MIXED", "TFT99_A_MIXED_TANK",
+                     "TFT99_TA_DAMAGE", "TFT99_DAMAGE_TANK", "TFT99_MIXED_TANK", "TFT99_UNKNOWN_TANK"}
+
+
+def _adaptive_sql_matches_python(db: Database) -> None:
+    for i, (cid, items) in enumerate(ADAPTIVE_PACKAGES.items()):
+        db.ingest_match(_board(f"ADAPT{i}", cid, items))
+    sql, params = carry.carry_commitment_sql("u")
+    eligible = {r[0] for r in db.query_all(f"SELECT u.character_id FROM units u WHERE {sql}", params)}
+    assert eligible == {cid for cid, items in ADAPTIVE_PACKAGES.items() if is_carry_observation(items)}
+    assert eligible == ADAPTIVE_ELIGIBLE
+
+
+def test_adaptive_helm_sql_rule_matches_python_on_sqlite(tmp_path: Path) -> None:
+    with Database(tmp_path / "adaptive.sqlite3") as db:
+        _adaptive_sql_matches_python(db)
+
+
+@pytest.mark.skipif(not POSTGRES_TEST_URL, reason="Set TFTLAB_TEST_DATABASE_URL to run")
+def test_adaptive_helm_sql_rule_matches_python_on_postgres() -> None:
+    db = Database(POSTGRES_TEST_URL)
+    try:
+        for table in ("match_discoveries", "seed_samples", "ingest_runs", "traits", "units", "participants", "matches"):
+            db.execute(f"DELETE FROM {table}")
+        db.commit()
+        _adaptive_sql_matches_python(db)
+    finally:
+        db.close()
+
+
+def test_adaptive_helm_sql_uses_quoted_ids_and_hand_built_intents(tmp_path: Path) -> None:
+    """Identity comes from the snapshot's Riot alias, and ids match exactly:
+    'DA_Helm' (resolves to Riot's Adaptive Helm) is not found inside
+    'DA_HelmPlus' (an unrelated DAMAGE item)."""
+    intents = {
+        "DA_Helm": {"intent": DAMAGE, "riot_items": [T_ADAPTIVE]},
+        "DA_HelmPlus": {"intent": DAMAGE, "riot_items": ["TFT_Item_Other"]},
+        "DA_Wall": {"intent": TANK},
+        "DA_Hybrid": {"intent": MIXED},
+    }
+    cases = {
+        "A": ["DA_Helm", "DA_Wall"],  # Adaptive alone
+        "B": ["DA_Helm", "DA_HelmPlus"],  # corroborated by the lookalike, which is its own item
+        "C": ["DA_HelmPlus", "DA_Wall"],  # no Adaptive Helm: ordinary rule
+        "D": ["DA_Helm", "DA_Hybrid", "DA_Wall"],
+        "E": ["DA_Helm", "DA_New", "DA_Wall"],  # UNKNOWN does not corroborate
+        "F": ["DA_New", "DA_Wall"],  # ... but still counts without Adaptive Helm
+    }
+    with Database(tmp_path / "adaptive_exact.sqlite3") as db:
+        for cid, items in cases.items():
+            db.ingest_match(_board(f"H{cid}", cid, items))
+        sql, params = carry.carry_commitment_sql("u", item_intents=intents)
+        eligible = {r[0] for r in db.query_all(f"SELECT u.character_id FROM units u WHERE {sql}", params)}
+    python = {cid for cid, items in cases.items() if is_carry_observation(items, item_intents=intents)}
+    assert eligible == python == {"B", "C", "D", "F"}
+
+
+def test_discovery_excludes_adaptive_helm_tank_boards_and_keeps_corroborated_ones(tmp_path: Path) -> None:
+    """A frontliner on Adaptive Helm + defensive items is no longer a carry
+    candidate; a unit whose Adaptive Helm sits next to real carry items
+    (Guinsoo's, Titan's) stays in the carry population and in Discovery."""
+    with Database(tmp_path / "adaptive_discovery.sqlite3") as db:
+        for i in range(8):  # Adaptive Helm is this board's only carry evidence
+            tank_items = [ADAPTIVE, WARMOG, GARGOYLE] if i % 2 else [ADAPTIVE, VISAGE, STEADFAST]
+            db.ingest_match(_board(f"AHTANK{i}", "TFT99_Frontliner", tank_items, placement=3))
+        for i in range(6):  # corroborated by a non-Adaptive DAMAGE or MIXED item
+            carry_items = [ADAPTIVE, GUINSOO, WARMOG] if i % 2 else [ADAPTIVE, TITAN]
+            db.ingest_match(_board(f"AHCARRY{i}", "TFT99_Caster", carry_items, placement=2))
+        stats = _stats_by_id(db)
+        after = {c.character_id for c in discover_candidates(db, max_cost=5, min_samples=3)}
+        window = db.query_one("SELECT balance_window FROM matches LIMIT 1")[0]
+        frontliner_sets = carry_item_sets(db, "TFT99_Frontliner", window)
+        caster_sets = carry_item_sets(db, "TFT99_Caster", window)
+    assert "TFT99_Frontliner" not in stats  # no commitment games at all
+    assert stats["TFT99_Caster"].commitment_games == 6
+    assert "TFT99_Frontliner" not in after and "TFT99_Caster" in after
+    assert not frontliner_sets  # no item-package evidence from the tank boards either
+    assert sorted((json.loads(row[0]), row[1]) for row in caster_sets) == [
+        ([ADAPTIVE, GUINSOO, WARMOG], 3), ([ADAPTIVE, TITAN], 3),
+    ]
