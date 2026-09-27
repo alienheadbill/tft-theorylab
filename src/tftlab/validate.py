@@ -171,11 +171,22 @@ def _is_source_empty(payload_json: str, participant_index: int, placement: int, 
     return "units" not in entry or entry["units"] == []
 
 
-def classify_participants_without_units(db: Database, *, balance_window: str | None = None) -> tuple[int, int]:
+def classify_participants_without_units(
+    db: Database, *, balance_window: str | None = None, queue_id: int | None = None
+) -> tuple[int, int]:
     """(source-empty, unexpected) counts for participants with no stored
-    units -- store-wide, or only in matches of `balance_window` when given.
-    Reads raw payloads only for the matches involved."""
-    scope = "JOIN matches m ON m.match_id = p.match_id AND m.balance_window = ?" if balance_window is not None else ""
+    units -- store-wide, or only in matches of `balance_window` and/or
+    `queue_id` when given (so a report scoped to one queue gets counts for
+    exactly its own population). Reads raw payloads only for the matches
+    involved."""
+    conditions, params = [], []
+    if balance_window is not None:
+        conditions.append("m.balance_window = ?")
+        params.append(balance_window)
+    if queue_id is not None:
+        conditions.append("m.queue_id = ?")
+        params.append(queue_id)
+    scope = f"JOIN matches m ON m.match_id = p.match_id AND {' AND '.join(conditions)}" if conditions else ""
     rows = db.query_all(
         f"""
         SELECT p.match_id, p.participant_index, p.placement
@@ -187,7 +198,7 @@ def classify_participants_without_units(db: Database, *, balance_window: str | N
         )
         ORDER BY p.match_id, p.participant_index
         """,
-        (balance_window,) if balance_window is not None else (),
+        tuple(params),
     )
     source_empty = 0
     unexpected = 0

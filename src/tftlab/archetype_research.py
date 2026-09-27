@@ -259,7 +259,11 @@ def load_population(db: Database, balance_window: str) -> tuple[dict[str, Any], 
         f"SELECT t.match_id, t.participant_index, t.trait_name, t.style, t.tier_current FROM traits t {_window_scope('t')}",
         params,
     )
-    source_empty, unexpected = classify_participants_without_units(db, balance_window=balance_window)
+    # Same Ranked population as the boards: validate's own source-empty
+    # semantics, scoped to this window AND the Ranked queue.
+    source_empty, unexpected = classify_participants_without_units(
+        db, balance_window=balance_window, queue_id=RANKED_TFT_QUEUE_ID
+    )
 
     units: dict[tuple[str, int], list[tuple[int, Unit]]] = defaultdict(list)
     for mid, pidx, uidx, cid, cost, tier, items_json in unit_rows:
@@ -284,17 +288,20 @@ def load_population(db: Database, balance_window: str) -> tuple[dict[str, Any], 
         normalize_board(obs, (m, p), pl, lv, (u for _, u in sorted(units[(m, p)], key=lambda x: x[0])), traits.get((m, p), {}), champions, identity)
         for obs, (m, p, pl, lv) in enumerate(observable)
     ]
+    without_units = len(participants) - len(boards)
     population = {
         "balance_window": balance_window,
         "queue_id": RANKED_TFT_QUEUE_ID,
         "window_matches_any_queue": all_matches,
-        "matches": ranked_matches,
         "excluded_non_ranked_matches": all_matches - ranked_matches,
-        "participants": len(participants),
-        "unit_observable_participants": len(boards),
-        "participants_without_units": len(participants) - len(boards),
-        "source_empty_participants_window": int(source_empty),
-        "unexpected_participants_without_units_window": int(unexpected),
+        "ranked_matches": ranked_matches,
+        "ranked_participants": len(participants),
+        "ranked_unit_observable_participants": len(boards),
+        "ranked_participants_without_units": without_units,
+        "ranked_source_empty_participants": int(source_empty),
+        "ranked_unexpected_participants_without_units": int(unexpected),
+        # Every Ranked participant is either unit-observable or classified.
+        "ranked_denominators_consistent": without_units == int(source_empty) + int(unexpected),
     }
     return population, boards
 
@@ -440,19 +447,34 @@ def _renumber(assign: Mapping[int, int], vecs: Mapping[int, tuple]) -> dict[int,
     return {k: remap[g] for k, g in sorted(assign.items())}
 
 
+def structural_order_key(board: Board, vec: tuple[Mapping[str, float], Mapping[str, float]]) -> tuple:
+    """Leader-pass order from board STRUCTURE only: more identity units
+    first (more complete boards seed groups), then the strategy's own board
+    vector (sorted unit weights, then active trait keys). Never placement,
+    Top 4, win, carry qualification or item performance. The observation id
+    only breaks ties between boards whose vectors are identical, and those
+    are interchangeable: every similarity, profile (a mean of vectors) and
+    merge statistic depends on the vectors alone, so which of them comes
+    first cannot change any board's final group."""
+    units, traits = vec
+    return (-len(board.identity), tuple(sorted(units.items())), tuple(sorted(traits)), board.obs)
+
+
 def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig) -> Grouping:
     """Deterministic leader pass + profile refinement (+ merge for B/C).
 
-    Leader pass: boards are visited best placement first, then larger boards,
-    then observation id; each joins its most similar group (>= tau) or starts
-    one. Refinement: recompute mean profiles, drop groups under
+    Leader pass: boards are visited in a purely STRUCTURAL order
+    (`structural_order_key`: more identity units first, then the board's own
+    similarity vector); placement and every other outcome play no part, so
+    archetype membership is invariant to outcome. Each board joins its most
+    similar group (>= tau) or starts one. Refinement: recompute mean profiles, drop groups under
     min_group_size, reassign every board to its most similar profile (>= tau,
     else ungrouped); repeat until at most convergence_moved_share of boards
     move or max_refine_iterations is reached (reported either way)."""
     champions = load_roster().champions
     eligible = [b for b in boards if len(b.identity) >= config.min_identity_units]
     vecs = {b.obs: board_vectors(b, strategy, config, champions) for b in eligible}
-    order = sorted(eligible, key=lambda b: (b.placement, -len(b.identity), b.obs))
+    order = sorted(eligible, key=lambda b: structural_order_key(b, vecs[b.obs]))
     log: list[str] = []
 
     members: list[list[int]] = []
@@ -982,7 +1004,7 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
     names = Names()
     eligible = [b for b in boards if len(b.identity) >= config.min_identity_units]
     population = {**population,
-                  "boards_eligible_for_grouping": len(eligible),
+                  "ranked_boards_eligible_for_grouping": len(eligible),
                   "boards_below_min_identity_units": len(boards) - len(eligible),
                   "boards_with_excluded_non_shop_units": sum(1 for b in boards if b.excluded)}
     report: dict[str, Any] = {"kind": "RESEARCH / VALIDATION -- experimental board-archetype analysis, not served to users",

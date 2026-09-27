@@ -64,7 +64,9 @@ def board_traits(board: list[dict]) -> list[dict]:
     return out
 
 
-def make_payload(match_id: str, boards: list[list[dict]], *, queue_id: int = 1100, puuid_prefix: str = "PUUID-SECRET") -> dict:
+def make_payload(match_id: str, boards: list[list[dict]], *, queue_id: int = 1100, puuid_prefix: str = "PUUID-SECRET",
+                 placements: list[int] | None = None) -> dict:
+    placements = placements or list(range(1, len(boards) + 1))
     return {
         "metadata": {"match_id": match_id, "participants": [f"{puuid_prefix}-{i}" for i in range(len(boards))]},
         "info": {
@@ -72,7 +74,7 @@ def make_payload(match_id: str, boards: list[list[dict]], *, queue_id: int = 110
             "tft_game_type": "standard", "queue_id": queue_id, "tft_set_number": 18, "tft_set_core_name": "TFTSet18",
             "game_datetime": 1_790_000_000_000,
             "participants": [
-                {"placement": i + 1, "level": 8, "augments": [], "units": b, "puuid": f"{puuid_prefix}-{i}",
+                {"placement": placements[i], "level": 8, "augments": [], "units": b, "puuid": f"{puuid_prefix}-{i}",
                  "riotIdGameName": "SecretName", "riotIdTagline": "NA1",
                  "traits": board_traits(b)}
                 for i, b in enumerate(boards)
@@ -101,24 +103,42 @@ def noise(rng: random.Random) -> list[dict]:
     return [unit(c) for c in rng.sample(C1 + C2 + C3 + C4, 7)]
 
 
-def build_payloads(seed: int = 3, matches: int = 12) -> list[dict]:
+def build_payloads(seed: int = 3, matches: int = 12, placement_seed: int | None = None) -> list[dict]:
+    """`placement_seed` permutes each match's placements while keeping every
+    board's structure (units, stars, items, traits) and position identical."""
     rng = random.Random(seed)
     kinds = [x_board] * 4 + [y_board] * 2 + [x_other_shell] * 1 + [noise]
     payloads = []
     for m in range(matches):
         boards = [kind(rng) for kind in kinds]
         rng.shuffle(boards)
-        payloads.append(make_payload(f"M{m:03d}", boards))
+        placements = list(range(1, len(boards) + 1))
+        if placement_seed is not None:
+            random.Random(placement_seed * 1000 + m).shuffle(placements)
+        payloads.append(make_payload(f"M{m:03d}", boards, placements=placements))
     return payloads
+
+
+def populate(db: Database, payloads: list[dict]) -> None:
+    """The Ranked boards plus two population edge cases:
+    - EMPTYR (Ranked): one participant Riot sent with no units (source-empty);
+    - NORMAL1 (queue 1090, not Ranked): a 6-unit board that would be
+      grouping-eligible if queue scoping were wrong, a source-empty
+      participant, and an "unexpected" participant (the payload lists units
+      but the stored rows are gone) -- none may reach the Ranked counts."""
+    for p in payloads:
+        db.ingest_match(p)
+    db.ingest_match(make_payload("EMPTYR", [[]]))
+    db.ingest_match(make_payload("NORMAL1", [[unit(c) for c in C1[:6]], [], [unit(c) for c in C2[:5]]], queue_id=1090))
+    db.execute("DELETE FROM units WHERE match_id = 'NORMAL1' AND participant_index = 2")
+    db.commit()
 
 
 @pytest.fixture()
 def store(tmp_path: Path) -> Path:
     path = tmp_path / "store.sqlite3"
     with Database(path) as db:
-        for p in build_payloads():
-            db.ingest_match(p)
-        db.ingest_match(make_payload("NORMAL1", [[unit(c) for c in C1[:6]]], queue_id=1090))  # non-ranked
+        populate(db, build_payloads())
     return path
 
 
@@ -244,12 +264,35 @@ def test_prune_audit_agrees_with_brute_force(store: Path) -> None:
 def test_population_uses_ranked_unit_observable_boards(store: Path) -> None:
     report, markdown, _ = run(store)
     pop = report["population"]
-    assert (pop["window_matches_any_queue"], pop["matches"], pop["excluded_non_ranked_matches"]) == (13, 12, 1)
-    assert (pop["participants"], pop["unit_observable_participants"], pop["boards_eligible_for_grouping"]) == (96, 96, 96)
+    assert (pop["window_matches_any_queue"], pop["excluded_non_ranked_matches"], pop["ranked_matches"]) == (14, 1, 13)
+    assert (pop["ranked_participants"], pop["ranked_unit_observable_participants"], pop["ranked_participants_without_units"]) == (97, 96, 1)
+    assert (pop["ranked_source_empty_participants"], pop["ranked_unexpected_participants_without_units"]) == (1, 0)
+    assert pop["ranked_denominators_consistent"] is True
+    assert pop["ranked_boards_eligible_for_grouping"] == 96
     assert pop["queue_id"] == 1100
     assert report["read_only_connection"] == "sqlite mode=ro"
     assert markdown[0].startswith("# Board archetype research report (EXPERIMENTAL")
     assert any("Declared configuration" in line for line in markdown)
+
+
+def test_non_ranked_match_never_reaches_ranked_denominators_or_grouping(store: Path) -> None:
+    """Mixed-queue regression: the non-Ranked match counts only toward the
+    any-queue and excluded counts, never toward Ranked participants,
+    source-empty/unexpected counts or grouping."""
+    from tftlab.validate import classify_participants_without_units
+
+    with Database.open_existing(store) as db:
+        assert classify_participants_without_units(db, balance_window=WINDOW) == (2, 1)  # window, any queue
+        assert classify_participants_without_units(db, balance_window=WINDOW, queue_id=1100) == (1, 0)
+        assert classify_participants_without_units(db, balance_window=WINDOW, queue_id=1090) == (1, 1)
+        assert classify_participants_without_units(db, queue_id=1090) == (1, 1)  # queue scope alone
+    report, _, membership = run(store)
+    pop = report["population"]
+    assert pop["window_matches_any_queue"] - pop["ranked_matches"] == pop["excluded_non_ranked_matches"] == 1
+    assert (pop["ranked_source_empty_participants"], pop["ranked_unexpected_participants_without_units"]) == (1, 0)
+    for strategy in report["strategies"].values():
+        assert strategy["boards_considered"] == 96  # the 6-unit Normal board is not grouped
+    assert {r["observation"] for r in membership} <= set(range(96))
 
 
 def test_canonical_names_come_from_committed_metadata_or_say_unresolved() -> None:
@@ -271,6 +314,38 @@ def test_markdown_shows_names_not_raw_ids(store: Path) -> None:
     assert "DA_18_" not in body.replace("UNRESOLVED: DA_18_", "")
 
 
+def partitions(membership: list[dict]) -> dict[str, frozenset[frozenset[int]]]:
+    """Label-free membership: per strategy, the set of groups as sets of
+    observations (group numbers themselves are arbitrary)."""
+    groups: dict[tuple[str, int], set[int]] = {}
+    for row in membership:
+        groups.setdefault((row["strategy"], row["group"]), set()).add(row["observation"])
+    out: dict[str, set[frozenset[int]]] = {}
+    for (strategy, _), obs in groups.items():
+        out.setdefault(strategy, set()).add(frozenset(obs))
+    return {k: frozenset(v) for k, v in out.items()}
+
+
+@pytest.mark.parametrize("placement_seed", [1, 2, 3])
+def test_archetype_membership_is_invariant_to_outcome(tmp_path: Path, placement_seed: int) -> None:
+    """ARCHETYPE IDENTITY MUST BE INVARIANT TO OUTCOME: the same board
+    structures with shuffled placements give the same groups in every
+    strategy (placement is only summarized after grouping)."""
+    base, shuffled = tmp_path / "base.sqlite3", tmp_path / f"shuffled{placement_seed}.sqlite3"
+    with Database(base) as db:
+        for p in build_payloads():
+            db.ingest_match(p)
+    with Database(shuffled) as db:
+        for p in build_payloads(placement_seed=placement_seed):
+            db.ingest_match(p)
+    a, b = run(base)[2], run(shuffled)[2]
+    assert [r["placement"] for r in a] != [r["placement"] for r in b]  # outcomes really changed
+    pa, pb = partitions(a), partitions(b)
+    assert set(pa) == {s.name for s in ar.STRATEGIES}
+    for strategy in pa:
+        assert pa[strategy] == pb[strategy], strategy
+
+
 def test_report_is_read_only_and_deterministic(store: Path, tmp_path: Path) -> None:
     digest = hashlib.sha256(store.read_bytes()).hexdigest()
     first = run(store)
@@ -284,9 +359,7 @@ def test_report_is_read_only_and_deterministic(store: Path, tmp_path: Path) -> N
     payloads = build_payloads()
     random.Random(99).shuffle(payloads)
     with Database(other) as db:
-        for p in payloads:
-            db.ingest_match(p)
-        db.ingest_match(make_payload("NORMAL1", [[unit(c) for c in C1[:6]]], queue_id=1090))
+        populate(db, payloads)
     shuffled = run(other)
     assert json.dumps(first[0], sort_keys=True, default=str) == json.dumps(shuffled[0], sort_keys=True, default=str)
 
@@ -311,7 +384,7 @@ def test_outputs_hold_no_player_or_match_identifiers(store: Path, tmp_path: Path
     assert sorted(p.name for p in paths) == ["archetypes_14.6_membership.csv", "archetypes_14.6_report.json", "archetypes_14.6_report.md"]
     for path in paths:
         text = path.read_text()
-        for secret in ("PUUID-SECRET", "SecretName", "M000", "M011", "NORMAL1"):
+        for secret in ("PUUID-SECRET", "SecretName", "M000", "M011", "NORMAL1", "EMPTYR"):
             assert secret not in text, (path.name, secret)
     rows = list(csv.DictReader(paths[2].open()))
     assert set(rows[0]) == {"strategy", "observation", "group", "variant", "placement", "shop_units"}
@@ -363,8 +436,7 @@ def test_postgres_report_runs_in_a_server_enforced_read_only_transaction() -> No
         for table in ("match_discoveries", "seed_samples", "ingest_runs", "traits", "units", "participants", "matches"):
             db.execute(f"DELETE FROM {table}")
         db.commit()
-        for p in build_payloads():
-            db.ingest_match(p)
+        populate(db, build_payloads())
         db.commit()
     finally:
         db.close()
@@ -373,7 +445,8 @@ def test_postgres_report_runs_in_a_server_enforced_read_only_transaction() -> No
         with pytest.raises(Exception):
             ro.execute("DELETE FROM matches")  # the session refuses writes
     assert report["read_only_connection"] == "postgres transaction_read_only=on"
-    assert report["population"]["boards_eligible_for_grouping"] == 96
+    assert report["population"]["ranked_boards_eligible_for_grouping"] == 96
+    assert (report["population"]["ranked_source_empty_participants"], report["population"]["ranked_unexpected_participants_without_units"]) == (1, 0)
 
 
 # ---------------------------------------------------------------- workflow
