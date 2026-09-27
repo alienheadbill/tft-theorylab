@@ -41,6 +41,20 @@ positive). TANK and KNOWN_UNLISTED items alone never prove carry intent, so
 Spirit Visage + Steadfast Heart or Crownguard + Warmog's is not a carry
 observation, while Ravager Emblem + Guinsoo's, Titan's + Sterak's or
 Talisman of Ascension + Warmog's is.
+
+Contextual exception (a TheoryLabs interpretation, not a Riot semantic):
+Adaptive Helm keeps its Riot-derived intent (DAMAGE -- recommended by
+non-Tank caster roles; the snapshot is untouched), but for carry
+eligibility it is weak evidence on its own: frontliners often hold it next
+to defensive items. So when a unit holds Adaptive Helm, the carry evidence
+must come from another, non-Adaptive completed item whose intent is DAMAGE
+or MIXED. UNKNOWN, TANK and KNOWN_UNLISTED items do not corroborate it (nor
+does another Adaptive Helm): Adaptive Helm + Warmog's, or Adaptive Helm + an
+unknown item + Gargoyle, is not a carry observation, while Adaptive Helm +
+Guinsoo's or Adaptive Helm + Titan's is. Boards without Adaptive Helm follow
+the ordinary rule above, UNKNOWN included. Adaptive Helm is recognized by
+Riot's item id (`TFT_Item_AdaptiveHelm`) through the snapshot's alias
+bridge, so every Match-V1 id resolving to it (`DA_AdaptiveHelm`) is covered.
 """
 
 from __future__ import annotations
@@ -62,6 +76,13 @@ INTENTS = (DAMAGE, TANK, MIXED, KNOWN_UNLISTED, UNKNOWN)
 #: Intents that prove a completed item was bought for a carry (UNKNOWN is
 #: included conservatively). TANK and KNOWN_UNLISTED do not.
 CARRY_EVIDENCE = frozenset({DAMAGE, MIXED, UNKNOWN})
+
+#: Riot's item for Adaptive Helm. Its source intent is left as Riot's
+#: recommendations make it; only carry eligibility treats it contextually
+#: (see the module docstring).
+ADAPTIVE_HELM_RIOT_ITEM = "TFT_Item_AdaptiveHelm"
+#: Intents that corroborate Adaptive Helm when it is on the unit.
+ADAPTIVE_HELM_CORROBORATION = frozenset({DAMAGE, MIXED})
 
 
 def intent_from_recommendations(
@@ -110,6 +131,30 @@ def no_carry_evidence_item_ids(item_intents: Mapping[str, Mapping[str, Any]] | N
     ))
 
 
+def adaptive_helm_item_ids(item_intents: Mapping[str, Mapping[str, Any]] | None = None) -> tuple[str, ...]:
+    """Snapshot ids that are Adaptive Helm: Riot's own item and every id the
+    snapshot resolves to it (`DA_AdaptiveHelm`), sorted. Empty without a
+    snapshot, so a missing snapshot still excludes nothing."""
+    intents = load_item_intent() if item_intents is None else item_intents
+    return tuple(sorted(
+        i for i, m in intents.items()
+        if i == ADAPTIVE_HELM_RIOT_ITEM or ADAPTIVE_HELM_RIOT_ITEM in (m.get("riot_items") or ())
+    ))
+
+
+def adaptive_helm_corroborating_item_ids(
+    item_intents: Mapping[str, Mapping[str, Any]] | None = None,
+) -> tuple[str, ...]:
+    """Completed, non-Adaptive items whose intent corroborates Adaptive Helm
+    (DAMAGE or MIXED), sorted."""
+    intents = load_item_intent() if item_intents is None else item_intents
+    adaptive = set(adaptive_helm_item_ids(intents))
+    return tuple(sorted(
+        i for i, m in intents.items()
+        if i not in adaptive and not is_component(i) and m.get("intent") in ADAPTIVE_HELM_CORROBORATION
+    ))
+
+
 def is_carry_observation(
     item_ids: Iterable[str],
     *,
@@ -120,6 +165,12 @@ def is_carry_observation(
     completed = [i for i in item_ids if i and not is_component(i)]
     if len(completed) < commitment_items:
         return False
+    adaptive = set(adaptive_helm_item_ids(item_intents))
+    if adaptive.intersection(completed):
+        # Adaptive Helm alone is not enough: another completed item must be DAMAGE or MIXED.
+        return any(
+            item_intent(i, item_intents) in ADAPTIVE_HELM_CORROBORATION for i in completed if i not in adaptive
+        )
     return any(item_intent(i, item_intents) in CARRY_EVIDENCE for i in completed)
 
 
@@ -150,27 +201,70 @@ def carry_commitment_sql(
     "TFT_", ...) only run when the json contains `"<prefix>` at all: a Set 18
     board holds no `TFT_*` id, so those chains are skipped in one check.
     (One small expression, rather than one count per id, also keeps
-    Postgres' JIT from compiling hundreds of terms per query.)"""
+    Postgres' JIT from compiling hundreds of terms per query.)
+
+    A unit holding Adaptive Helm (any id in `adaptive_helm_item_ids`) is
+    instead eligible only when its json also holds a corroborating id
+    (`adaptive_helm_corroborating_item_ids`: DAMAGE or MIXED, never Adaptive
+    Helm itself) -- found the same way, as a REPLACE chain that shortens the
+    json."""
     ids = no_carry_evidence_item_ids(item_intents)
+    adaptive = adaptive_helm_item_ids(item_intents)
     base = f"{alias}.completed_item_count >= ?"
-    if not ids:
+    if not ids and not adaptive:
         return f"({base})", [commitment_items]
     json_col = f"{alias}.items_json"
+    params: list[Any] = [commitment_items]
+    ordinary, ordinary_params = f"{alias}.completed_item_count > 0", []
+    if ids:
+        groups = []
+        for prefix, members in _by_namespace(ids).items():
+            counts, count_params = [], []
+            for start in range(0, len(members), _CHAIN):
+                chain, chain_params = _replace_chain(json_col, members[start:start + _CHAIN])
+                counts.append(f"(LENGTH({chain}) - LENGTH(REPLACE({chain}, ?, '')))")
+                count_params += chain_params + chain_params + [_MARKER]
+            groups.append(f"(CASE WHEN {_contains(json_col)} THEN {' + '.join(counts)} ELSE 0 END)")
+            ordinary_params += [f'"{prefix}', *count_params]
+        ordinary = f"{alias}.completed_item_count > ({' + '.join(groups)})"
+    if not adaptive:
+        return f"({base} AND {ordinary})", params + ordinary_params
+    holds_adaptive = " OR ".join(_contains(json_col) for _ in adaptive)
+    holds_adaptive_params = [json.dumps(i) for i in adaptive]
+    corroborated, corroborated_params = [], []
+    for prefix, members in _by_namespace(adaptive_helm_corroborating_item_ids(item_intents)).items():
+        chains, chains_params = [], []
+        for start in range(0, len(members), _CHAIN):
+            chain, chain_params = _replace_chain(json_col, members[start:start + _CHAIN])
+            chains.append(f"LENGTH({chain}) < LENGTH({json_col})")
+            chains_params += chain_params
+        corroborated.append(f"({_contains(json_col)} AND ({' OR '.join(chains)}))")
+        corroborated_params += [f'"{prefix}', *chains_params]
+    condition = (
+        f"CASE WHEN ({holds_adaptive}) THEN ({' OR '.join(corroborated) or '1 = 0'}) ELSE ({ordinary}) END"
+    )
+    return (
+        f"({base} AND {condition})",
+        params + holds_adaptive_params + corroborated_params + ordinary_params,
+    )
+
+
+def _by_namespace(ids: Iterable[str]) -> dict[str, list[str]]:
     namespaces: dict[str, list[str]] = {}
     for item_id in ids:
         namespaces.setdefault(item_id.split("_", 1)[0] + "_", []).append(item_id)
-    groups, params = [], [commitment_items]
-    for prefix, members in namespaces.items():
-        counts, count_params = [], []
-        for start in range(0, len(members), _CHAIN):
-            chain, chain_params = json_col, []
-            for item_id in members[start:start + _CHAIN]:
-                chain = f"REPLACE({chain}, ?, ?)"
-                chain_params += [json.dumps(item_id), _MARKER]
-            counts.append(f"(LENGTH({chain}) - LENGTH(REPLACE({chain}, ?, '')))")
-            count_params += chain_params + chain_params + [_MARKER]
-        groups.append(
-            f"(CASE WHEN LENGTH(REPLACE({json_col}, ?, '')) < LENGTH({json_col}) THEN {' + '.join(counts)} ELSE 0 END)"
-        )
-        params += [f'"{prefix}', *count_params]
-    return f"({base} AND {alias}.completed_item_count > ({' + '.join(groups)}))", params
+    return namespaces
+
+
+def _replace_chain(json_col: str, members: Iterable[str]) -> tuple[str, list[Any]]:
+    """REPLACE calls turning every quoted id in `members` into the marker."""
+    chain, chain_params = json_col, []
+    for item_id in members:
+        chain = f"REPLACE({chain}, ?, ?)"
+        chain_params += [json.dumps(item_id), _MARKER]
+    return chain, chain_params
+
+
+def _contains(json_col: str) -> str:
+    """True when `json_col` holds the next parameter as a substring."""
+    return f"LENGTH(REPLACE({json_col}, ?, '')) < LENGTH({json_col})"
