@@ -1,0 +1,83 @@
+name: Read-only archetype research report
+
+# RESEARCH / VALIDATION INFRASTRUCTURE -- not a production feature.
+#
+# Manually-triggered, read-only board-archetype research report against the
+# production database (DATABASE_URL lives only in this repository's Actions
+# secrets). It runs exactly one command, `tftlab archetype-report`, which
+# opens the database with Database.open_existing only: the session is
+# started with default_transaction_read_only=on, the report refuses to run
+# unless the server reports transaction_read_only = on, and no schema
+# creation, migration, backfill, write, ingest, Riot or CommunityDragon call
+# happens. No Riot key is used. The human-readable report is printed to this
+# job's log and uploaded (with a JSON summary and an anonymized membership
+# CSV) as a workflow artifact; nothing is committed or written to Postgres.
+on:
+  workflow_dispatch:
+    inputs:
+      balance_window:
+        description: "Balance window to analyze"
+        required: true
+        default: "18.3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: read-only-archetype-report
+  cancel-in-progress: false
+
+jobs:
+  archetype-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # Before checkout and before any database access. Static messages
+      # only -- never echoes DATABASE_URL.
+      - name: Validate production configuration
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BALANCE_WINDOW: ${{ github.event.inputs.balance_window }}
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This workflow must be run with 'main' explicitly selected as the branch (got ${GITHUB_REF})." >&2
+            exit 1
+          fi
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "::error::DATABASE_URL repository secret is not set. Refusing to proceed: the CLI's local-SQLite fallback must never be used against production." >&2
+            exit 1
+          fi
+          case "${DATABASE_URL}" in
+            postgres://*|postgresql://*) ;;
+            *)
+              echo "::error::DATABASE_URL must start with postgres:// or postgresql://." >&2
+              exit 1
+              ;;
+          esac
+          if ! printf '%s' "${BALANCE_WINDOW}" | grep -Eq '^[0-9]{1,3}\.[0-9]{1,3}[a-z]?$'; then
+            echo "::error::balance_window must look like 18.3 or 18.2b." >&2
+            exit 1
+          fi
+          echo "Production configuration looks valid."
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e ".[postgres]"
+
+      - name: Run archetype research report (read-only)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BALANCE_WINDOW: ${{ github.event.inputs.balance_window }}
+        run: tftlab archetype-report --out-dir archetype-report --balance-window "$BALANCE_WINDOW"
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: archetype-report
+          path: archetype-report/
+          retention-days: 30

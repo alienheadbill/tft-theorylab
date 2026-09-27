@@ -1003,6 +1003,37 @@ def discovery_report_command(
         console.print(f"Wrote {path}")
 
 
+@app.command("archetype-report")
+def archetype_report_command(
+    db: str = typer.Option(
+        None, "--db", help="SQLite path or postgres:// URL; defaults to DATABASE_URL or TFT_DB_PATH"
+    ),
+    balance_window: str = typer.Option("18.3", "--balance-window", help="Balance window to analyze"),
+    out_dir: Path = typer.Option(Path("archetype-report"), "--out-dir"),
+    print_report: bool = typer.Option(True, "--print/--no-print", help="Also print the Markdown report to stdout"),
+) -> None:
+    """EXPERIMENTAL board-archetype research report (research/validation
+    only; results are not served to users).
+
+    Groups one balance window's unit-observable Ranked TFT final boards with
+    three predeclared strategies and writes a human-reviewable Markdown
+    report, a JSON summary and an anonymized membership CSV. Opens the
+    database with `Database.open_existing` only (Postgres
+    `default_transaction_read_only=on`, verified before any analysis; SQLite
+    `mode=ro`): no schema creation, migration, backfill or write, and no Riot
+    or CommunityDragon call."""
+    from .archetype_research import build_report, write_outputs
+
+    with Database.open_existing(_resolve_db_target(db)) as database:
+        report, markdown, membership = build_report(database, balance_window=balance_window)
+    paths = write_outputs(report, markdown, membership, out_dir)
+    if print_report:
+        # Plain lines, not rich: the log must stay readable (no wrapping at 80 columns).
+        typer.echo("\n".join(markdown))
+    for path in paths:
+        typer.echo(f"Wrote {path}")
+
+
 @app.command()
 def leaderboard(
     db: Path = typer.Option(Path("data/tftlab.sqlite3"), "--db"),
