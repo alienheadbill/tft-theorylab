@@ -17,9 +17,12 @@ refuses to continue unless a Postgres server reports
    (`is_identity_unit`); roster summons, camps, anvils and other trait-less
    entities are excluded, duplicate copies count once, and ids missing from
    the roster are kept under their raw id (never guessed) when their stored
-   shop cost is 1-5. Analytical METADATA (placement, stars, items, carry
-   qualification, traits) is summarized only after grouping. The current carry
-   classifier never defines a group.
+   shop cost is 1-5. Champion membership is the fundamental board identity:
+   strategies A and B group from champion structure alone, and strategy C
+   additionally uses completed-item count, star/cost splash weighting and
+   active traits as predeclared secondary structural signals. Placement and
+   every other outcome, and the current carry qualification, are post-group
+   analytics only and never influence grouping.
 3. Groups boards with three predeclared strategies (`STRATEGIES`) whose every
    threshold lives in `ArchetypeConfig` and is printed with the results:
    A. structural baseline -- champion-set similarity only (the control);
