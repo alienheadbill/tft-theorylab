@@ -448,6 +448,7 @@ class Grouping:
     merges: int
     prune_audit: dict[str, Any] = field(default_factory=dict)
     merge_checks: dict[str, int] = field(default_factory=dict)
+    merge_diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 #: Leader-pass progress line every this many boards (status only).
@@ -587,11 +588,12 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
     sizes = Counter(assign.values())
     assign = _renumber({k: g for k, g in assign.items() if sizes[g] >= config.min_group_size}, vecs)
 
-    group, merges, checks = dict(assign), 0, {}
+    group, merges, checks, diagnostics = dict(assign), 0, {}, None
     if strategy.merge:
         progress(f"{strategy.name}: variant merge started over {len(set(assign.values()))} variants")
+        diagnostics = MergeDiagnostics(config.tau)
         to_group, merge_log, checks = merge_variants([b for b in eligible if b.obs in assign], assign, strategy, config,
-                                                     vecs=vecs)
+                                                     vecs=vecs, diagnostics=diagnostics)
         group = {k: to_group[v] for k, v in assign.items()}
         merges = len(merge_log)
         log.append(f"variant merge: {merges} merges, {len(set(assign.values()))} variants -> {len(set(group.values()))} groups; "
@@ -599,7 +601,7 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
         progress(f"{strategy.name}: variant merge completed, {merges} merges, {len(set(group.values()))} groups, "
                  f"rejected {checks['rejected_core']} core / {checks['rejected_similarity']} similarity")
     result = Grouping(variant=assign, group=group, log=log, converged=converged, refine_moves=moves, merges=merges,
-                      merge_checks=checks)
+                      merge_checks=checks, merge_diagnostics=diagnostics.summary() if diagnostics else {})
     progress(f"{strategy.name}: prune audit started")
     result.prune_audit = prune_audit(eligible, vecs, assign, strategy, config)
     progress(f"{strategy.name}: prune audit completed, {result.prune_audit['disagreements']} disagreements "
@@ -633,9 +635,211 @@ def prune_audit(eligible: Sequence[Board], vecs, assign: Mapping[int, int], stra
     return {"boards_audited": len(sample), "disagreements": disagreements}
 
 
+#: Merge-diagnostic magnitude buckets (research only, fixed before any real
+#: run): distances from tau and similarity changes, fine near zero so a
+#: 0.5999-vs-0.60 miss is told apart from a 0.45-vs-0.60 one.
+DIAGNOSTIC_EDGES: tuple[float, ...] = (0.001, 0.0025, 0.005, 0.01, 0.02, 0.05, 0.1)
+MAGNITUDE_LABELS: tuple[str, ...] = (
+    *(f"<= {hi:g}" if lo == 0.0 else f"({lo:g}, {hi:g}]" for lo, hi in zip((0.0, *DIAGNOSTIC_EDGES), DIAGNOSTIC_EDGES)),
+    f"> {DIAGNOSTIC_EDGES[-1]:g}")
+BELOW_TAU_LABELS: tuple[str, ...] = ("0", "exactly 1", "2+, <= 1%", "2+, (1%, 5%]", "2+, (5%, 10%]", "2+, > 10%")
+OVERLAP_LABELS: tuple[str, ...] = ("identical cores", ">= 0.8", "[0.6, 0.8)", "< 0.6")
+PRE_MARGIN_LABELS: tuple[str, ...] = ("already below tau", *MAGNITUDE_LABELS)
+DEGRADATION_LABELS: tuple[str, ...] = ("no drop (>= 0)", *(f"drop {m}" for m in MAGNITUDE_LABELS))
+#: Deterministic review sample: up to this many new attempts per reason.
+DIAGNOSTIC_SAMPLE_PER_REASON = 2
+MERGE_DIAGNOSTIC_DEFINITIONS: dict[str, str] = {
+    "scope": "Every tentative merge that reached the merged-result similarity check (strategies B and C): "
+             "outcome 'accepted' or 'rejected_similarity'. Measurement only; no decision depends on it.",
+    "sides": "a = the group with the lower id (ids are variant ids; the lower one absorbs b if accepted), b = the other; "
+             "*_root_variant/*_variants: its lowest variant id / number of variants merged into it so far.",
+    "cores": "the merge's own core definition (units on >= core_presence of the side's boards); merged_core over a+b; "
+             "core_overlap = |shared| / |union| of the two cores (the merge's pair score).",
+    "pre_merge_similarity": "each board's similarity to the mean profile of its own side (a or b) as it stood just "
+                            "before this attempt, with the strategy's similarity function.",
+    "post_merge_similarity": "each board's similarity to the mean profile of a+b (the profile the rule checks).",
+    "below_tau": "boards with post-merge similarity < tau (the rule rejects if there is at least one).",
+    "weakest": "the board with the lowest post-merge similarity (ties: lowest anonymous observation id); "
+               "delta = post - pre; shortfall_below_tau = tau - post (> 0: below tau); pre_margin_above_tau = pre - tau.",
+    "below_tau_count_buckets": "'0'; 'exactly 1' (whatever the share); otherwise 2+ boards by share of merged boards: "
+                               "<= 1%, (1%, 5%], (5%, 10%], > 10%.",
+    "weakest_distance_from_tau_buckets": "rejected: tau - weakest post-merge similarity; accepted: weakest post-merge "
+                                         "similarity - tau (edges %s)." % (DIAGNOSTIC_EDGES,),
+    "weakest_pre_merge_margin_buckets": "weakest board's pre-merge similarity - tau ('already below tau' if negative).",
+    "weakest_degradation_buckets": "weakest board's post - pre similarity: 'no drop' if >= 0, else the drop's size.",
+    "core_overlap_buckets": "'identical cores' (equal core sets), else core_overlap >= 0.8, [0.6, 0.8), < 0.6.",
+    "merged_size_bands": "tentative merged board count, in the report's size bands.",
+    "percentiles": "nearest rank on sorted values, as elsewhere in this report; p01 only when >= 100 boards.",
+}
+
+
+def _magnitude_bucket(x: float) -> str:
+    for label, hi in zip(MAGNITUDE_LABELS, DIAGNOSTIC_EDGES):
+        if x <= hi:
+            return label
+    return MAGNITUDE_LABELS[-1]
+
+
+def _below_tau_bucket(below: int, n: int) -> str:
+    if below <= 1:
+        return BELOW_TAU_LABELS[below]
+    share = below / n
+    return next(label for label, hi in zip(BELOW_TAU_LABELS[2:], (0.01, 0.05, 0.10, math.inf)) if share <= hi)
+
+
+def _similarity_summary(values: Iterable[float]) -> dict[str, Any]:
+    xs = sorted(values)
+    q = lambda p: xs[min(len(xs) - 1, int(round(p * (len(xs) - 1))))]  # noqa: E731
+    return {"boards": len(xs), "min": xs[0], "p01": q(0.01) if len(xs) >= 100 else None, "p05": q(0.05),
+            "p10": q(0.10), "median": q(0.5)}
+
+
+class MergeDiagnostics:
+    """Research-only measurements of tentative variant merges judged by the
+    merged-result similarity rule. `record` is called by `merge_variants`
+    after each decision; nothing here is read back by the merge. Rows hold
+    unit ids and anonymous observation ids only -- never match or player
+    identifiers."""
+
+    def __init__(self, tau: float) -> None:
+        self.tau = tau
+        self.rows: list[dict[str, Any]] = []
+
+    def record(self, *, accepted: bool, a: int, b: int, variants_a: int, variants_b: int, core_a: set[str],
+               core_b: set[str], merged_core: set[str], overlap: float, splash: bool, pre: Mapping[int, float],
+               post: Mapping[int, float], side: Mapping[int, str]) -> None:
+        tau = self.tau
+        obs = sorted(post)
+        n_a = sum(1 for k in obs if side[k] == "a")
+        below = [k for k in obs if post[k] < tau]
+        shortfalls = sorted(tau - post[k] for k in below)
+        weakest = min(obs, key=lambda k: (post[k], k))
+        self.rows.append({
+            "attempt": len(self.rows), "outcome": "accepted" if accepted else "rejected_similarity",
+            "a_root_variant": a, "b_root_variant": b, "a_variants": variants_a, "b_variants": variants_b,
+            "a_boards": n_a, "b_boards": len(obs) - n_a, "merged_boards": len(obs),
+            "core_a": sorted(core_a), "core_b": sorted(core_b), "merged_core": sorted(merged_core),
+            "core_a_size": len(core_a), "core_b_size": len(core_b), "merged_core_size": len(merged_core),
+            "shared_core_size": len(core_a & core_b), "core_overlap": overlap, "identical_cores": core_a == core_b,
+            "a_only": sorted(core_a - core_b), "b_only": sorted(core_b - core_a),
+            "dropped_from_merged_core": sorted((core_a | core_b) - merged_core),
+            "new_in_merged_core": sorted(merged_core - (core_a | core_b)),
+            "splash_exception_applies": splash,
+            "pre_a": _similarity_summary(pre[k] for k in obs if side[k] == "a"),
+            "pre_b": _similarity_summary(pre[k] for k in obs if side[k] == "b"),
+            "pre_combined": _similarity_summary(pre[k] for k in obs),
+            "post": _similarity_summary(post[k] for k in obs),
+            "below_tau": len(below), "below_tau_share": len(below) / len(obs),
+            "below_tau_from_a": sum(1 for k in below if side[k] == "a"),
+            "below_tau_from_b": sum(1 for k in below if side[k] == "b"),
+            "shortfall_max": shortfalls[-1] if shortfalls else None,
+            "shortfall_mean": statistics.fmean(shortfalls) if shortfalls else None,
+            "shortfall_median": shortfalls[(len(shortfalls) - 1) // 2] if shortfalls else None,
+            "weakest": {"side": side[weakest], "observation": weakest, "pre_merge_similarity": pre[weakest],
+                        "post_merge_similarity": post[weakest], "delta": post[weakest] - pre[weakest], "tau": tau,
+                        "shortfall_below_tau": tau - post[weakest], "pre_margin_above_tau": pre[weakest] - tau},
+        })
+
+    def _aggregate(self, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        def counts(labels: Sequence[str], values: Iterable[str]) -> dict[str, int]:
+            c = Counter(values)
+            return {label: c[label] for label in labels}
+
+        def distance(r: Mapping[str, Any]) -> str:
+            return _magnitude_bucket(abs(r["weakest"]["shortfall_below_tau"]))
+
+        def pre_margin(r: Mapping[str, Any]) -> str:
+            m = r["weakest"]["pre_margin_above_tau"]
+            return PRE_MARGIN_LABELS[0] if m < 0 else _magnitude_bucket(m)
+
+        def degradation(r: Mapping[str, Any]) -> str:
+            d = r["weakest"]["delta"]
+            return DEGRADATION_LABELS[0] if d >= 0 else "drop " + _magnitude_bucket(-d)
+
+        def overlap(r: Mapping[str, Any]) -> str:
+            if r["identical_cores"]:
+                return OVERLAP_LABELS[0]
+            o = r["core_overlap"]
+            return OVERLAP_LABELS[1] if o >= 0.8 else OVERLAP_LABELS[2] if o >= 0.6 else OVERLAP_LABELS[3]
+
+        bands = [label for label, _, _ in SIZE_BANDS]
+        below = [_below_tau_bucket(r["below_tau"], r["merged_boards"]) for r in rows]
+        return {
+            "attempts": len(rows),
+            "below_tau_count_buckets": counts(BELOW_TAU_LABELS, below),
+            "weakest_distance_from_tau_buckets": counts(MAGNITUDE_LABELS, map(distance, rows)),
+            "weakest_pre_merge_margin_buckets": counts(PRE_MARGIN_LABELS, map(pre_margin, rows)),
+            "weakest_degradation_buckets": counts(DEGRADATION_LABELS, map(degradation, rows)),
+            "core_overlap_buckets": counts(OVERLAP_LABELS, map(overlap, rows)),
+            "merged_size_bands": {band: {label: sum(1 for r, x in zip(rows, below) if size_band(r["merged_boards"]) == band
+                                                    and x == label) for label in BELOW_TAU_LABELS} for band in bands},
+            "below_tau_count_x_distance_from_tau": {
+                label: counts(MAGNITUDE_LABELS, (distance(r) for r, x in zip(rows, below) if x == label))
+                for label in BELOW_TAU_LABELS},
+            "failing_boards_by_side": {
+                "larger side only": sum(1 for r in rows if r["below_tau"] and self._failing_sides(r) == {"larger"}),
+                "smaller side only": sum(1 for r in rows if r["below_tau"] and self._failing_sides(r) == {"smaller"}),
+                "both sides": sum(1 for r in rows if self._failing_sides(r) == {"larger", "smaller"})},
+            "splash_exception_attempts": sum(r["splash_exception_applies"] for r in rows),
+            "quantiles": {
+                "merged_boards": quantiles(r["merged_boards"] for r in rows),
+                "larger_side_boards": quantiles(max(r["a_boards"], r["b_boards"]) for r in rows),
+                "smaller_side_boards": quantiles(min(r["a_boards"], r["b_boards"]) for r in rows),
+                "core_overlap": quantiles(r["core_overlap"] for r in rows),
+                "below_tau": quantiles(r["below_tau"] for r in rows),
+                "below_tau_share": quantiles(r["below_tau_share"] for r in rows),
+                "weakest_post_merge_similarity": quantiles(r["weakest"]["post_merge_similarity"] for r in rows),
+                "weakest_pre_merge_similarity": quantiles(r["weakest"]["pre_merge_similarity"] for r in rows),
+                "weakest_delta": quantiles(r["weakest"]["delta"] for r in rows),
+                "post_merge_p10": quantiles(r["post"]["p10"] for r in rows),
+                "post_merge_median": quantiles(r["post"]["median"] for r in rows),
+                "pre_merge_p10": quantiles(r["pre_combined"]["p10"] for r in rows),
+                "pre_merge_median": quantiles(r["pre_combined"]["median"] for r in rows),
+            },
+        }
+
+    @staticmethod
+    def _failing_sides(r: Mapping[str, Any]) -> set[str]:
+        larger = "a" if r["a_boards"] >= r["b_boards"] else "b"
+        smaller = "b" if larger == "a" else "a"
+        return {name for name, s in (("larger", larger), ("smaller", smaller)) if r[f"below_tau_from_{s}"]}
+
+    def _sample(self, rejected: Sequence[Mapping[str, Any]], accepted: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        """Deterministic review sample, never by placement: for each reason
+        (in this order) up to DIAGNOSTIC_SAMPLE_PER_REASON attempts not yet
+        chosen; ties break on the attempt index (the merge's own order)."""
+        n = lambda r: r["merged_boards"]  # noqa: E731
+        reasons = [
+            ("smallest threshold miss", rejected, lambda r: (r["weakest"]["shortfall_below_tau"], -n(r), r["attempt"])),
+            ("largest threshold miss", rejected, lambda r: (-r["weakest"]["shortfall_below_tau"], r["attempt"])),
+            ("exactly one board below tau", [r for r in rejected if r["below_tau"] == 1], lambda r: (-n(r), r["attempt"])),
+            ("highest share below tau", rejected, lambda r: (-r["below_tau_share"], -n(r), r["attempt"])),
+            ("largest merged group", rejected, lambda r: (-n(r), r["attempt"])),
+            ("highest core overlap", rejected, lambda r: (-r["core_overlap"], -n(r), r["attempt"])),
+            ("identical cores", [r for r in rejected if r["identical_cores"]], lambda r: (-n(r), r["attempt"])),
+            ("full core + one unit (C splash exception)", [r for r in rejected if r["splash_exception_applies"]],
+             lambda r: (-n(r), r["attempt"])),
+            ("accepted: closest to tau", accepted, lambda r: (-r["weakest"]["shortfall_below_tau"], r["attempt"])),
+            ("accepted: largest merged group", accepted, lambda r: (-n(r), r["attempt"])),
+        ]
+        chosen: dict[int, dict[str, Any]] = {}
+        for reason, pool, key in reasons:
+            for r in [r for r in sorted(pool, key=key) if r["attempt"] not in chosen][:DIAGNOSTIC_SAMPLE_PER_REASON]:
+                chosen[r["attempt"]] = {"reason": reason, **r}
+        return list(chosen.values())
+
+    def summary(self) -> dict[str, Any]:
+        rejected = [r for r in self.rows if r["outcome"] == "rejected_similarity"]
+        accepted = [r for r in self.rows if r["outcome"] == "accepted"]
+        return {"definitions": MERGE_DIAGNOSTIC_DEFINITIONS, "tau": self.tau, "attempts_evaluated": len(self.rows),
+                "accepted_attempts": len(accepted), "rejected_similarity_attempts": len(rejected),
+                "rejected": self._aggregate(rejected), "accepted": self._aggregate(accepted),
+                "sample": self._sample(rejected, accepted)}
+
+
 def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy: Strategy,
                    config: ArchetypeConfig, *, vecs: Mapping[int, tuple[dict[str, float], dict[str, float]]] | None = None,
-                   ) -> tuple[dict[int, int], list[str], dict[str, int]]:
+                   diagnostics: MergeDiagnostics | None = None) -> tuple[dict[int, int], list[str], dict[str, int]]:
     """Variant -> group. Greedy: the highest core-overlap mergeable pair first
     (ties: lowest ids), every candidate re-checked against the merged group's
     recomputed statistics. Pairwise checks alone let a merged core shrink
@@ -643,7 +847,11 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
     then the eroded A+B ~ C, ...), so every tentative merge is also checked
     on its RESULT (`result_check`) and kept only if the merged core survives
     and every member board is still >= tau similar to the merged profile.
-    Returns (variant -> group, merge log, merge-check counts)."""
+    Returns (variant -> group, merge log, merge-check counts).
+
+    `diagnostics` (research only) receives a measurement of every tentative
+    merge that reaches the similarity check; it only reads the merge state
+    and never influences a decision."""
     if vecs is None:
         champions = load_roster().champions
         vecs = {b.obs: board_vectors(b, strategy, config, champions) for b in boards}
@@ -714,6 +922,36 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
             return "similarity"
         return None
 
+    pre_cache: dict[tuple[int, int], dict[int, float]] = {}
+
+    def pre_similarity(g: int) -> dict[int, float]:
+        """obs -> similarity to group g's CURRENT (pre-merge) mean profile;
+        cached per group version (a group only changes when it merges)."""
+        key = (g, version[g])
+        if key not in pre_cache:
+            obs = sorted(members[g])
+            profile = mean_profile([vecs[k] for k in obs])
+            pre_cache[key] = {k: similarity(vecs[k], profile, strategy) for k in obs}
+        return pre_cache[key]
+
+    def measure(a: int, b: int, overlap: float, accepted: bool) -> None:
+        """Diagnostics only: describe the tentative merge a+b just judged by
+        the similarity check. Reads the merge state, changes nothing."""
+        ca, cb = core(a), core(b)
+        da, db_ = ca - cb, cb - ca
+        merged_core = core_of(counts[a] + counts[b], sizes[a] + sizes[b])
+        obs = sorted(members[a] + members[b])
+        profile = mean_profile([vecs[k] for k in obs])
+        post = {k: similarity(vecs[k], profile, strategy) for k in obs}
+        pre = {**pre_similarity(a), **pre_similarity(b)}
+        side = {**{k: "a" for k in members[a]}, **{k: "b" for k in members[b]}}
+        splash = (strategy.merge == "structure_aware"
+                  and ((not da and len(db_) == 1) or (not db_ and len(da) == 1))
+                  and len(ca & cb) >= config.merge_min_result_core)
+        diagnostics.record(accepted=accepted, a=a, b=b, variants_a=len(groups[a]), variants_b=len(groups[b]),
+                           core_a=ca, core_b=cb, merged_core=merged_core, overlap=overlap, splash=splash,
+                           pre=pre, post=post, side=side)
+
     def core_index() -> dict[str, set[int]]:
         idx: dict[str, set[int]] = defaultdict(set)
         for g in groups:
@@ -746,6 +984,8 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
         if (a, b, va, vb) in rejected:  # the same pair can be queued from both sides
             continue
         failed = result_check(a, b)
+        if diagnostics is not None and failed != "core":  # after the decision; before any state changes
+            measure(a, b, -neg, failed is None)
         if failed:  # re-examined only if a or b later changes (push_pairs after a merge)
             rejected.add((a, b, va, vb))
             checks[f"rejected_{failed}"] += 1
@@ -1120,6 +1360,76 @@ def render_group(s: Mapping[str, Any], members: Sequence[Board], names: Names, c
     return lines
 
 
+def render_merge_diagnostics(d: Mapping[str, Any], names: Names) -> list[str]:
+    """Concise Markdown for `MergeDiagnostics.summary()` (full values are in the JSON report)."""
+    def f(x: Any) -> str:
+        return "n/a" if x is None else f"{x:.4f}" if isinstance(x, float) else str(x)
+
+    def dist(s: Mapping[str, Any]) -> str:
+        return f"min {f(s['min'])} / p01 {f(s['p01'])} / p05 {f(s['p05'])} / p10 {f(s['p10'])} / median {f(s['median'])}"
+
+    def buckets(b: Mapping[str, int]) -> str:
+        return ", ".join(f"{k}: {v}" for k, v in b.items())
+
+    def units(ids: Sequence[str]) -> str:
+        return ", ".join(names.champion(u) for u in ids) or "-"
+
+    rej, acc = d["rejected"], d["accepted"]
+    lines = ["", "### Merge-result similarity diagnostics (research measurement only; no decision depends on it)",
+             f"- attempts reaching the similarity check: {d['attempts_evaluated']} (accepted {d['accepted_attempts']}, "
+             f"rejected {d['rejected_similarity_attempts']}); tau {d['tau']}. Definitions are in the JSON report "
+             "(`merge_diagnostics.definitions`)."]
+    for label, agg in (("rejected", rej), ("accepted", acc)):
+        if not agg["attempts"]:
+            lines.append(f"- {label}: none")
+            continue
+        q = agg["quantiles"]
+        lines += [
+            f"- {label}: boards below tau per attempt: {buckets(agg['below_tau_count_buckets'])}",
+            f"- {label}: weakest board's distance from tau ({'below' if label == 'rejected' else 'above'}): "
+            + buckets(agg["weakest_distance_from_tau_buckets"]),
+            f"- {label}: weakest board's pre-merge margin above tau: {buckets(agg['weakest_pre_merge_margin_buckets'])}",
+            f"- {label}: weakest board's change (post - pre): {buckets(agg['weakest_degradation_buckets'])}",
+            f"- {label}: core overlap: {buckets(agg['core_overlap_buckets'])}; splash-exception pairs "
+            f"{agg['splash_exception_attempts']}",
+            f"- {label}: merged size band -> attempts: "
+            + ", ".join(f"{band}: {sum(v.values())}" for band, v in agg["merged_size_bands"].items()),
+            f"- {label}: medians -- merged boards {f(q['merged_boards']['median'])}, core overlap "
+            f"{f(q['core_overlap']['median'])}, weakest pre {f(q['weakest_pre_merge_similarity']['median'])} -> post "
+            f"{f(q['weakest_post_merge_similarity']['median'])}, post-merge p10 {f(q['post_merge_p10']['median'])}, "
+            f"post-merge median {f(q['post_merge_median']['median'])}",
+        ]
+    if rej["attempts"]:
+        lines.append("- rejected: exactly-1-below-tau attempts by merged size band: "
+                     + ", ".join(f"{band}: {v['exactly 1']}/{sum(v.values())}" for band, v in rej["merged_size_bands"].items()))
+        lines.append("- rejected: boards below tau x weakest distance below tau: " + "; ".join(
+            f"{k} -> {buckets({b: n for b, n in v.items() if n})}" for k, v in rej["below_tau_count_x_distance_from_tau"].items()
+            if sum(v.values())))
+        lines.append(f"- rejected: failing boards come from {buckets(rej['failing_boards_by_side'])}")
+    lines += ["", "#### Deterministic sample of judged merges (selection by structure/threshold only, never placement)"]
+    for r in d["sample"]:
+        w = r["weakest"]
+        lines += [
+            f"- attempt {r['attempt']} [{r['reason']}] {r['outcome']}: a {r['a_boards']} boards ({r['a_variants']} variants), "
+            f"b {r['b_boards']} boards ({r['b_variants']} variants), merged {r['merged_boards']}; core overlap "
+            f"{f(r['core_overlap'])}, shared {r['shared_core_size']}, identical cores {r['identical_cores']}, "
+            f"splash exception {r['splash_exception_applies']}",
+            f"  - core a ({r['core_a_size']}): {units(r['core_a'])} | core b ({r['core_b_size']}): {units(r['core_b'])} | "
+            f"merged core ({r['merged_core_size']}): {units(r['merged_core'])}",
+            f"  - a only: {units(r['a_only'])}; b only: {units(r['b_only'])}; dropped from merged core: "
+            f"{units(r['dropped_from_merged_core'])}; new in merged core: {units(r['new_in_merged_core'])}",
+            f"  - pre a: {dist(r['pre_a'])}; pre b: {dist(r['pre_b'])}",
+            f"  - post: {dist(r['post'])}",
+            f"  - below tau: {r['below_tau']} ({100 * r['below_tau_share']:.2f}%; from a {r['below_tau_from_a']}, "
+            f"from b {r['below_tau_from_b']}); shortfall max {f(r['shortfall_max'])}, mean {f(r['shortfall_mean'])}, "
+            f"median {f(r['shortfall_median'])}",
+            f"  - weakest board (side {w['side']}): pre {f(w['pre_merge_similarity'])} -> post {f(w['post_merge_similarity'])} "
+            f"(delta {f(w['delta'])}); tau {w['tau']}; shortfall below tau {f(w['shortfall_below_tau'])}; "
+            f"pre-merge margin {f(w['pre_margin_above_tau'])}",
+        ]
+    return lines + [""]
+
+
 @dataclass(frozen=True)
 class LoadedInputs:
     """Everything the analysis needs, fully materialized in memory (plain
@@ -1234,6 +1544,7 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
             "manual_review_candidates_10_59": [s["group"] for s in review],
             "groups": [summaries[g] for g in sorted(summaries)],
             "item_sets": {str(g): v for g, v in item_sets.items()},
+            "merge_diagnostics": grouping.merge_diagnostics,
         }
         for k, g in sorted(grouping.group.items()):
             membership.append({"strategy": strategy.name, "observation": k, "group": g, "variant": grouping.variant[k],
@@ -1241,6 +1552,8 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
 
         md += [f"## Strategy {strategy.label}", strategy.description, ""]
         md += [f"- {k}: {json.dumps(v, default=_json_default)}" for k, v in metrics.items() if k not in ("description", "strategy")]
+        if grouping.merge_diagnostics:
+            md += render_merge_diagnostics(grouping.merge_diagnostics, names)
         md += ["", "### Unit-presence histogram (all groups with >= 30 boards; one count per unit per group)",
                "- " + ", ".join(f"{k}-: {v}" for k, v in sorted(hist.items())) if hist else "- no group has >= 30 boards", "",
                "### Size bands (niche test; performance quantiles are per group)"]
