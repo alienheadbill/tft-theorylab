@@ -1016,8 +1016,9 @@ def archetype_report_command(
     only; results are not served to users).
 
     Groups one balance window's unit-observable Ranked TFT final boards with
-    three predeclared strategies and writes a human-reviewable Markdown
-    report, a JSON summary and an anonymized membership CSV. The database is
+    predeclared strategies (three controls, two experimental) and writes a
+    human-reviewable Markdown report, a JSON summary and an anonymized
+    membership CSV. The database is
     opened with `Database.open_existing` only (Postgres
     `default_transaction_read_only=on`, verified before any read; SQLite
     `mode=ro`), used only to load the population into memory, and closed
