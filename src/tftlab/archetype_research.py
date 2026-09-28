@@ -44,13 +44,17 @@ from __future__ import annotations
 
 import csv
 import heapq
+import io
 import json
 import math
+import os
+import shutil
 import statistics
+import time
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from . import carry
 from .items import ITEM_STATS_PATH, is_component
@@ -127,6 +131,33 @@ def size_band(n: int) -> str:
         if n >= low and (high is None or n <= high):
             return label
     return "1"
+
+
+# ---------------------------------------------------------------- progress
+
+
+class Progress:
+    """Elapsed-time progress lines ("[progress +12.3s] message") for the job
+    log, so a long run is never silent and a timeout shows where it was.
+    Messages carry counts and phase names only -- never match ids, PUUIDs,
+    Riot IDs or secrets. Timings are kept here, outside the deterministic
+    report JSON."""
+
+    def __init__(self, emit: Callable[[str], None] | None = None, clock: Callable[[], float] = time.monotonic) -> None:
+        self.emit = emit
+        self.clock = clock
+        self.start = clock()
+        self.events: list[tuple[float, str]] = []
+
+    def __call__(self, message: str) -> None:
+        elapsed = self.clock() - self.start
+        self.events.append((elapsed, message))
+        if self.emit is not None:
+            self.emit(f"[progress +{elapsed:9.1f}s] {message}")
+
+
+def _noop(message: str) -> None:
+    return None
 
 
 # ---------------------------------------------------------------- canonical names
@@ -400,6 +431,10 @@ class Grouping:
     prune_audit: dict[str, Any] = field(default_factory=dict)
 
 
+#: Leader-pass progress line every this many boards (status only).
+LEADER_PROGRESS_EVERY = 2000
+
+
 def _candidates(uv: Mapping[str, float], index: Mapping[str, set[int]], min_shared: int) -> list[int]:
     hits = Counter(g for u in uv for g in index.get(u, ()))
     return sorted(g for g, shared in hits.items() if shared >= min_shared)
@@ -463,7 +498,8 @@ def structural_order_key(board: Board, vec: tuple[Mapping[str, float], Mapping[s
     return (-len(board.identity), tuple(sorted(units.items())), tuple(sorted(traits)), board.obs)
 
 
-def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig) -> Grouping:
+def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig,
+            progress: Callable[[str], None] | None = None) -> Grouping:
     """Deterministic leader pass + profile refinement (+ merge for B/C).
 
     Leader pass: boards are visited in a purely STRUCTURAL order
@@ -473,7 +509,11 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
     similar group (>= tau) or starts one. Refinement: recompute mean profiles, drop groups under
     min_group_size, reassign every board to its most similar profile (>= tau,
     else ungrouped); repeat until at most convergence_moved_share of boards
-    move or max_refine_iterations is reached (reported either way)."""
+    move or max_refine_iterations is reached (reported either way).
+
+    `progress` only receives status lines (counts, phase names); it has no
+    influence on the grouping."""
+    progress = progress or _noop
     champions = load_roster().champions
     eligible = [b for b in boards if len(b.identity) >= config.min_identity_units]
     vecs = {b.obs: board_vectors(b, strategy, config, champions) for b in eligible}
@@ -484,7 +524,10 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
     profiles: list[tuple[dict, dict]] = []
     index: dict[str, set[int]] = defaultdict(set)
     assign: dict[int, int] = {}
-    for b in order:
+    progress(f"{strategy.name}: leader pass started over {len(eligible)} eligible boards")
+    for i, b in enumerate(order):
+        if i and i % LEADER_PROGRESS_EVERY == 0:
+            progress(f"{strategy.name}: leader pass {i}/{len(order)} boards, {len(members)} groups so far")
         g, s = _best(vecs[b.obs], profiles, _candidates(vecs[b.obs][0], index, config.prune_min_shared), strategy)
         if g is None or s < config.tau:
             members.append([])
@@ -496,6 +539,7 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
             (index[u].add if f >= config.prune_presence else index[u].discard)(g)
         assign[b.obs] = g
     log.append(f"leader pass: {len(members)} groups over {len(eligible)} eligible boards")
+    progress(f"{strategy.name}: leader pass completed, {len(members)} groups")
 
     converged, moves = False, []
     threshold = max(1, math.floor(config.convergence_moved_share * len(eligible)))
@@ -515,6 +559,8 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
         moves.append(moved)
         assign = _renumber(new, vecs)
         log.append(f"refine {it + 1}: {len(set(assign.values()))} groups, {len(assign)} boards assigned, {moved} moved")
+        progress(f"{strategy.name}: refine {it + 1} completed, {len(kept)} candidate groups, "
+                 f"{len(set(assign.values()))} groups, {len(assign)} boards assigned, {moved} moved")
         if moved <= threshold:
             converged = True
             break
@@ -524,12 +570,17 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
 
     group, merges = dict(assign), 0
     if strategy.merge:
+        progress(f"{strategy.name}: variant merge started over {len(set(assign.values()))} variants")
         to_group, merge_log = merge_variants([b for b in eligible if b.obs in assign], assign, strategy, config)
         group = {k: to_group[v] for k, v in assign.items()}
         merges = len(merge_log)
         log.append(f"variant merge: {merges} merges, {len(set(assign.values()))} variants -> {len(set(group.values()))} groups")
+        progress(f"{strategy.name}: variant merge completed, {merges} merges, {len(set(group.values()))} groups")
     result = Grouping(variant=assign, group=group, log=log, converged=converged, refine_moves=moves, merges=merges)
+    progress(f"{strategy.name}: prune audit started")
     result.prune_audit = prune_audit(eligible, vecs, assign, strategy, config)
+    progress(f"{strategy.name}: prune audit completed, {result.prune_audit['disagreements']} disagreements "
+             f"in {result.prune_audit['boards_audited']} boards")
     return result
 
 
@@ -993,17 +1044,51 @@ def render_group(s: Mapping[str, Any], members: Sequence[Board], names: Names, c
     return lines
 
 
+@dataclass(frozen=True)
+class LoadedInputs:
+    """Everything the analysis needs, fully materialized in memory (plain
+    lists and dataclasses; no cursor, connection or lazy query)."""
+
+    access: str
+    population: dict[str, Any]
+    boards: list[Board]
+
+
+def load_inputs(db: Database, balance_window: str = DEFAULT_BALANCE_WINDOW,
+                progress: Callable[[str], None] | None = None) -> LoadedInputs:
+    """The only phase that touches the database: verify read-only, then read
+    the window's population into memory. Callers close the connection right
+    after this returns and run `analyze` without it."""
+    progress = progress or _noop
+    access = assert_read_only(db)
+    progress(f"read-only verified: {access}")
+    progress(f"population loading started (balance window {balance_window}, queue {RANKED_TFT_QUEUE_ID})")
+    population, boards = load_population(db, balance_window)
+    progress(f"population loading completed: {population['ranked_matches']} ranked matches, "
+             f"{population['ranked_participants']} ranked participants, {len(boards)} unit-observable boards loaded")
+    return LoadedInputs(access=access, population=population, boards=list(boards))
+
+
 def build_report(db: Database, *, balance_window: str = DEFAULT_BALANCE_WINDOW,
                  config: ArchetypeConfig | None = None) -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
     """(JSON report, Markdown lines, anonymized membership rows)."""
-    config = config or ArchetypeConfig()
-    access = assert_read_only(db)
-    population, boards = load_population(db, balance_window)
-    return analyze(boards, population, access, config)
+    inputs = load_inputs(db, balance_window)
+    return analyze(inputs.boards, inputs.population, inputs.access, config or ArchetypeConfig())
+
+
+#: `on_section(phase, data, markdown_lines)` receives each finished part of
+#: the report as soon as it exists: "population" first, then every strategy
+#: name, then "closing". Used to stream and persist partial results.
+SectionCallback = Callable[[str, Mapping[str, Any], Sequence[str]], None]
 
 
 def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
-            config: ArchetypeConfig) -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
+            config: ArchetypeConfig, *, progress: Callable[[str], None] | None = None,
+            on_section: SectionCallback | None = None) -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
+    """Pure in-memory analysis (no database). Returns the same (report,
+    markdown, membership) whether or not `progress`/`on_section` are given."""
+    progress = progress or _noop
+    emit = on_section or (lambda phase, data, lines: None)
     names = Names()
     eligible = [b for b in boards if len(b.identity) >= config.min_identity_units]
     population = {**population,
@@ -1024,12 +1109,19 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
         *(f"- {k}: {v}" for k, v in asdict(config).items()),
         "",
     ]
+    progress(f"normalization completed: {len(boards)} boards, {len(eligible)} eligible for grouping")
+    emit("population", {"read_only_connection": access, "population": population, "config": asdict(config)}, list(md))
     membership: list[dict[str, Any]] = []
     by_obs = {b.obs: b for b in eligible}
     unit_presence_hist: dict[str, Counter] = {}
     for strategy in STRATEGIES:
-        grouping = cluster(boards, strategy, config)
+        progress(f"{strategy.name}: started")
+        chunk_start = len(md)
+        grouping = cluster(boards, strategy, config, progress)
+        progress(f"{strategy.name}: global metrics started")
         metrics = global_metrics(boards, grouping, strategy, config)
+        progress(f"{strategy.name}: global metrics completed")
+        progress(f"{strategy.name}: summaries/diagnostics started")
         members: dict[int, list[Board]] = defaultdict(list)
         for k, g in sorted(grouping.group.items()):
             members[g].append(by_obs[k])
@@ -1102,10 +1194,18 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
                       + " vs ".join(names.champion(u) for u in case["primary_itemized_units"]))
             for g in case["groups"]:
                 md += render_group(summaries[g], members[g], names, config, item_sets.get(g, [])) + [""]
+        progress(f"{strategy.name}: summaries/diagnostics completed")
+        progress(f"{strategy.name}: completed, {metrics['groups']} groups, {metrics['boards_in_multi_board_groups']} boards "
+                 f"assigned, {metrics['boards_ungrouped']} ungrouped")
+        emit(strategy.name, report["strategies"][strategy.name], md[chunk_start:])
+    closing_start = len(md)
     md += ["## Statistical warnings (no corrections applied)", *(f"- {w}" for w in STATISTICAL_WARNINGS), "",
            "## Unresolved ids (no canonical name in committed metadata)",
            "- " + (", ".join(sorted(names.unresolved)) or "none")]
     report["unresolved_ids"] = sorted(names.unresolved)
+    emit("closing", {"statistical_warnings": list(STATISTICAL_WARNINGS), "unresolved_ids": report["unresolved_ids"]},
+         md[closing_start:])
+    progress("report generation completed")
     return report, md, membership
 
 
@@ -1117,17 +1217,110 @@ def _json_default(value: Any) -> Any:
     return str(value)
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write via a temporary file and os.replace, so a reader (or an artifact
+    upload after a timeout) sees the old file or the new one, never half."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def _output_paths(out_dir: Path, balance_window: str) -> dict[str, Path]:
+    tag = str(balance_window).replace("/", "_")
+    return {
+        "markdown": out_dir / f"archetypes_{tag}_report.md",
+        "json": out_dir / f"archetypes_{tag}_report.json",
+        "membership": out_dir / f"archetypes_{tag}_membership.csv",
+        "progress": out_dir / f"archetypes_{tag}_progress.log",
+        "partial": out_dir / "partial",
+    }
+
+
 def write_outputs(report: Mapping[str, Any], markdown: Sequence[str], membership: Sequence[Mapping[str, Any]],
                   out_dir: Path) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    tag = str(report["population"]["balance_window"]).replace("/", "_")
-    md_path = out_dir / f"archetypes_{tag}_report.md"
-    json_path = out_dir / f"archetypes_{tag}_report.json"
-    csv_path = out_dir / f"archetypes_{tag}_membership.csv"
-    md_path.write_text("\n".join(markdown) + "\n")
-    json_path.write_text(json.dumps(report, indent=1, sort_keys=True, ensure_ascii=False, default=_json_default))
-    with csv_path.open("w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["strategy", "observation", "group", "variant", "placement", "shop_units"])
-        writer.writeheader()
-        writer.writerows(membership)
-    return [md_path, json_path, csv_path]
+    paths = _output_paths(out_dir, report["population"]["balance_window"])
+    _atomic_write_text(paths["markdown"], "\n".join(markdown) + "\n")
+    _atomic_write_text(paths["json"], json.dumps(report, indent=1, sort_keys=True, ensure_ascii=False, default=_json_default))
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=["strategy", "observation", "group", "variant", "placement", "shop_units"])
+    writer.writeheader()
+    writer.writerows(membership)
+    _atomic_write_text(paths["membership"], buffer.getvalue())
+    return [paths["markdown"], paths["json"], paths["membership"]]
+
+
+PARTIAL_LABEL = "PARTIAL / INCOMPLETE RESEARCH RESULT"
+PHASES = ("population", *(s.name for s in STRATEGIES), "closing")
+
+
+class ProgressiveWriter:
+    """Persists results as each phase finishes, so a timeout keeps what was
+    already computed.
+
+    - `<out>/archetypes_<w>_progress.log`: every progress line, appended and
+      flushed as it happens (elapsed-time phase log; no identifiers).
+    - `<out>/partial/NN_<phase>.md|.json`: one file pair per finished phase
+      (population, each strategy, closing), each written once, atomically,
+      and labelled PARTIAL / INCOMPLETE RESEARCH RESULT.
+    - `<out>/partial/00_STATUS.md|.json`: completed and pending phases,
+      atomically replaced after every phase.
+    - `complete()`: writes the final report files (`write_outputs`) and only
+      then removes `partial/`. The final report therefore exists only for a
+      run that finished; a run that did not finish leaves only labelled
+      partial files.
+    Stale outputs of an earlier run in `out_dir` are removed first, so an
+    old complete report can never sit next to a new run's partial one."""
+
+    def __init__(self, out_dir: Path, balance_window: str) -> None:
+        self.out_dir = out_dir
+        self.balance_window = balance_window
+        self.paths = _output_paths(out_dir, balance_window)
+        self.completed: list[str] = []
+        self._prepared = False
+
+    def _prepare(self) -> None:
+        if self._prepared:
+            return
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        for key in ("markdown", "json", "membership", "progress"):
+            self.paths[key].unlink(missing_ok=True)
+        shutil.rmtree(self.paths["partial"], ignore_errors=True)
+        self.paths["partial"].mkdir()
+        self._prepared = True
+
+    def log(self, line: str) -> None:
+        self._prepare()
+        with self.paths["progress"].open("a") as fh:
+            fh.write(line + "\n")
+            fh.flush()
+
+    def section(self, phase: str, data: Mapping[str, Any], lines: Sequence[str]) -> None:
+        self._prepare()
+        stem = self.paths["partial"] / f"{len(self.completed) + 1:02d}_{phase}"
+        header = [f"# {PARTIAL_LABEL}", f"Phase: {phase} (balance window {self.balance_window}). "
+                  "Not a complete report: see 00_STATUS.md for completed and pending phases.", ""]
+        _atomic_write_text(stem.with_suffix(".md"), "\n".join([*header, *lines]) + "\n")
+        _atomic_write_text(stem.with_suffix(".json"), json.dumps(
+            {"status": PARTIAL_LABEL, "phase": phase, "balance_window": self.balance_window, "data": data},
+            indent=1, sort_keys=True, ensure_ascii=False, default=_json_default))
+        self.completed.append(phase)
+        self._write_status()
+
+    def _write_status(self) -> None:
+        pending = [p for p in PHASES if p not in self.completed]
+        status = {"status": PARTIAL_LABEL, "balance_window": self.balance_window,
+                  "completed_phases": list(self.completed), "pending_phases": pending,
+                  "note": f"The complete report is {self.paths['markdown'].name}; if it is absent this run did not finish."}
+        _atomic_write_text(self.paths["partial"] / "00_STATUS.json", json.dumps(status, indent=1, sort_keys=True))
+        _atomic_write_text(self.paths["partial"] / "00_STATUS.md", "\n".join([
+            f"# {PARTIAL_LABEL}", f"Balance window: {self.balance_window}",
+            "Completed phases: " + (", ".join(self.completed) or "none"),
+            "Pending phases: " + (", ".join(pending) or "none"), status["note"], ""]))
+
+    def complete(self, report: Mapping[str, Any], markdown: Sequence[str],
+                 membership: Sequence[Mapping[str, Any]]) -> list[Path]:
+        self._prepare()
+        paths = write_outputs(report, markdown, membership, self.out_dir)
+        shutil.rmtree(self.paths["partial"], ignore_errors=True)
+        return paths

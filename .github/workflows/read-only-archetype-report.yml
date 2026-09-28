@@ -9,9 +9,13 @@ name: Read-only archetype research report
 # started with default_transaction_read_only=on, the report refuses to run
 # unless the server reports transaction_read_only = on, and no schema
 # creation, migration, backfill, write, ingest, Riot or CommunityDragon call
-# happens. No Riot key is used. The human-readable report is printed to this
-# job's log and uploaded (with a JSON summary and an anonymized membership
-# CSV) as a workflow artifact; nothing is committed or written to Postgres.
+# happens. No Riot key is used. The database is closed before clustering.
+# Progress lines and each finished report section are printed to this job's
+# log as they happen, and saved as labelled partial files; the full report,
+# JSON summary and anonymized membership CSV are written only when every
+# phase finished. Everything in archetype-report/ is uploaded as a workflow
+# artifact even if the analysis fails or times out (the job still fails);
+# nothing is committed or written to Postgres.
 on:
   workflow_dispatch:
     inputs:
@@ -30,7 +34,9 @@ concurrency:
 jobs:
   archetype-report:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Job budget 180 min; the analysis step stops at 170 so the artifact
+    # upload below still runs within the job's time.
+    timeout-minutes: 180
     steps:
       # Before checkout and before any database access. Static messages
       # only -- never echoes DATABASE_URL.
@@ -70,14 +76,20 @@ jobs:
         run: pip install -e ".[postgres]"
 
       - name: Run archetype research report (read-only)
+        timeout-minutes: 170
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           BALANCE_WINDOW: ${{ github.event.inputs.balance_window }}
         run: tftlab archetype-report --out-dir archetype-report --balance-window "$BALANCE_WINDOW"
 
+      # Runs even when the analysis step fails or times out, so labelled
+      # partial results (archetype-report/partial/) and the progress log are
+      # kept. The job itself still ends failed/cancelled.
       - name: Upload report artifact
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: archetype-report
           path: archetype-report/
+          if-no-files-found: warn
           retention-days: 30
