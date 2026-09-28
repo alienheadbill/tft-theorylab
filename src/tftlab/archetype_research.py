@@ -687,6 +687,13 @@ def _below_tau_bucket(below: int, n: int) -> str:
     return next(label for label, hi in zip(BELOW_TAU_LABELS[2:], (0.01, 0.05, 0.10, math.inf)) if share <= hi)
 
 
+def _overlap_bucket(r: Mapping[str, Any]) -> str:
+    if r["identical_cores"]:
+        return OVERLAP_LABELS[0]
+    o = r["core_overlap"]
+    return OVERLAP_LABELS[1] if o >= 0.8 else OVERLAP_LABELS[2] if o >= 0.6 else OVERLAP_LABELS[3]
+
+
 def _similarity_summary(values: Iterable[float]) -> dict[str, Any]:
     xs = sorted(values)
     q = lambda p: xs[min(len(xs) - 1, int(round(p * (len(xs) - 1))))]  # noqa: E731
@@ -714,6 +721,11 @@ class MergeDiagnostics:
         below = [k for k in obs if post[k] < tau]
         shortfalls = sorted(tau - post[k] for k in below)
         weakest = min(obs, key=lambda k: (post[k], k))
+        n = {"a": n_a, "b": len(obs) - n_a}
+        larger = "a" if n["a"] >= n["b"] else "b"  # tie: a, the lower id (as `_failing_sides`)
+        smaller = "b" if larger == "a" else "a"
+        side_below = {s: sum(1 for k in below if side[k] == s) for s in ("a", "b")}
+        side_min = {s: min(post[k] for k in obs if side[k] == s) for s in ("a", "b")}
         self.rows.append({
             "attempt": len(self.rows), "outcome": "accepted" if accepted else "rejected_similarity",
             "a_root_variant": a, "b_root_variant": b, "a_variants": variants_a, "b_variants": variants_b,
@@ -738,6 +750,11 @@ class MergeDiagnostics:
             "weakest": {"side": side[weakest], "observation": weakest, "pre_merge_similarity": pre[weakest],
                         "post_merge_similarity": post[weakest], "delta": post[weakest] - pre[weakest], "tau": tau,
                         "shortfall_below_tau": tau - post[weakest], "pre_margin_above_tau": pre[weakest] - tau},
+            "larger_side": larger, "larger_side_boards": n[larger], "smaller_side_boards": n[smaller],
+            "larger_side_below_tau": side_below[larger], "smaller_side_below_tau": side_below[smaller],
+            "larger_side_below_tau_share": side_below[larger] / n[larger],
+            "smaller_side_below_tau_share": side_below[smaller] / n[smaller],
+            "larger_side_min_post": side_min[larger], "smaller_side_min_post": side_min[smaller],
         })
 
     def _aggregate(self, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -756,11 +773,7 @@ class MergeDiagnostics:
             d = r["weakest"]["delta"]
             return DEGRADATION_LABELS[0] if d >= 0 else "drop " + _magnitude_bucket(-d)
 
-        def overlap(r: Mapping[str, Any]) -> str:
-            if r["identical_cores"]:
-                return OVERLAP_LABELS[0]
-            o = r["core_overlap"]
-            return OVERLAP_LABELS[1] if o >= 0.8 else OVERLAP_LABELS[2] if o >= 0.6 else OVERLAP_LABELS[3]
+        overlap = _overlap_bucket
 
         bands = [label for label, _, _ in SIZE_BANDS]
         below = [_below_tau_bucket(r["below_tau"], r["merged_boards"]) for r in rows]
@@ -834,7 +847,219 @@ class MergeDiagnostics:
         return {"definitions": MERGE_DIAGNOSTIC_DEFINITIONS, "tau": self.tau, "attempts_evaluated": len(self.rows),
                 "accepted_attempts": len(accepted), "rejected_similarity_attempts": len(rejected),
                 "rejected": self._aggregate(rejected), "accepted": self._aggregate(accepted),
-                "sample": self._sample(rejected, accepted)}
+                "sample": self._sample(rejected, accepted), "shadow": shadow_evaluation(self.rows, self.tau)}
+
+
+# ---------------------------------------------------------------- shadow merge rules (report only)
+
+#: Predeclared shadow candidates for validation run #5 (fixed before any real
+#: run; never tuned on it). Report-only: `merge_variants` never reads them.
+SHADOW_CANDIDATES: tuple[str, ...] = ("S0", "S1", "S2", "S3", "S4")
+SHADOW_FLOOR = 0.10  # every board >= tau - 0.10 (S1-S4)
+SHADOW_MERGED_TAIL = 100  # merged group: at most 1% below tau, i.e. 100 * below <= merged boards
+SHADOW_SMALLER_TAIL = 10  # smaller side: at most 10% below tau, i.e. 10 * below <= smaller-side boards
+SHADOW_OVERLAP = 0.80  # S3 structural gate
+SHADOW_MEDIAN_MARGIN = 0.05  # S4: post-merge median >= tau + 0.05
+SMALLER_SIDE_SHARE_LABELS: tuple[str, ...] = ("0%", "(0, 10%]", "(10%, 25%]", "(25%, 50%]", "(50%, 100%)", "100%")
+LARGER_SIDE_FAILURE_LABELS: tuple[str, ...] = ("none", "exactly one", "more than one")
+DANGER_LABELS: tuple[str, ...] = (
+    "A: whole smaller side below tau", "B: > 50% of smaller side below tau", "C: core overlap < 0.6",
+    "D: both sides have boards below tau", "E: weakest board < tau - 0.10")
+FAMILY_LABELS: tuple[str, ...] = (
+    "A: S3-shaped bounded family tail", "B: identical cores", "C: C splash exception", "D: core overlap >= 0.8")
+SHADOW_DIFFERENCES: tuple[tuple[str, str], ...] = (("S1", "S2"), ("S2", "S3"), ("S4", "S3"), ("S3", "S4"))
+SHADOW_SAMPLE_PER_REASON = 2
+SHADOW_DEFINITIONS: dict[str, str] = {
+    "scope": "Every tentative B/C merge that reached the merged-result similarity check. Each candidate answers "
+             "'would this rule have accepted THIS attempt?'. One-step counterfactual on the ACTUAL merge trajectory: "
+             "a shadow acceptance changes no group, so later attempts are the ones the real (S0) rule produced; "
+             "what a candidate would build if it had been the real rule is NOT simulated.",
+    "sides": "larger_side / smaller_side by board count before the attempt; ties: side a (the lower group id). "
+             "Not necessarily the 'incoming' variant: the merge does not define a direction.",
+    "S0": "every board's post-merge similarity >= tau (the current rule; must equal the actual decision).",
+    "S1": "<= 1% of the merged boards below tau (100 * below <= merged) AND every board >= tau - 0.10.",
+    "S2": "no larger-side board below tau AND <= 10% of the smaller side below tau (10 * below <= smaller) AND "
+          "<= 1% of the merged boards below tau AND every board >= tau - 0.10.",
+    "S3": "S2 AND (core overlap >= 0.80 OR identical cores OR the Strategy C full-core-plus-one splash exception).",
+    "S4": "post-merge p10 >= tau AND post-merge median >= tau + 0.05 AND every board >= tau - 0.10 "
+          "(nearest-rank percentiles, as in the diagnostics).",
+    "recovered": "actual outcome rejected (S0 rejects) but the candidate accepts; lost = actually accepted but the "
+                 "candidate rejects.",
+    "dangers": "A: every smaller-side board below tau; B: > 50% of the smaller side below tau; C: core overlap < 0.6 "
+               "(identical cores have overlap 1.0); D: boards below tau on both sides; E: weakest board < tau - 0.10.",
+    "families": "descriptive proxies, not ground truth. A: all S3 conditions; B: identical cores; C: C splash "
+                "exception; D: core overlap >= 0.8.",
+    "smaller_side_share_buckets": "share of smaller-side boards below tau: 0%, (0, 10%], (10%, 25%], (25%, 50%], "
+                                  "(50%, 100%), 100%.",
+    "differences": "recovered by X but not by Y, with the count of each Y condition those attempts fail "
+                   "(an attempt can fail several).",
+}
+
+
+def shadow_conditions(r: Mapping[str, Any], tau: float) -> dict[str, dict[str, bool]]:
+    """Each candidate's named conditions for one diagnostics row; a candidate
+    accepts when all of its conditions hold. Pure function of the row."""
+    floor = r["post"]["min"] >= tau - SHADOW_FLOOR
+    merged_tail = SHADOW_MERGED_TAIL * r["below_tau"] <= r["merged_boards"]
+    s2 = {"larger side: no board below tau": r["larger_side_below_tau"] == 0,
+          "smaller side: <= 10% below tau": SHADOW_SMALLER_TAIL * r["smaller_side_below_tau"] <= r["smaller_side_boards"],
+          "merged: <= 1% below tau": merged_tail,
+          "every board >= tau - 0.10": floor}
+    gate = r["core_overlap"] >= SHADOW_OVERLAP or r["identical_cores"] or r["splash_exception_applies"]
+    return {
+        "S0": {"every board >= tau": r["below_tau"] == 0},
+        "S1": {"merged: <= 1% below tau": merged_tail, "every board >= tau - 0.10": floor},
+        "S2": s2,
+        "S3": {**s2, "core overlap >= 0.8, identical cores or C splash exception": gate},
+        "S4": {"post-merge p10 >= tau": r["post"]["p10"] >= tau,
+               "post-merge median >= tau + 0.05": r["post"]["median"] >= tau + SHADOW_MEDIAN_MARGIN,
+               "every board >= tau - 0.10": floor},
+    }
+
+
+def _smaller_side_share_bucket(r: Mapping[str, Any]) -> str:
+    below, n = r["smaller_side_below_tau"], r["smaller_side_boards"]
+    if below == 0:
+        return SMALLER_SIDE_SHARE_LABELS[0]
+    if below == n:
+        return SMALLER_SIDE_SHARE_LABELS[5]
+    if 10 * below <= n:
+        return SMALLER_SIDE_SHARE_LABELS[1]
+    if 4 * below <= n:
+        return SMALLER_SIDE_SHARE_LABELS[2]
+    return SMALLER_SIDE_SHARE_LABELS[3] if 2 * below <= n else SMALLER_SIDE_SHARE_LABELS[4]
+
+
+def _dangers(r: Mapping[str, Any], tau: float) -> list[str]:
+    small_below, small_n = r["smaller_side_below_tau"], r["smaller_side_boards"]
+    flags = [small_below == small_n, 2 * small_below > small_n, r["core_overlap"] < 0.6 and not r["identical_cores"],
+             r["larger_side_below_tau"] > 0 and small_below > 0, r["post"]["min"] < tau - SHADOW_FLOOR]
+    return [label for label, flag in zip(DANGER_LABELS, flags) if flag]
+
+
+def _families(r: Mapping[str, Any], tau: float) -> list[str]:
+    flags = [all(shadow_conditions(r, tau)["S3"].values()), r["identical_cores"], r["splash_exception_applies"],
+             r["core_overlap"] >= 0.8]
+    return [label for label, flag in zip(FAMILY_LABELS, flags) if flag]
+
+
+def _counted(labels: Sequence[str], values: Iterable[str]) -> dict[str, int]:
+    c = Counter(values)
+    return {label: c[label] for label in labels}
+
+
+def _shadow_profile(rows: Sequence[Mapping[str, Any]], tau: float) -> dict[str, Any]:
+    """Structure of a set of attempts (a recovery set): shares, sides, overlap, size, similarity."""
+    return {
+        "attempts": len(rows),
+        "below_tau_count_buckets": _counted(BELOW_TAU_LABELS, (_below_tau_bucket(r["below_tau"], r["merged_boards"])
+                                                               for r in rows)),
+        "smaller_side_share_buckets": _counted(SMALLER_SIDE_SHARE_LABELS, map(_smaller_side_share_bucket, rows)),
+        "larger_side_failures": _counted(LARGER_SIDE_FAILURE_LABELS, (
+            LARGER_SIDE_FAILURE_LABELS[min(2, r["larger_side_below_tau"])] for r in rows)),
+        "core_overlap_buckets": _counted(OVERLAP_LABELS, map(_overlap_bucket, rows)),
+        "merged_size_bands": _counted([label for label, _, _ in SIZE_BANDS], (size_band(r["merged_boards"]) for r in rows)),
+        "dangers": _counted(DANGER_LABELS, (d for r in rows for d in _dangers(r, tau))),
+        "families": _counted(FAMILY_LABELS, (f for r in rows for f in _families(r, tau))),
+        "quantiles": {
+            "weakest_post_merge_similarity": quantiles(r["post"]["min"] for r in rows),
+            "post_merge_p10": quantiles(r["post"]["p10"] for r in rows),
+            "post_merge_median": quantiles(r["post"]["median"] for r in rows),
+            "merged_boards": quantiles(r["merged_boards"] for r in rows),
+            "smaller_side_boards": quantiles(r["smaller_side_boards"] for r in rows),
+            "smaller_side_below_tau_share": quantiles(r["smaller_side_below_tau_share"] for r in rows),
+            "larger_side_below_tau_share": quantiles(r["larger_side_below_tau_share"] for r in rows),
+            "core_overlap": quantiles(r["core_overlap"] for r in rows),
+        },
+    }
+
+
+def _shadow_case(r: Mapping[str, Any], reason: str) -> dict[str, Any]:
+    larger, smaller = r["larger_side"], "b" if r["larger_side"] == "a" else "a"
+    return {
+        "reason": reason, "attempt": r["attempt"], "outcome": r["outcome"],
+        "merged_boards": r["merged_boards"], "larger_side_boards": r["larger_side_boards"],
+        "smaller_side_boards": r["smaller_side_boards"], "core_larger": r[f"core_{larger}"],
+        "core_smaller": r[f"core_{smaller}"], "larger_only": r[f"{larger}_only"], "smaller_only": r[f"{smaller}_only"],
+        "core_overlap": r["core_overlap"], "identical_cores": r["identical_cores"],
+        "splash_exception_applies": r["splash_exception_applies"], "below_tau": r["below_tau"],
+        "below_tau_share": r["below_tau_share"], "larger_side_below_tau": r["larger_side_below_tau"],
+        "smaller_side_below_tau": r["smaller_side_below_tau"],
+        "smaller_side_below_tau_share": r["smaller_side_below_tau_share"],
+        "larger_side_min_post": r["larger_side_min_post"], "smaller_side_min_post": r["smaller_side_min_post"],
+        "post": r["post"],
+    }
+
+
+def _shadow_sample(recovered: Sequence[Mapping[str, Any]], tau: float) -> list[dict[str, Any]]:
+    """Deterministic, never by placement: up to SHADOW_SAMPLE_PER_REASON new
+    attempts per reason; ties break on the merge's attempt order."""
+    n = lambda r: r["merged_boards"]  # noqa: E731
+    reasons = [
+        ("high core overlap (>= 0.8, not identical)", [r for r in recovered if r["core_overlap"] >= 0.8 and not r["identical_cores"]],
+         lambda r: (-r["core_overlap"], -n(r), r["attempt"])),
+        ("identical cores", [r for r in recovered if r["identical_cores"]], lambda r: (-n(r), r["attempt"])),
+        ("C splash exception", [r for r in recovered if r["splash_exception_applies"]], lambda r: (-n(r), r["attempt"])),
+        ("DANGER A: whole smaller side below tau", [r for r in recovered if DANGER_LABELS[0] in _dangers(r, tau)],
+         lambda r: (-n(r), r["attempt"])),
+        ("DANGER B: > 50% of smaller side below tau", [r for r in recovered if DANGER_LABELS[1] in _dangers(r, tau)],
+         lambda r: (-n(r), r["attempt"])),
+        ("core overlap < 0.6", [r for r in recovered if DANGER_LABELS[2] in _dangers(r, tau)],
+         lambda r: (r["core_overlap"], -n(r), r["attempt"])),
+        ("largest recovered merge", list(recovered), lambda r: (-n(r), r["attempt"])),
+    ]
+    chosen: dict[int, dict[str, Any]] = {}
+    for reason, pool, key in reasons:
+        for r in [r for r in sorted(pool, key=key) if r["attempt"] not in chosen][:SHADOW_SAMPLE_PER_REASON]:
+            chosen[r["attempt"]] = _shadow_case(r, reason)
+    return list(chosen.values())
+
+
+def shadow_evaluation(rows: Sequence[Mapping[str, Any]], tau: float) -> dict[str, Any]:
+    """Report-only evaluation of the predeclared candidates S0-S4 over the
+    diagnostics rows (see SHADOW_DEFINITIONS). Reads rows, decides nothing."""
+    conditions = {r["attempt"]: shadow_conditions(r, tau) for r in rows}
+    accepts = {c: {r["attempt"] for r in rows if all(conditions[r["attempt"]][c].values())} for c in SHADOW_CANDIDATES}
+    actual = {r["attempt"] for r in rows if r["outcome"] == "accepted"}
+    recovered = {c: [r for r in rows if r["attempt"] in accepts[c] and r["attempt"] not in actual] for c in SHADOW_CANDIDATES}
+    candidates: dict[str, Any] = {}
+    for c in SHADOW_CANDIDATES:
+        shadow_accepted = [r for r in rows if r["attempt"] in accepts[c]]
+        lost = len(actual - accepts[c])
+        candidates[c] = {
+            "attempts": len(rows), "shadow_accepted": len(accepts[c]), "shadow_rejected": len(rows) - len(accepts[c]),
+            "acceptance_rate": len(accepts[c]) / len(rows) if rows else None,
+            "recovered": len(recovered[c]), "lost_vs_actual": lost, "net_vs_actual": len(recovered[c]) - lost,
+            "actual_x_shadow": {"actual accepted, shadow accepted": len(actual & accepts[c]),
+                                "actual accepted, shadow rejected": lost,
+                                "actual rejected, shadow accepted": len(recovered[c]),
+                                "actual rejected, shadow rejected": len(rows) - len(actual | accepts[c])},
+            "dangers_among_shadow_accepted": _counted(DANGER_LABELS, (d for r in shadow_accepted for d in _dangers(r, tau))),
+            "recovery_set": _shadow_profile(recovered[c], tau),
+            "sample": _shadow_sample(recovered[c], tau) if c != "S0" else [],
+        }
+    by_attempt = {r["attempt"]: r for r in rows}
+    ids = {c: {r["attempt"] for r in recovered[c]} for c in SHADOW_CANDIDATES}
+    differences = {}
+    for x, y in SHADOW_DIFFERENCES:
+        diff = sorted(ids[x] - ids[y])
+        differences[f"{x} recovered, {y} did not"] = {
+            "attempts": len(diff),
+            "failed_conditions_of_" + y: dict(sorted(Counter(
+                name for a in diff for name, ok in conditions[a][y].items() if not ok).items())),
+            "core_overlap_buckets": _counted(OVERLAP_LABELS, (_overlap_bucket(by_attempt[a]) for a in diff)),
+            "smaller_side_share_buckets": _counted(SMALLER_SIDE_SHARE_LABELS,
+                                                   (_smaller_side_share_bucket(by_attempt[a]) for a in diff)),
+        }
+    shadow = SHADOW_CANDIDATES[1:]
+    return {
+        "definitions": SHADOW_DEFINITIONS,
+        "s0_mismatches_with_actual_decision": len(accepts["S0"] ^ actual),
+        "candidates": candidates,
+        "recovered_by_S3": len(ids["S3"]),
+        "differences": differences,
+        "recovery_overlap": {x: {y: len(ids[x] & ids[y]) for y in shadow} for x in shadow},
+    }
 
 
 def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy: Strategy,
@@ -1430,6 +1655,84 @@ def render_merge_diagnostics(d: Mapping[str, Any], names: Names) -> list[str]:
     return lines + [""]
 
 
+def render_shadow_evaluation(sh: Mapping[str, Any], names: Names) -> list[str]:
+    """Markdown for `shadow_evaluation` -- every decision-relevant count is
+    printed here, not only in the JSON artifact."""
+    def pct(k: int, n: int) -> str:
+        return f"{k} ({100 * k / n:.1f}%)" if n else f"{k}"
+
+    def counts(b: Mapping[str, int], n: int) -> str:
+        return ", ".join(f"{k}: {pct(v, n)}" for k, v in b.items())
+
+    def med(q: Mapping[str, Any] | None, key: str = "median") -> str:
+        return "n/a" if not q else f"{q[key]:.4f}" if isinstance(q[key], float) else str(q[key])
+
+    def units(ids: Sequence[str]) -> str:
+        return ", ".join(names.champion(u) for u in ids) or "-"
+
+    cands = sh["candidates"]
+    lines = ["", "### Shadow merge-rule evaluation (REPORT ONLY -- no grouping decision depends on it)",
+             "One-step counterfactual on the actual merge trajectory: each candidate is asked whether it would have "
+             "accepted each attempt the real rule judged; a shadow acceptance changes no group, so later attempts are "
+             "unchanged and what a candidate would build as the real rule is NOT simulated. Candidates were declared "
+             "before any real run. Definitions: `merge_diagnostics.shadow.definitions` in the JSON report.",
+             *(f"- {c}: {SHADOW_DEFINITIONS[c]}" for c in SHADOW_CANDIDATES),
+             f"- S0 sanity check: {sh['s0_mismatches_with_actual_decision']} attempts where S0 differs from the actual "
+             "decision (must be 0).", "",
+             "| candidate | attempts | shadow accepted | acceptance | recovered (actual rejected) | lost (actual accepted) | net |",
+             "|---|---|---|---|---|---|---|"]
+    for c in SHADOW_CANDIDATES:
+        d = cands[c]
+        rate = "n/a" if d["acceptance_rate"] is None else f"{100 * d['acceptance_rate']:.1f}%"
+        lines.append(f"| {c} | {d['attempts']} | {d['shadow_accepted']} | {rate} | {d['recovered']} | "
+                     f"{d['lost_vs_actual']} | {d['net_vs_actual']:+d} |")
+    for c in SHADOW_CANDIDATES[1:]:
+        d = cands[c]
+        rs, n = d["recovery_set"], d["recovery_set"]["attempts"]
+        q = rs["quantiles"]
+        lines += [
+            "", f"#### {c} recovery set ({n} attempts the real rule rejected)",
+            f"- boards below tau (merged): {counts(rs['below_tau_count_buckets'], n)}",
+            f"- smaller-side share below tau: {counts(rs['smaller_side_share_buckets'], n)}",
+            f"- larger-side boards below tau: {counts(rs['larger_side_failures'], n)}",
+            f"- core overlap: {counts(rs['core_overlap_buckets'], n)}",
+            f"- merged size band: {counts(rs['merged_size_bands'], n)}",
+            f"- DANGER (recovered): {counts(rs['dangers'], n)}",
+            f"- DANGER (all shadow-accepted, {d['shadow_accepted']}): {counts(d['dangers_among_shadow_accepted'], d['shadow_accepted'])}",
+            f"- family proxies (recovered): {counts(rs['families'], n)}",
+            f"- medians: weakest post {med(q['weakest_post_merge_similarity'])} (min {med(q['weakest_post_merge_similarity'], 'min')}), "
+            f"post p10 {med(q['post_merge_p10'])}, post median {med(q['post_merge_median'])}, merged boards "
+            f"{med(q['merged_boards'])} (max {med(q['merged_boards'], 'max')}), smaller side {med(q['smaller_side_boards'])} boards, "
+            f"smaller-side share below tau {med(q['smaller_side_below_tau_share'])} (p90 {med(q['smaller_side_below_tau_share'], 'p90')}), "
+            f"core overlap {med(q['core_overlap'])}",
+        ]
+    lines += ["", "#### Candidate difference sets (what each added constraint removes)"]
+    for label, d in sh["differences"].items():
+        failed = next(v for k, v in d.items() if k.startswith("failed_conditions_of_"))
+        lines.append(f"- {label}: {d['attempts']}; failing conditions: "
+                     + (", ".join(f"{k}: {v}" for k, v in failed.items()) or "-")
+                     + f"; core overlap: {', '.join(f'{k}: {v}' for k, v in d['core_overlap_buckets'].items())}"
+                     + f"; smaller-side share: {', '.join(f'{k}: {v}' for k, v in d['smaller_side_share_buckets'].items())}")
+    lines.append(f"- recovered by S3: {sh['recovered_by_S3']}")
+    lines.append("- recovery-set overlaps |X and Y|: " + "; ".join(
+        f"{x}&{y}: {v}" for x, row in sh["recovery_overlap"].items() for y, v in row.items() if x < y))
+    lines += ["", "#### Deterministic review samples of recovered attempts (structure only, never placement)"]
+    for c in SHADOW_CANDIDATES[1:]:
+        for r in cands[c]["sample"]:
+            post = r["post"]
+            lines += [
+                f"- {c} attempt {r['attempt']} [{r['reason']}]: merged {r['merged_boards']} = larger {r['larger_side_boards']} + "
+                f"smaller {r['smaller_side_boards']}; overlap {r['core_overlap']:.3f}, identical {r['identical_cores']}, "
+                f"splash {r['splash_exception_applies']}; below tau {r['below_tau']} ({100 * r['below_tau_share']:.2f}%): "
+                f"larger {r['larger_side_below_tau']}, smaller {r['smaller_side_below_tau']} "
+                f"({100 * r['smaller_side_below_tau_share']:.0f}% of smaller); min post larger {r['larger_side_min_post']:.4f}, "
+                f"smaller {r['smaller_side_min_post']:.4f}; post p10 {post['p10']:.4f}, median {post['median']:.4f}",
+                f"  - larger core: {units(r['core_larger'])} | smaller core: {units(r['core_smaller'])} | "
+                f"larger only: {units(r['larger_only'])}; smaller only: {units(r['smaller_only'])}",
+            ]
+    return lines + [""]
+
+
 @dataclass(frozen=True)
 class LoadedInputs:
     """Everything the analysis needs, fully materialized in memory (plain
@@ -1554,6 +1857,7 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
         md += [f"- {k}: {json.dumps(v, default=_json_default)}" for k, v in metrics.items() if k not in ("description", "strategy")]
         if grouping.merge_diagnostics:
             md += render_merge_diagnostics(grouping.merge_diagnostics, names)
+            md += render_shadow_evaluation(grouping.merge_diagnostics["shadow"], names)
         md += ["", "### Unit-presence histogram (all groups with >= 30 boards; one count per unit per group)",
                "- " + ", ".join(f"{k}-: {v}" for k, v in sorted(hist.items())) if hist else "- no group has >= 30 boards", "",
                "### Size bands (niche test; performance quantiles are per group)"]

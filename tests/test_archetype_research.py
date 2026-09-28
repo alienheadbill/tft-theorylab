@@ -564,6 +564,146 @@ def test_diagnostic_buckets_are_fixed_and_exhaustive() -> None:
         "0", "exactly 1", "2+, <= 1%", "2+, (1%, 5%]", "2+, (5%, 10%]", "2+, > 10%", "2+, > 10%"]
 
 
+
+# ---------------------------------------------------------------- shadow merge rules (report only; validation run #5 design)
+
+
+def shadow_row(larger: list[float], smaller: list[float], *, overlap: float = 0.9, identical: bool = False,
+               splash: bool = False, tau: float = TAU) -> dict:
+    """One diagnostics row recorded by the real collector from chosen post-merge similarities: side a = the larger
+    side (lower id), side b = the smaller side. Pre-merge similarities are irrelevant to S0-S4 and set to 1.0."""
+    post = {i: v for i, v in enumerate(larger + smaller)}
+    side = {i: "a" if i < len(larger) else "b" for i in post}
+    core_a = {"x", "y"}
+    core_b = core_a if identical else {"x", "z"}
+    collector = ar.MergeDiagnostics(tau)
+    collector.record(accepted=min(post.values()) >= tau, a=0, b=1, variants_a=1, variants_b=1, core_a=core_a,
+                     core_b=core_b, merged_core=core_a & core_b, overlap=1.0 if identical else overlap, splash=splash,
+                     pre={k: 1.0 for k in post}, post=post, side=side)
+    return collector.rows[0]
+
+
+def decisions(row: dict) -> dict[str, bool]:
+    return {c: all(v.values()) for c, v in ar.shadow_conditions(row, TAU).items()}
+
+
+def test_shadow_s0_is_the_actual_similarity_decision(store: Path) -> None:
+    cases = [variants(*DRIFT, (SHELL8 + [8], 3), itemized={0, 8}), knife_edge([[11]]), knife_edge([[11], [12]]),
+             variants((SHELL8, 4), ([0, 1, 2, 3, 4, 5, 6, 8], 4))]
+    for boards, variant in cases:
+        for strategy in (B_STRATEGY, C_STRATEGY):
+            (_, log, checks), collector = diagnosed(boards, variant, strategy)
+            shadow = collector.summary()["shadow"]
+            assert shadow["s0_mismatches_with_actual_decision"] == 0, strategy.name
+            s0 = shadow["candidates"]["S0"]
+            assert (s0["shadow_accepted"], s0["recovered"], s0["lost_vs_actual"]) == (len(log), 0, 0), strategy.name
+            assert s0["shadow_rejected"] == checks["rejected_similarity"], strategy.name
+    report, _, _ = run(store)
+    for strategy in ("B_flex_tolerant", "C_structure_aware"):
+        assert report["strategies"][strategy]["merge_diagnostics"]["shadow"]["s0_mismatches_with_actual_decision"] == 0
+
+
+def test_side_fields_follow_board_counts_with_a_deterministic_tie() -> None:
+    r = shadow_row([0.8] * 5, [0.55, 0.7])
+    assert (r["larger_side"], r["larger_side_boards"], r["smaller_side_boards"]) == ("a", 5, 2)
+    assert (r["larger_side_below_tau"], r["smaller_side_below_tau"], r["smaller_side_below_tau_share"]) == (0, 1, 0.5)
+    assert (r["larger_side_min_post"], r["smaller_side_min_post"]) == (0.8, 0.55)
+    tie = shadow_row([0.8, 0.8], [0.55, 0.7])
+    assert tie["larger_side"] == "a" and tie["smaller_side_below_tau"] == 1  # equal sizes: side a (lower id)
+
+
+def test_denominator_counterexample_s1_accepts_s2_and_s3_reject() -> None:
+    """A large established side plus a tiny variant whose EVERY board fails: 2/202 < 1% of the merged group, all
+    boards above the tau - 0.10 floor -- the Run #4 Ahri/Sett/Morgana + Yorick shape."""
+    r = shadow_row([0.8] * 200, [0.55, 0.52], overlap=0.56)
+    assert r["below_tau_share"] <= 0.01 and r["smaller_side_below_tau"] == r["smaller_side_boards"]
+    d = decisions(r)
+    assert (d["S0"], d["S1"], d["S2"], d["S3"]) == (False, True, False, False)
+    assert d["S4"]  # S4 has no side logic by design: its bulk (p10, median) is healthy
+    assert set(ar._dangers(r, TAU)) == {ar.DANGER_LABELS[0], ar.DANGER_LABELS[1], ar.DANGER_LABELS[2]}
+
+
+def test_legitimate_bounded_family_tail_is_accepted_by_s2_and_s3() -> None:
+    r = shadow_row([0.85] * 300, [0.57, 0.56] + [0.8] * 28, overlap=0.889)  # 2/30 = 6.7% smaller, 2/330 = 0.6% merged
+    d = decisions(r)
+    assert (d["S0"], d["S1"], d["S2"], d["S3"], d["S4"]) == (False, True, True, True, True)
+    assert ar._dangers(r, TAU) == [] and ar.FAMILY_LABELS[0] in ar._families(r, TAU)
+    # one larger-side board below tau is enough for S2/S3 to reject (D: both sides)
+    both = shadow_row([0.59] + [0.85] * 299, [0.57, 0.56] + [0.8] * 28, overlap=0.889)
+    assert decisions(both)["S2"] is False and ar.DANGER_LABELS[3] in ar._dangers(both, TAU)
+    # smaller-side limit: exactly 10% (3/30) passes; 13.3% (4/30) fails even though only 4/430 < 1% of the merged group
+    assert decisions(shadow_row([0.85] * 300, [0.57] * 3 + [0.8] * 27, overlap=0.889))["S2"] is True  # exactly 10%
+    assert decisions(shadow_row([0.85] * 400, [0.57] * 4 + [0.8] * 26, overlap=0.889))["S2"] is False  # 13.3%
+
+
+@pytest.mark.parametrize(("overlap", "identical", "splash", "s3"), [
+    (0.80, False, False, True), (0.7999, False, False, False), (0.5, True, False, True), (0.7, False, True, True),
+])
+def test_s3_structural_gate(overlap: float, identical: bool, splash: bool, s3: bool) -> None:
+    r = shadow_row([0.85] * 300, [0.57] + [0.8] * 29, overlap=overlap, identical=identical, splash=splash)
+    d = decisions(r)
+    assert d["S2"] is True and d["S3"] is s3
+
+
+@pytest.mark.parametrize(("larger", "smaller", "s4"), [
+    ([0.9] * 18, [0.52, 0.8], True),  # p10 0.8 >= tau, median 0.9 >= 0.65, min 0.52 >= 0.5
+    ([0.9] * 16, [0.55, 0.55, 0.55, 0.8], False),  # p10 = 0.55 < tau
+    ([0.62] * 18, [0.61, 0.62], False),  # median 0.62 < tau + 0.05
+    ([0.9] * 18, [0.49, 0.8], False),  # floor: 0.49 < tau - 0.10
+    ([0.65] * 18, [0.6, 0.65], True),  # boundaries: p10 0.65, median exactly tau + 0.05
+])
+def test_s4_lower_tail_rule(larger: list[float], smaller: list[float], s4: bool) -> None:
+    assert decisions(shadow_row(larger, smaller))["S4"] is s4
+
+
+def test_danger_and_family_counters_and_difference_sets() -> None:
+    rows = [
+        shadow_row([0.8] * 200, [0.55, 0.52], overlap=0.56),  # S1 only: whole smaller side fails, low overlap
+        shadow_row([0.85] * 300, [0.57, 0.56] + [0.8] * 28, overlap=0.889),  # S1, S2, S3, S4
+        shadow_row([0.85] * 300, [0.57, 0.56] + [0.8] * 28, overlap=0.7),  # S1, S2, S4 but not S3 (gate)
+        shadow_row([0.8] * 20, [0.8] * 20),  # actually accepted by every candidate
+        shadow_row([0.45] + [0.9] * 30, [0.9] * 3),  # below the floor: nobody accepts (E)
+    ]
+    for i, r in enumerate(rows):
+        r["attempt"] = i
+    sh = ar.shadow_evaluation(rows, TAU)
+    c = sh["candidates"]
+    assert sh["s0_mismatches_with_actual_decision"] == 0
+    assert [c[k]["recovered"] for k in ar.SHADOW_CANDIDATES] == [0, 3, 2, 1, 3]
+    assert [c[k]["shadow_accepted"] for k in ar.SHADOW_CANDIDATES] == [1, 4, 3, 2, 4]
+    s1 = c["S1"]["recovery_set"]
+    assert s1["dangers"][ar.DANGER_LABELS[0]] == 1 and s1["dangers"][ar.DANGER_LABELS[1]] == 1
+    assert s1["dangers"][ar.DANGER_LABELS[2]] == 1 and s1["dangers"][ar.DANGER_LABELS[4]] == 0
+    assert s1["smaller_side_share_buckets"] == {"0%": 0, "(0, 10%]": 2, "(10%, 25%]": 0, "(25%, 50%]": 0,
+                                                "(50%, 100%)": 0, "100%": 1}
+    assert c["S3"]["recovery_set"]["families"][ar.FAMILY_LABELS[0]] == 1
+    assert c["S3"]["recovery_set"]["dangers"] == dict.fromkeys(ar.DANGER_LABELS, 0)
+    assert ar.DANGER_LABELS[4] in ar._dangers(rows[4], TAU)
+    diff = sh["differences"]
+    assert diff["S1 recovered, S2 did not"]["attempts"] == 1
+    assert diff["S1 recovered, S2 did not"]["failed_conditions_of_S2"] == {"smaller side: <= 10% below tau": 1}
+    assert diff["S2 recovered, S3 did not"]["failed_conditions_of_S3"] == {
+        "core overlap >= 0.8, identical cores or C splash exception": 1}
+    assert diff["S4 recovered, S3 did not"]["attempts"] == 2 and diff["S3 recovered, S4 did not"]["attempts"] == 0
+    assert sh["recovery_overlap"]["S1"]["S4"] == 3
+    sample = {s["attempt"]: s["reason"] for s in c["S1"]["sample"]}
+    assert sample[0].startswith("DANGER A") or sample[0] == "core overlap < 0.6"
+    assert all(s["attempt"] != 3 for k in ar.SHADOW_CANDIDATES for s in c[k]["sample"])  # samples hold recoveries only
+
+
+def test_report_prints_the_shadow_evaluation(store: Path) -> None:
+    report, markdown, _ = run(store)
+    for strategy in ("B_flex_tolerant", "C_structure_aware"):
+        sh = report["strategies"][strategy]["merge_diagnostics"]["shadow"]
+        assert set(sh["candidates"]) == set(ar.SHADOW_CANDIDATES)
+        text = json.dumps(sh)
+        for secret in ("PUUID", "SecretName", "M000", "M011", "NORMAL1", "EMPTYR", "match_id", "puuid"):
+            assert secret not in text, (strategy, secret)
+    assert sum(line.startswith("### Shadow merge-rule evaluation (REPORT ONLY") for line in markdown) == 2
+    assert sum(line.startswith("| S0 |") for line in markdown) == 2
+    assert any(line.startswith("- S0 sanity check: 0 attempts") for line in markdown)
+
+
 # ---------------------------------------------------------------- population / names / outputs
 
 
