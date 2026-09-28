@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import math
 import os
 import random
 from pathlib import Path
@@ -256,6 +257,153 @@ def test_prune_audit_agrees_with_brute_force(store: Path) -> None:
     for strategy in report["strategies"].values():
         assert strategy["prune_audit"]["boards_audited"] == 12 * 8
         assert strategy["prune_audit"]["disagreements"] == 0
+
+
+# ---------------------------------------------------------------- variant merge: result checks (validation run #2)
+
+IDS = sorted(ar.identity_champions())
+B_STRATEGY, C_STRATEGY = ar.STRATEGIES[1], ar.STRATEGIES[2]
+# Test-only configs that switch the pairwise preconditions off so each merged-result rule can be exercised alone
+# (with the defaults the core-retention branch is implied by the pairwise overlap requirement, see ArchetypeConfig).
+PAIRWISE_OFF = {"merge_min_shared": 2, "merge_shared_fraction": 0.0, "max_swaps": 10}
+
+
+def variants(*specs: tuple[list[int], int], itemized: set[int] = frozenset()) -> tuple[list[ar.Board], dict[int, int]]:
+    """Variant v = specs[v]: (unit indices into IDS, number of identical boards). Indices in `itemized` hold 2 items."""
+    champions = load_roster().champions
+    boards, variant = [], {}
+    for v, (idx, n) in enumerate(specs):
+        for _ in range(n):
+            obs = len(boards)
+            units = [ar.Unit(IDS[i], 2, None, tuple(CARRY_ITEMS[:2]) if i in itemized else (),
+                             tuple(CARRY_ITEMS[:2]) if i in itemized else (), False) for i in idx]
+            boards.append(ar.normalize_board(obs, ("M", obs), 1, 8, units, {"DA_18_Slayer": 1}, champions))
+            variant[obs] = v
+    return boards, variant
+
+
+def merged_sets(boards, variant, strategy, config) -> tuple[list[list[int]], dict[str, int]]:
+    to_group, _, checks = ar.merge_variants(boards, variant, strategy, config)
+    by_group: dict[int, list[int]] = {}
+    for v in sorted({variant[b.obs] for b in boards}):
+        by_group.setdefault(to_group[v], []).append(v)
+    return sorted(by_group.values()), checks
+
+
+def test_close_variants_still_merge() -> None:
+    """One flex swap on an 8-unit core: the merged core keeps 7 units and every board is 0.88 similar."""
+    boards, variant = variants((list(range(8)), 4), ([0, 1, 2, 3, 4, 5, 6, 8], 4))
+    for strategy in (B_STRATEGY, C_STRATEGY):
+        groups, checks = merged_sets(boards, variant, strategy, ar.ArchetypeConfig())
+        assert groups == [[0, 1]], strategy.name
+        assert checks["rejected_core"] == checks["rejected_similarity"] == 0
+
+
+# A -> B -> C erode the merged core one swap at a time; D shares only 5 units with A, B or C (never pairwise
+# mergeable with any of them) but satisfies the eroded A+B+C core.
+DRIFT = ((list(range(8)), 4), ([0, 1, 2, 3, 4, 5, 6, 8], 4), ([0, 1, 2, 3, 4, 5, 8, 9], 4), ([0, 1, 2, 3, 4, 10, 11, 12], 4))
+#: The pre-run-#2 behaviour: no merged-result checks (tau is used by the merge only for the similarity check).
+UNCHECKED = ar.ArchetypeConfig(tau=0.0, merge_min_result_core=0)
+
+
+def test_transitive_drift_is_stopped_by_the_merged_result_check() -> None:
+    boards, variant = variants(*DRIFT)
+    for v in (0, 1, 2):  # D is not pairwise mergeable with any original variant, even unchecked
+        pair = [b for b in boards if variant[b.obs] in (v, 3)]
+        assert len(merged_sets(pair, variant, B_STRATEGY, UNCHECKED)[0]) == 2
+    unchecked, _ = merged_sets(boards, variant, B_STRATEGY, UNCHECKED)
+    assert unchecked == [[0, 1, 2, 3]]  # the old behaviour chains D in through the eroded core
+    champions = load_roster().champions
+    vecs = [ar.board_vectors(b, B_STRATEGY, ar.ArchetypeConfig(), champions) for b in boards]
+    profile = ar.mean_profile(vecs)
+    assert min(ar.similarity(v, profile, B_STRATEGY) for v in vecs) < ar.ArchetypeConfig().tau  # incoherent result
+    checked, checks = merged_sets(boards, variant, B_STRATEGY, ar.ArchetypeConfig())
+    assert checked == [[0, 1, 2], [3]]
+    assert checks["rejected_similarity"] >= 1 and checks["rejected_core"] == 0
+
+
+@pytest.mark.parametrize(("a", "b", "merged"), [
+    # both cores 7 units; merged core exactly 5 units: accepted by the size branch
+    (list(range(7)), [0, 1, 2, 3, 4, 7, 8], True),
+    # merged core 4 units and keeps 4/7 < 60% of the (equal) smaller cores: rejected
+    (list(range(7)), [0, 1, 2, 3, 7, 8, 9], False),
+    # merged core 3 units but keeps exactly 3/5 = 60% of the smaller core: accepted by the retention branch
+    (list(range(5)), [0, 1, 2, 5, 6, 7, 8, 9], True),
+    # merged core 2 units, keeps 2/5 = 40% of the smaller core: rejected
+    (list(range(5)), [0, 1, 5, 6, 7, 8, 9, 10], False),
+])
+def test_merged_core_rule_boundaries(a: list[int], b: list[int], merged: bool) -> None:
+    boards, variant = variants((a, 4), (b, 4))
+    config = ar.ArchetypeConfig(tau=0.0, **PAIRWISE_OFF)  # isolate the core rule
+    groups, checks = merged_sets(boards, variant, B_STRATEGY, config)
+    assert (groups == [[0, 1]]) is merged
+    assert checks["rejected_core"] == (0 if merged else 1)
+    assert checks["rejected_similarity"] == 0
+
+
+def test_default_core_retention_is_implied_by_the_pairwise_overlap() -> None:
+    """Documented property: merged core >= shared core >= 60% of the larger core, so with the default fractions
+    the core rule never rejects a pair the pairwise check accepted; the similarity check is the binding one."""
+    config = ar.ArchetypeConfig()
+    assert config.merge_shared_fraction >= config.merge_core_retention
+    boards, variant = variants(*DRIFT, (list(range(4)) + [13, 14, 15, 16], 4), ([0, 1, 2, 3, 13, 14, 15, 17], 2))
+    assert merged_sets(boards, variant, B_STRATEGY, ar.ArchetypeConfig(tau=0.0))[1]["rejected_core"] == 0
+
+
+def test_a_board_below_tau_against_the_merged_profile_rejects_the_merge() -> None:
+    """One board each, 3 shared + 3 own units: every board is exactly 4.5 / 7.5 = 0.6 similar to the merged
+    profile. At tau = 0.6 the merge is kept (>= tau, as in grouping); at the next float above it is rejected."""
+    boards, variant = variants(([0, 1, 2, 3, 4, 5], 1), ([0, 1, 2, 6, 7, 8], 1))
+    champions = load_roster().champions
+    vecs = [ar.board_vectors(b, B_STRATEGY, ar.ArchetypeConfig(), champions) for b in boards]
+    assert [ar.similarity(v, ar.mean_profile(vecs), B_STRATEGY) for v in vecs] == [0.6, 0.6]
+    at = ar.ArchetypeConfig(tau=0.6, merge_min_result_core=0, **PAIRWISE_OFF)  # isolate the similarity rule
+    above = ar.ArchetypeConfig(tau=math.nextafter(0.6, 1.0), merge_min_result_core=0, **PAIRWISE_OFF)
+    assert merged_sets(boards, variant, B_STRATEGY, at)[0] == [[0, 1]]
+    groups, checks = merged_sets(boards, variant, B_STRATEGY, above)
+    assert groups == [[0], [1]] and checks["rejected_similarity"] == 1
+
+
+def test_c_absorbs_a_full_core_plus_one_itemized_splash() -> None:
+    """Satellite = the parent's full 8-unit core + one unit holding 2 items on every board. Without the exception
+    C's restriction keeps it apart (the added unit is itemized and not flex in the parent)."""
+    parent, satellite = list(range(8)), list(range(8)) + [8]
+    boards, variant = variants((parent, 6), (satellite, 3), itemized={0, 8})
+    groups, checks = merged_sets(boards, variant, C_STRATEGY, ar.ArchetypeConfig())
+    assert groups == [[0, 1]] and checks["rejected_similarity"] == 0
+    # The exception needs a fully shared core of >= merge_min_result_core units; raise it past 8 and C keeps them apart.
+    assert merged_sets(boards, variant, C_STRATEGY, ar.ArchetypeConfig(merge_min_result_core=9))[0] == [[0], [1]]
+
+
+@pytest.mark.parametrize(("a", "b"), [
+    # only a 4-unit core is shared: too small for the exception
+    ([0, 1, 2, 3], [0, 1, 2, 3, 8]),
+    # the itemized unit is a swap, not an addition: no exception
+    (list(range(8)), [0, 1, 2, 3, 4, 5, 6, 8]),
+    # two added itemized units: no exception
+    (list(range(8)), list(range(8)) + [8, 9]),
+])
+def test_c_splash_exception_does_not_merge_different_comps(a: list[int], b: list[int]) -> None:
+    boards, variant = variants((a, 6), (b, 3), itemized={0, 8, 9})
+    assert merged_sets(boards, variant, C_STRATEGY, ar.ArchetypeConfig())[0] == [[0], [1]]
+
+
+def test_merge_is_deterministic_and_independent_of_board_order() -> None:
+    boards, variant = variants(*DRIFT, (list(range(8)) + [8], 3), itemized={0, 8})
+    for strategy in (B_STRATEGY, C_STRATEGY):
+        first = ar.merge_variants(boards, variant, strategy, ar.ArchetypeConfig())
+        again = ar.merge_variants(boards, variant, strategy, ar.ArchetypeConfig())
+        reversed_order = ar.merge_variants(list(reversed(boards)), variant, strategy, ar.ArchetypeConfig())
+        assert first == again == reversed_order, strategy.name
+
+
+def test_report_prints_the_merge_checks(store: Path) -> None:
+    report, markdown, _ = run(store)
+    assert report["strategies"]["A_structural_baseline"]["merge_checks"] == {}  # A never merges
+    for strategy in ("B_flex_tolerant", "C_structure_aware"):
+        checks = report["strategies"][strategy]["merge_checks"]
+        assert set(checks) == {"rejected_core", "rejected_similarity", "variants_with_a_board_below_tau_before_merge"}
+    assert sum(line.startswith("- merge_checks: ") for line in markdown) == 3
 
 
 # ---------------------------------------------------------------- population / names / outputs
