@@ -406,6 +406,164 @@ def test_report_prints_the_merge_checks(store: Path) -> None:
     assert sum(line.startswith("- merge_checks: ") for line in markdown) == 3
 
 
+# ---------------------------------------------------------------- merge diagnostics (validation run #3; measurement only)
+
+TAU = ar.ArchetypeConfig().tau
+SHELL8 = list(range(8))
+
+
+def diagnosed(boards, variant, strategy=B_STRATEGY, config=None):
+    config = config or ar.ArchetypeConfig()
+    collector = ar.MergeDiagnostics(config.tau)
+    result = ar.merge_variants(boards, variant, strategy, config, diagnostics=collector)
+    return result, collector
+
+
+def knife_edge(extra_units: list[list[int]]) -> tuple[list[ar.Board], dict[int, int]]:
+    """Variant 0: nine 8-unit shell boards + one borderline board X = shell[0:6] + two rare units, 62/98 = 0.633
+    similar to its own profile. Variant 1: six boards, the shell plus the given extra unit(s) (cycled). The merged
+    profile of 16 boards leaves X at 98/164 = 0.5976 < tau and every other board >= 0.9."""
+    specs = [(SHELL8, 9), ([0, 1, 2, 3, 4, 5, 8, 9], 1)] + [(SHELL8 + extra, 6 // len(extra_units)) for extra in extra_units]
+    boards, variant = variants(*specs)
+    return boards, {k: 0 if v <= 1 else 1 for k, v in variant.items()}
+
+
+def test_diagnostics_never_change_merge_decisions() -> None:
+    """Same groups, merges, log and rejection counts with or without the collector, for both merging strategies."""
+    cases = [variants(*DRIFT, (SHELL8 + [8], 3), itemized={0, 8}), knife_edge([[11]]), knife_edge([[11], [12]])]
+    for boards, variant in cases:
+        for strategy in (B_STRATEGY, C_STRATEGY):
+            plain = ar.merge_variants(boards, variant, strategy, ar.ArchetypeConfig())
+            (instrumented, collector) = diagnosed(boards, variant, strategy)
+            assert instrumented == plain, strategy.name
+            summary = collector.summary()
+            _, _, checks = plain
+            assert summary["rejected_similarity_attempts"] == checks["rejected_similarity"], strategy.name
+            assert summary["accepted_attempts"] == len(plain[1]), strategy.name
+
+
+def test_cluster_groups_match_an_uninstrumented_merge(store: Path) -> None:
+    with Database.open_existing(store) as db:
+        boards = ar.load_inputs(db, WINDOW).boards
+    for strategy in (B_STRATEGY, C_STRATEGY):
+        grouping = ar.cluster(boards, strategy, ar.ArchetypeConfig())
+        members = [b for b in boards if b.obs in grouping.variant]
+        to_group, log, checks = ar.merge_variants(members, grouping.variant, strategy, ar.ArchetypeConfig())
+        assert grouping.group == {k: to_group[v] for k, v in grouping.variant.items()}, strategy.name
+        assert (grouping.merges, grouping.merge_checks) == (len(log), checks), strategy.name
+        assert grouping.merge_diagnostics["attempts_evaluated"] == grouping.merges + checks["rejected_similarity"]
+
+
+def test_one_board_knife_edge_rejection_is_measured_exactly() -> None:
+    boards, variant = knife_edge([[11]])
+    (_, _, checks), collector = diagnosed(boards, variant)
+    assert checks["rejected_similarity"] == 1 and len(collector.rows) == 1
+    r = collector.rows[0]
+    assert (r["outcome"], r["a_boards"], r["b_boards"], r["merged_boards"]) == ("rejected_similarity", 10, 6, 16)
+    assert (r["below_tau"], r["below_tau_from_a"], r["below_tau_from_b"]) == (1, 1, 0)
+    assert r["below_tau_share"] == pytest.approx(1 / 16)
+    w = r["weakest"]
+    assert (w["side"], w["observation"], w["tau"]) == ("a", 9, TAU)
+    assert w["pre_merge_similarity"] == pytest.approx(62 / 98)
+    assert w["post_merge_similarity"] == pytest.approx(98 / 164)
+    assert w["delta"] == pytest.approx(98 / 164 - 62 / 98)
+    assert w["shortfall_below_tau"] == pytest.approx(TAU - 98 / 164)
+    assert w["pre_margin_above_tau"] == pytest.approx(62 / 98 - TAU)
+    assert r["shortfall_max"] == r["shortfall_median"] == pytest.approx(TAU - 98 / 164)
+    assert r["post"]["median"] > 0.9 and r["post"]["min"] == pytest.approx(98 / 164)
+    assert (r["b_only"], r["a_only"], r["splash_exception_applies"]) == ([IDS[11]], [], False)  # B: no C exception
+    agg = collector.summary()["rejected"]
+    assert agg["below_tau_count_buckets"]["exactly 1"] == 1
+    assert agg["weakest_distance_from_tau_buckets"]["(0.001, 0.0025]"] == 1  # 0.0024: a knife-edge miss
+    assert agg["weakest_pre_merge_margin_buckets"]["(0.02, 0.05]"] == 1  # 0.0327 above tau before the merge
+    assert agg["weakest_degradation_buckets"]["drop (0.02, 0.05]"] == 1  # 0.6327 -> 0.5976
+    assert agg["failing_boards_by_side"] == {"larger side only": 1, "smaller side only": 0, "both sides": 0}
+    assert agg["merged_size_bands"]["10-29"]["exactly 1"] == 1
+
+
+def test_identical_core_rejection_exposes_the_single_failing_board() -> None:
+    """Variant 1 alternates two different extra units, so both cores are exactly the 8-unit shell (overlap 1.0), yet
+    the one borderline board of variant 0 still falls below tau."""
+    boards, variant = knife_edge([[11], [12]])
+    (_, _, checks), collector = diagnosed(boards, variant)
+    assert checks["rejected_similarity"] == 1
+    r = collector.rows[0]
+    assert r["identical_cores"] and r["core_overlap"] == 1.0 and r["core_a"] == r["core_b"] == r["merged_core"]
+    assert r["below_tau"] == 1 and r["weakest"]["post_merge_similarity"] == pytest.approx(98 / 164)
+    summary = collector.summary()
+    assert summary["rejected"]["core_overlap_buckets"]["identical cores"] == 1
+    assert {s["reason"] for s in summary["sample"]} >= {"smallest threshold miss"}
+    assert all(s["attempt"] == 0 for s in summary["sample"])  # one attempt, sampled once (deduplicated)
+
+
+def test_material_failure_is_measured_across_all_failing_boards() -> None:
+    """DRIFT: the eroded A+B+C group tentatively absorbs D; all four D boards fall to 5.75 / 10.25 = 0.561."""
+    boards, variant = variants(*DRIFT)
+    _, collector = diagnosed(boards, variant)
+    [r] = [r for r in collector.rows if r["outcome"] == "rejected_similarity" and r["b_root_variant"] == 3]
+    assert (r["a_boards"], r["b_boards"], r["below_tau"], r["below_tau_from_b"]) == (12, 4, 4, 4)
+    assert r["below_tau_share"] == pytest.approx(0.25)
+    assert r["shortfall_max"] == r["shortfall_mean"] == pytest.approx(TAU - 5.75 / 10.25)
+    assert r["weakest"]["pre_merge_similarity"] == pytest.approx(1.0) and r["weakest"]["side"] == "b"
+    assert r["weakest"]["delta"] == pytest.approx(5.75 / 10.25 - 1.0)
+    agg = collector.summary()["rejected"]
+    assert agg["below_tau_count_buckets"]["2+, > 10%"] == 1
+    assert agg["weakest_distance_from_tau_buckets"]["(0.02, 0.05]"] == 1  # 0.039 below tau
+    assert agg["weakest_degradation_buckets"]["drop > 0.1"] == 1
+    assert agg["failing_boards_by_side"]["smaller side only"] == 1
+
+
+def test_accepted_merges_are_measured_without_changing_acceptance() -> None:
+    boards, variant = variants((SHELL8, 4), ([0, 1, 2, 3, 4, 5, 6, 8], 4))
+    (to_group, log, checks), collector = diagnosed(boards, variant)
+    assert len(log) == 1 and to_group[0] == to_group[1] and checks["rejected_similarity"] == 0
+    [r] = collector.rows
+    assert (r["outcome"], r["below_tau"], r["merged_boards"]) == ("accepted", 0, 8)
+    assert r["weakest"]["post_merge_similarity"] == pytest.approx(7.5 / 8.5)
+    assert r["weakest"]["pre_merge_similarity"] == pytest.approx(1.0)
+    assert r["weakest"]["shortfall_below_tau"] == pytest.approx(TAU - 7.5 / 8.5)  # negative: above tau
+    summary = collector.summary()
+    assert (summary["accepted_attempts"], summary["rejected_similarity_attempts"]) == (1, 0)
+    assert summary["accepted"]["below_tau_count_buckets"]["0"] == 1
+    assert summary["accepted"]["weakest_distance_from_tau_buckets"]["> 0.1"] == 1  # 0.28 above tau
+    assert summary["rejected"]["attempts"] == 0 and summary["rejected"]["quantiles"]["merged_boards"] is None
+    assert [s["reason"] for s in summary["sample"]] == ["accepted: closest to tau"]
+
+
+def test_diagnostics_are_deterministic_and_independent_of_board_order() -> None:
+    boards, variant = variants(*DRIFT, (SHELL8 + [8], 3), ([0, 1, 2, 3, 4, 5, 8, 9], 2), itemized={0, 8})
+    for strategy in (B_STRATEGY, C_STRATEGY):
+        first = diagnosed(boards, variant, strategy)[1].summary()
+        again = diagnosed(boards, variant, strategy)[1].summary()
+        reordered = diagnosed(list(reversed(boards)), variant, strategy)[1].summary()
+        assert first == again == reordered, strategy.name
+
+
+def test_report_carries_bounded_anonymous_merge_diagnostics(store: Path) -> None:
+    report, markdown, _ = run(store)
+    assert report["strategies"]["A_structural_baseline"]["merge_diagnostics"] == {}
+    for strategy in ("B_flex_tolerant", "C_structure_aware"):
+        d = report["strategies"][strategy]["merge_diagnostics"]
+        assert d["attempts_evaluated"] == d["accepted_attempts"] + d["rejected_similarity_attempts"]
+        assert d["accepted_attempts"] == report["strategies"][strategy]["merges"]
+        assert d["rejected_similarity_attempts"] == report["strategies"][strategy]["merge_checks"]["rejected_similarity"]
+        assert len(d["sample"]) <= 10 * ar.DIAGNOSTIC_SAMPLE_PER_REASON
+        assert len({s["attempt"] for s in d["sample"]}) == len(d["sample"])
+        text = json.dumps(d)
+        for secret in ("PUUID", "SecretName", "M000", "M011", "NORMAL1", "EMPTYR", "match_id", "puuid"):
+            assert secret not in text, (strategy, secret)
+    assert sum(line.startswith("### Merge-result similarity diagnostics") for line in markdown) == 2
+    assert report["strategies"]["B_flex_tolerant"]["merge_diagnostics"]["attempts_evaluated"] >= 1
+
+
+def test_diagnostic_buckets_are_fixed_and_exhaustive() -> None:
+    assert ar.DIAGNOSTIC_EDGES == (0.001, 0.0025, 0.005, 0.01, 0.02, 0.05, 0.1)
+    assert ar._magnitude_bucket(0.0001) == "<= 0.001" and ar._magnitude_bucket(0.001) == "<= 0.001"
+    assert ar._magnitude_bucket(0.0011) == "(0.001, 0.0025]" and ar._magnitude_bucket(0.15) == "> 0.1"
+    assert [ar._below_tau_bucket(k, n) for k, n in ((0, 5), (1, 5), (2, 400), (2, 100), (6, 100), (11, 100), (2, 4))] == [
+        "0", "exactly 1", "2+, <= 1%", "2+, (1%, 5%]", "2+, (5%, 10%]", "2+, > 10%", "2+, > 10%"]
+
+
 # ---------------------------------------------------------------- population / names / outputs
 
 
