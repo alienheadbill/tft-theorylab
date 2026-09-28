@@ -27,7 +27,8 @@ refuses to continue unless a Postgres server reports
    threshold lives in `ArchetypeConfig` and is printed with the results:
    A. structural baseline -- champion-set similarity only (the control);
    B. flex-tolerant -- A plus a structural variant merge for flex slots and
-      incomplete boards;
+      incomplete boards, each merge kept only if the merged group itself
+      stays coherent (core kept, every board >= tau to the merged profile);
    C. structure-aware -- B's idea plus documented secondary structure
       (item counts, splash weighting, active traits).
 4. Reports global grouping statistics and a deterministic, human-reviewable
@@ -101,9 +102,23 @@ class ArchetypeConfig:
     merge_min_shared: int = 3
     merge_shared_fraction: float = 0.6
     max_swaps: int = 1
+    #: Merge result checks (strategies B and C), applied to every tentative
+    #: merge: the merged group's core (same core_presence rule) must keep >=
+    #: merge_min_result_core units OR >= merge_core_retention of the smaller
+    #: pre-merge core; and every board of the merged group must still be >=
+    #: tau similar to the merged mean profile (the strategy's own
+    #: similarity). Experimental thresholds from validation run #2. The
+    #: merged core always contains the shared core, so while
+    #: merge_shared_fraction >= merge_core_retention the retention branch is
+    #: implied by the pairwise overlap requirement and the similarity check
+    #: is the binding one; the core rule binds only if those fractions differ.
+    merge_min_result_core: int = 5
+    merge_core_retention: float = 0.6
     #: Strategy C only: a differing core unit is "explained" if it is on >=
     #: flex_presence of the other variant's boards, or un-itemized in its own
-    #: variant (holds >= 2 completed items on < itemized_share of its boards).
+    #: variant (holds >= 2 completed items on < itemized_share of its boards),
+    #: or it is the single addition to a fully shared core of >=
+    #: merge_min_result_core units (itemized-splash exception).
     flex_presence: float = 0.15
     itemized_share: float = 0.5
     #: Strategy C weights: units holding >= 2 completed items (any items; the
@@ -358,12 +373,15 @@ STRATEGIES: tuple[Strategy, ...] = (
              "Champion-set Ruzicka only (every shop unit weight 1). No item, carry, cost or trait information. No merge."),
     Strategy("B_flex_tolerant", "B. flex-tolerant structural",
              "A's similarity, then a structural variant merge: variants whose cores share >= max(3, 60% of the larger core) "
-             "and differ by at most one core swap (pure additions allowed) become one group. Champion presence only.",
+             "and differ by at most one core swap (pure additions allowed) become one group, if the merged group keeps a core "
+             "of >= 5 units (or >= 60% of the smaller core) and every member board stays >= tau similar to the merged "
+             "profile. Champion presence only.",
              merge="structural"),
     Strategy("C_structure_aware", "C. structure-aware",
              "Weighted Ruzicka (units with >= 2 completed items x2, un-itemized 1-star 4/5-cost units x0.5) blended 75/25 "
              "with active-trait Ruzicka, then B's merge restricted so a differing core unit must be flex (>= 15%) in the "
-             "other variant or un-itemized in its own (a swapped itemized unit keeps groups apart). Item COUNTS only; "
+             "other variant or un-itemized in its own (a swapped itemized unit keeps groups apart; a single unit added to a "
+             "fully shared core of >= 5 units may merge), with B's merged-result checks. Item COUNTS only; "
              "never the carry classifier.",
              weighted=True, trait_share=0.25, merge="structure_aware"),
 )
@@ -429,6 +447,7 @@ class Grouping:
     refine_moves: list[int]
     merges: int
     prune_audit: dict[str, Any] = field(default_factory=dict)
+    merge_checks: dict[str, int] = field(default_factory=dict)
 
 
 #: Leader-pass progress line every this many boards (status only).
@@ -568,15 +587,19 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
     sizes = Counter(assign.values())
     assign = _renumber({k: g for k, g in assign.items() if sizes[g] >= config.min_group_size}, vecs)
 
-    group, merges = dict(assign), 0
+    group, merges, checks = dict(assign), 0, {}
     if strategy.merge:
         progress(f"{strategy.name}: variant merge started over {len(set(assign.values()))} variants")
-        to_group, merge_log = merge_variants([b for b in eligible if b.obs in assign], assign, strategy, config)
+        to_group, merge_log, checks = merge_variants([b for b in eligible if b.obs in assign], assign, strategy, config,
+                                                     vecs=vecs)
         group = {k: to_group[v] for k, v in assign.items()}
         merges = len(merge_log)
-        log.append(f"variant merge: {merges} merges, {len(set(assign.values()))} variants -> {len(set(group.values()))} groups")
-        progress(f"{strategy.name}: variant merge completed, {merges} merges, {len(set(group.values()))} groups")
-    result = Grouping(variant=assign, group=group, log=log, converged=converged, refine_moves=moves, merges=merges)
+        log.append(f"variant merge: {merges} merges, {len(set(assign.values()))} variants -> {len(set(group.values()))} groups; "
+                   f"tentative merges rejected: {checks['rejected_core']} core, {checks['rejected_similarity']} similarity")
+        progress(f"{strategy.name}: variant merge completed, {merges} merges, {len(set(group.values()))} groups, "
+                 f"rejected {checks['rejected_core']} core / {checks['rejected_similarity']} similarity")
+    result = Grouping(variant=assign, group=group, log=log, converged=converged, refine_moves=moves, merges=merges,
+                      merge_checks=checks)
     progress(f"{strategy.name}: prune audit started")
     result.prune_audit = prune_audit(eligible, vecs, assign, strategy, config)
     progress(f"{strategy.name}: prune audit completed, {result.prune_audit['disagreements']} disagreements "
@@ -611,25 +634,45 @@ def prune_audit(eligible: Sequence[Board], vecs, assign: Mapping[int, int], stra
 
 
 def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy: Strategy,
-                   config: ArchetypeConfig) -> tuple[dict[int, int], list[str]]:
+                   config: ArchetypeConfig, *, vecs: Mapping[int, tuple[dict[str, float], dict[str, float]]] | None = None,
+                   ) -> tuple[dict[int, int], list[str], dict[str, int]]:
     """Variant -> group. Greedy: the highest core-overlap mergeable pair first
     (ties: lowest ids), every candidate re-checked against the merged group's
-    recomputed statistics, so A~B~C chaining cannot pull in a C that the
-    merged A+B does not satisfy."""
+    recomputed statistics. Pairwise checks alone let a merged core shrink
+    below both input cores, which lowers the bar for the next merge (A~B,
+    then the eroded A+B ~ C, ...), so every tentative merge is also checked
+    on its RESULT (`result_check`) and kept only if the merged core survives
+    and every member board is still >= tau similar to the merged profile.
+    Returns (variant -> group, merge log, merge-check counts)."""
+    if vecs is None:
+        champions = load_roster().champions
+        vecs = {b.obs: board_vectors(b, strategy, config, champions) for b in boards}
     counts: dict[int, Counter] = defaultdict(Counter)
     itemized: dict[int, Counter] = defaultdict(Counter)
     sizes: Counter = Counter()
+    members: dict[int, list[int]] = defaultdict(list)
     for b in boards:
         g = variant[b.obs]
         sizes[g] += 1
         counts[g].update(b.identity)
         itemized[g].update({u.cid for u in b.shop if len(u.items) >= 2})
+        members[g].append(b.obs)
     groups = {g: {g} for g in sizes}
     version = {g: 0 for g in sizes}
     log: list[str] = []
+    checks = {"rejected_core": 0, "rejected_similarity": 0, "variants_with_a_board_below_tau_before_merge": 0}
+
+    def core_of(c: Counter, n: int) -> set[str]:
+        return {u for u, k in c.items() if k / n >= config.core_presence}
 
     def core(g: int) -> set[str]:
-        return {u for u, c in counts[g].items() if c / sizes[g] >= config.core_presence}
+        return core_of(counts[g], sizes[g])
+
+    def below_tau(obs: Sequence[int]) -> bool:
+        profile = mean_profile([vecs[k] for k in obs])
+        return any(similarity(vecs[k], profile, strategy) < config.tau for k in obs)
+
+    checks["variants_with_a_board_below_tau_before_merge"] = sum(below_tau(sorted(members[g])) for g in sorted(groups))
 
     def score(a: int, b: int) -> float | None:
         ca, cb = core(a), core(b)
@@ -640,13 +683,36 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
         if min(len(da), len(db_)) > config.max_swaps:
             return None
         if strategy.merge == "structure_aware":
+            # Itemized-splash exception: one variant's core is the other's
+            # full core (>= merge_min_result_core units) plus exactly one
+            # unit; that unit needs no flex/un-itemized explanation, so an
+            # itemized splash on an unchanged core may merge. Any swap, or a
+            # smaller shared core, gets no exception.
+            splash = ((not da and len(db_) == 1) or (not db_ and len(da) == 1)) and len(shared) >= config.merge_min_result_core
+
             def explained(u: str, own: int, other: int) -> bool:
                 flex_elsewhere = counts[other][u] / sizes[other] >= config.flex_presence
                 support = itemized[own][u] / counts[own][u] < config.itemized_share
-                return flex_elsewhere or support
+                return flex_elsewhere or support or splash
             if not all(explained(u, a, b) for u in da) or not all(explained(u, b, a) for u in db_):
                 return None
         return len(shared) / len(ca | cb)
+
+    def result_check(a: int, b: int) -> str | None:
+        """None when the merged a+b stays coherent, else the failed rule:
+        "core" -- the merged core has < merge_min_result_core units AND keeps
+        < merge_core_retention of the smaller pre-merge core (on equal core
+        sizes both must be kept); "similarity" -- a member board is < tau
+        similar to the merged mean profile."""
+        ca, cb = core(a), core(b)
+        merged = core_of(counts[a] + counts[b], sizes[a] + sizes[b])
+        smaller = [c for c in (ca, cb) if len(c) == min(len(ca), len(cb))]
+        kept = all(len(merged & c) >= math.ceil(config.merge_core_retention * len(c)) for c in smaller)
+        if len(merged) < config.merge_min_result_core and not kept:
+            return "core"
+        if below_tau(sorted(members[a] + members[b])):
+            return "similarity"
+        return None
 
     def core_index() -> dict[str, set[int]]:
         idx: dict[str, set[int]] = defaultdict(set)
@@ -668,6 +734,7 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
                 lo, hi = min(a, h), max(a, h)
                 heapq.heappush(heap, (-s, lo, hi, version[lo], version[hi]))
 
+    rejected: set[tuple[int, int, int, int]] = set()
     for g in sorted(groups):
         push_pairs(g)
     while heap:
@@ -675,6 +742,13 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
         if a not in groups or b not in groups or version[a] != va or version[b] != vb:
             continue
         if score(a, b) is None:  # stats unchanged since push, but stay defensive
+            continue
+        if (a, b, va, vb) in rejected:  # the same pair can be queued from both sides
+            continue
+        failed = result_check(a, b)
+        if failed:  # re-examined only if a or b later changes (push_pairs after a merge)
+            rejected.add((a, b, va, vb))
+            checks[f"rejected_{failed}"] += 1
             continue
         log.append(f"merge variant-group {b} ({sizes[b]} boards) into {a} ({sizes[a]} boards), core overlap {-neg:.2f}")
         for u in core(a) | core(b):
@@ -684,13 +758,14 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
         itemized[a] += itemized.pop(b)
         sizes[a] += sizes.pop(b)
         groups[a] |= groups.pop(b)
+        members[a] += members.pop(b)
         del version[b]
         version[a] += 1
         for u in core(a):
             idx[u].add(a)
         push_pairs(a)
     order = sorted(groups, key=lambda g: (-sizes[g], min(groups[g])))
-    return {v: rank for rank, g in enumerate(order) for v in sorted(groups[g])}, log
+    return {v: rank for rank, g in enumerate(order) for v in sorted(groups[g])}, log, checks
 
 
 # ---------------------------------------------------------------- statistics
@@ -883,6 +958,7 @@ def global_metrics(boards: Sequence[Board], grouping: Grouping, strategy: Strate
         "converged": grouping.converged,
         "refine_moves": grouping.refine_moves,
         "merges": grouping.merges,
+        "merge_checks": grouping.merge_checks,
         "prune_audit": grouping.prune_audit,
         "log": grouping.log,
     }
