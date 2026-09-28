@@ -1017,19 +1017,48 @@ def archetype_report_command(
 
     Groups one balance window's unit-observable Ranked TFT final boards with
     three predeclared strategies and writes a human-reviewable Markdown
-    report, a JSON summary and an anonymized membership CSV. Opens the
-    database with `Database.open_existing` only (Postgres
-    `default_transaction_read_only=on`, verified before any analysis; SQLite
-    `mode=ro`): no schema creation, migration, backfill or write, and no Riot
-    or CommunityDragon call."""
-    from .archetype_research import build_report, write_outputs
+    report, a JSON summary and an anonymized membership CSV. The database is
+    opened with `Database.open_existing` only (Postgres
+    `default_transaction_read_only=on`, verified before any read; SQLite
+    `mode=ro`), used only to load the population into memory, and closed
+    BEFORE any clustering. No schema creation, migration, backfill or write,
+    and no Riot or CommunityDragon call.
 
-    with Database.open_existing(_resolve_db_target(db)) as database:
-        report, markdown, membership = build_report(database, balance_window=balance_window)
-    paths = write_outputs(report, markdown, membership, out_dir)
+    Progress lines with elapsed time are printed throughout; each report
+    section is printed and saved (as a labelled PARTIAL file) as soon as its
+    phase finishes, so a timeout keeps the finished phases. The final report
+    files exist only when every phase completed."""
+    from .archetype_research import ArchetypeConfig, Progress, ProgressiveWriter, analyze, load_inputs
+
+    writer = ProgressiveWriter(out_dir, balance_window)
+
+    def emit(line: str) -> None:
+        typer.echo(line)
+        writer.log(line)
+
+    progress = Progress(emit)
     if print_report:
         # Plain lines, not rich: the log must stay readable (no wrapping at 80 columns).
-        typer.echo("\n".join(markdown))
+        typer.echo("Report sections are printed as each phase completes. The report is complete only if the line "
+                   "'RESEARCH REPORT COMPLETE' appears at the end.")
+    progress("opening database connection (read-only)")
+    with Database.open_existing(_resolve_db_target(db)) as database:
+        progress("database connection established")
+        inputs = load_inputs(database, balance_window, progress)
+    progress(f"database connection closed; {len(inputs.boards)} boards held in memory; analysis runs without the database")
+
+    def on_section(phase: str, data, lines) -> None:
+        writer.section(phase, data, lines)
+        if print_report:
+            typer.echo("\n".join(lines))
+
+    report, markdown, membership = analyze(
+        inputs.boards, inputs.population, inputs.access, ArchetypeConfig(), progress=progress, on_section=on_section
+    )
+    paths = writer.complete(report, markdown, membership)
+    progress("final report written; partial files removed")
+    if print_report:
+        typer.echo("RESEARCH REPORT COMPLETE")
     for path in paths:
         typer.echo(f"Wrote {path}")
 

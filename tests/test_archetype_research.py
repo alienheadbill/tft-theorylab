@@ -465,7 +465,7 @@ def test_workflow_is_manual_main_only_and_read_only() -> None:
     assert preflight < text.index("refs/heads/main") < text.index("actions/checkout")
     assert '-z "${DATABASE_URL}"' in text and "postgres://*|postgresql://*" in text
     assert "group: read-only-archetype-report" in text and "contents: read" in text
-    assert "timeout-minutes: 60" in text
+    assert "timeout-minutes: 180" in text
 
 
 def test_workflow_runs_only_the_archetype_report_and_uploads_it() -> None:
@@ -495,3 +495,180 @@ def test_workflow_never_prints_the_database_url() -> None:
     for line in _text().splitlines():
         if "echo" in line.lower():
             assert "$DATABASE_URL" not in line and "${DATABASE_URL}" not in line
+
+
+# ---------------------------------------------------------------- DB lifetime, progress, partial results
+
+
+def test_inputs_are_fully_materialized_and_analysis_needs_no_database(store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import pickle
+
+    expected = run(store)
+    with Database.open_existing(store) as db:
+        inputs = ar.load_inputs(db, WINDOW)
+    pickle.dumps(inputs)  # plain data: a live connection or cursor could not be pickled
+
+    def no_database(*args, **kwargs):
+        raise AssertionError("analysis touched the database after it was closed")
+
+    for name in ("query_all", "query_one", "execute", "executemany"):
+        monkeypatch.setattr(Database, name, no_database)
+    got = ar.analyze(inputs.boards, inputs.population, inputs.access, ar.ArchetypeConfig())
+    assert json.dumps(got[0], sort_keys=True, default=str) == json.dumps(expected[0], sort_keys=True, default=str)
+    assert got[1] == expected[1] and got[2] == expected[2]
+
+
+def test_cli_closes_the_database_before_any_analysis(store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    original_close, original_analyze = Database.close, ar.analyze
+
+    def close(self):
+        events.append("database closed")
+        return original_close(self)
+
+    def analyze(*args, **kwargs):
+        events.append("analysis started")
+        return original_analyze(*args, **kwargs)
+
+    monkeypatch.setattr(Database, "close", close)
+    monkeypatch.setattr(ar, "analyze", analyze)
+    result = CliRunner().invoke(app, ["archetype-report", "--db", str(store), "--balance-window", WINDOW,
+                                      "--out-dir", str(tmp_path / "o")])
+    assert result.exit_code == 0, result.output
+    assert events == ["database closed", "analysis started"]
+
+
+def _cli(store: Path, out: Path):
+    return CliRunner().invoke(app, ["archetype-report", "--db", str(store), "--balance-window", WINDOW, "--out-dir", str(out)])
+
+
+def test_progress_and_timing_lines_are_printed_and_logged(store: Path, tmp_path: Path) -> None:
+    out = tmp_path / "o"
+    result = _cli(store, out)
+    assert result.exit_code == 0, result.output
+    expected = ["database connection established", "read-only verified: sqlite mode=ro", "population loading started",
+                "population loading completed", "database connection closed", "normalization completed",
+                *[f"{s.name}: {what}" for s in ar.STRATEGIES for what in (
+                    "started", "leader pass completed", "refine 1 completed", "summaries/diagnostics started",
+                    "summaries/diagnostics completed", "completed,")],
+                "report generation completed", "final report written"]
+    progress_lines = [line for line in result.output.splitlines() if line.startswith("[progress +")]
+    for phrase in expected:
+        assert any(phrase in line for line in progress_lines), phrase
+    assert result.output.rstrip().splitlines()[-4] == "RESEARCH REPORT COMPLETE"
+    log = (out / "archetypes_14.6_progress.log").read_text()
+    assert log.splitlines() == progress_lines
+    for secret in ("PUUID-SECRET", "SecretName", "M000", "NORMAL1", "EMPTYR"):
+        assert secret not in log
+
+
+def test_success_leaves_only_the_final_report_and_no_partial_label(store: Path, tmp_path: Path) -> None:
+    out = tmp_path / "o"
+    assert _cli(store, out).exit_code == 0
+    assert not (out / "partial").exists()
+    final = (out / "archetypes_14.6_report.md").read_text()
+    assert ar.PARTIAL_LABEL not in final
+    assert sorted(p.name for p in out.iterdir()) == ["archetypes_14.6_membership.csv", "archetypes_14.6_progress.log",
+                                                     "archetypes_14.6_report.json", "archetypes_14.6_report.md"]
+
+
+def _fail_at(monkeypatch: pytest.MonkeyPatch, strategy_name: str) -> None:
+    original = ar.cluster
+
+    def cluster(boards, strategy, config, progress=None):
+        if strategy.name == strategy_name:
+            raise RuntimeError(f"simulated failure in {strategy_name}")
+        return original(boards, strategy, config, progress)
+
+    monkeypatch.setattr(ar, "cluster", cluster)
+
+
+def _status(out: Path) -> dict:
+    return json.loads((out / "partial" / "00_STATUS.json").read_text())
+
+
+def test_population_survives_a_failure_in_the_first_strategy(store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fail_at(monkeypatch, "A_structural_baseline")
+    out = tmp_path / "o"
+    result = _cli(store, out)
+    assert result.exit_code != 0
+    status = _status(out)
+    assert status["status"] == ar.PARTIAL_LABEL
+    assert status["completed_phases"] == ["population"]
+    assert status["pending_phases"] == [*(s.name for s in ar.STRATEGIES), "closing"]
+    population = json.loads((out / "partial" / "01_population.json").read_text())
+    assert population["status"] == ar.PARTIAL_LABEL
+    assert population["data"]["population"]["ranked_boards_eligible_for_grouping"] == 96
+    assert (out / "partial" / "01_population.md").read_text().startswith(f"# {ar.PARTIAL_LABEL}")
+    assert not (out / "archetypes_14.6_report.md").exists() and not (out / "archetypes_14.6_report.json").exists()
+    assert "RESEARCH REPORT COMPLETE" not in result.output.splitlines()  # the marker line, not the intro note
+    assert "database connection closed" in (out / "archetypes_14.6_progress.log").read_text()
+
+
+def test_finished_strategies_survive_a_later_strategy_failure(store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fail_at(monkeypatch, "C_structure_aware")
+    out = tmp_path / "o"
+    result = _cli(store, out)
+    assert result.exit_code != 0
+    status = _status(out)
+    assert status["completed_phases"] == ["population", "A_structural_baseline", "B_flex_tolerant"]
+    assert status["pending_phases"] == ["C_structure_aware", "closing"]
+    names = sorted(p.name for p in (out / "partial").iterdir())
+    assert names == ["00_STATUS.json", "00_STATUS.md", "01_population.json", "01_population.md",
+                     "02_A_structural_baseline.json", "02_A_structural_baseline.md",
+                     "03_B_flex_tolerant.json", "03_B_flex_tolerant.md"]
+    for name in names:
+        text = (out / "partial" / name).read_text()
+        assert ar.PARTIAL_LABEL in text, name  # every partial file says so
+    a = json.loads((out / "partial" / "02_A_structural_baseline.json").read_text())["data"]
+    assert a["boards_considered"] == 96 and len(a["groups"]) >= 1  # "groups": the group summaries
+    assert "## Strategy B. flex-tolerant structural" in (out / "partial" / "03_B_flex_tolerant.md").read_text()
+    assert "## Strategy B. flex-tolerant structural" in result.output  # streamed to the log before the failure
+    assert not list(out.glob("archetypes_14.6_report.*")) and not (out / "archetypes_14.6_membership.csv").exists()
+
+
+def test_a_failed_run_never_leaves_an_older_complete_report_behind(store: Path, tmp_path: Path,
+                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    out = tmp_path / "o"
+    assert _cli(store, out).exit_code == 0
+    assert (out / "archetypes_14.6_report.md").exists()
+    _fail_at(monkeypatch, "B_flex_tolerant")
+    assert _cli(store, out).exit_code != 0
+    assert not (out / "archetypes_14.6_report.md").exists()
+    assert _status(out)["completed_phases"] == ["population", "A_structural_baseline"]
+
+
+def test_streamed_sections_add_up_to_the_final_report(store: Path) -> None:
+    sections: list[tuple[str, list[str]]] = []
+    with Database.open_existing(store) as db:
+        inputs = ar.load_inputs(db, WINDOW)
+    report, markdown, _ = ar.analyze(inputs.boards, inputs.population, inputs.access, ar.ArchetypeConfig(),
+                                     on_section=lambda phase, data, lines: sections.append((phase, list(lines))))
+    assert [phase for phase, _ in sections] == list(ar.PHASES)
+    assert [line for _, lines in sections for line in lines] == markdown
+
+
+def test_workflow_uploads_artifacts_even_after_a_failed_or_timed_out_analysis() -> None:
+    text = _text()
+    analysis = text.index("name: Run archetype research report (read-only)")
+    upload = text.index("name: Upload report artifact")
+    assert analysis < upload
+    step = text[upload:]
+    assert "if: ${{ always() }}" in step and "path: archetype-report/" in step
+    assert "timeout-minutes: 170" in text[analysis:upload]  # inside the 180-minute job budget, leaving time to upload
+    assert "continue-on-error" not in text  # a failed analysis still fails the job
+
+
+def test_runtime_benchmark_runs_the_unchanged_harness_and_restores_it() -> None:
+    import importlib.util
+
+    path = Path(__file__).parent.parent / "scripts" / "benchmarks" / "archetype_runtime_benchmark.py"
+    spec = importlib.util.spec_from_file_location("archetype_runtime_benchmark", path)
+    bench = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bench)
+    before = ar.STRATEGIES
+    result = bench.run(120, "high", ["A_structural_baseline"])
+    assert ar.STRATEGIES is before  # the benchmark's temporary strategy subset is undone
+    assert result["diversity"]["boards"] == 120 and result["diversity"]["distinct_share"] > 0.5
+    a = result["strategies"]["A_structural_baseline"]
+    assert {"leader_pass_s", "total_s", "leader_pass_groups", "groups", "assigned", "ungrouped"} <= set(a)
