@@ -9,6 +9,7 @@ good archetypes -- that is what the harness exists to find out.
 from __future__ import annotations
 
 import csv
+import dataclasses
 import hashlib
 import json
 import math
@@ -200,11 +201,18 @@ def test_structural_baseline_uses_champion_set_only() -> None:
 
 def test_strategy_definitions_are_explicit() -> None:
     names = [s.name for s in ar.STRATEGIES]
-    assert names == ["A_structural_baseline", "B_flex_tolerant", "C_structure_aware"]
-    a, b, c = ar.STRATEGIES
+    assert names == ["A_structural_baseline", "B_flex_tolerant", "C_structure_aware", "B_S2_experimental",
+                     "C_S2_experimental"]
+    a, b, c, bs2, cs2 = ar.STRATEGIES
     assert (a.weighted, a.trait_share, a.merge) == (False, 0.0, None)
     assert (b.weighted, b.trait_share, b.merge) == (False, 0.0, "structural")
     assert (c.weighted, c.trait_share, c.merge) == (True, 0.25, "structure_aware")
+    # the controls keep the strict rule and form their own variants
+    assert {(s.similarity_rule, s.variants_from) for s in (a, b, c)} == {("all_boards", None)}
+    # the experimental strategies differ from their controls ONLY in the merged-result similarity rule
+    for exp, control in ((bs2, b), (cs2, c)):
+        assert exp.similarity_rule == "s2" and exp.variants_from == control.name
+        assert (exp.weighted, exp.trait_share, exp.merge) == (control.weighted, control.trait_share, control.merge)
 
 
 # ---------------------------------------------------------------- grouping behaviour
@@ -403,7 +411,7 @@ def test_report_prints_the_merge_checks(store: Path) -> None:
     for strategy in ("B_flex_tolerant", "C_structure_aware"):
         checks = report["strategies"][strategy]["merge_checks"]
         assert set(checks) == {"rejected_core", "rejected_similarity", "variants_with_a_board_below_tau_before_merge"}
-    assert sum(line.startswith("- merge_checks: ") for line in markdown) == 3
+    assert sum(line.startswith("- merge_checks: ") for line in markdown) == 5  # A, B, C and the two experimental
 
 
 # ---------------------------------------------------------------- merge diagnostics (validation run #3; measurement only)
@@ -552,7 +560,7 @@ def test_report_carries_bounded_anonymous_merge_diagnostics(store: Path) -> None
         text = json.dumps(d)
         for secret in ("PUUID", "SecretName", "M000", "M011", "NORMAL1", "EMPTYR", "match_id", "puuid"):
             assert secret not in text, (strategy, secret)
-    assert sum(line.startswith("### Merge-result similarity diagnostics") for line in markdown) == 2
+    assert sum(line.startswith("### Merge-result similarity diagnostics") for line in markdown) == 4
     assert report["strategies"]["B_flex_tolerant"]["merge_diagnostics"]["attempts_evaluated"] >= 1
 
 
@@ -702,6 +710,185 @@ def test_report_prints_the_shadow_evaluation(store: Path) -> None:
     assert sum(line.startswith("### Shadow merge-rule evaluation (REPORT ONLY") for line in markdown) == 2
     assert sum(line.startswith("| S0 |") for line in markdown) == 2
     assert any(line.startswith("- S0 sanity check: 0 attempts") for line in markdown)
+
+
+
+# ---------------------------------------------------------------- experimental S2 strategies (validation run #6 design)
+
+B_S2, C_S2 = ar.STRATEGIES[3], ar.STRATEGIES[4]
+
+
+def boards_by_variant(*groups: list[list[int]]) -> tuple[list[ar.Board], dict[int, int]]:
+    """Variant v = groups[v], one board per unit-index list (so a variant can mix a clean shell and tail boards)."""
+    specs = [(units, 1) for group in groups for units in group]
+    owner = [v for v, group in enumerate(groups) for _ in group]
+    boards, variant = variants(*specs)
+    return boards, {k: owner[k] for k in variant}
+
+
+def final_sets(boards, variant, strategy, config=None) -> tuple[list[list[int]], dict[str, int], ar.MergeDiagnostics]:
+    collector = ar.MergeDiagnostics(TAU)
+    to_group, _, checks = ar.merge_variants(boards, variant, strategy, config or ar.ArchetypeConfig(), diagnostics=collector)
+    by_group: dict[int, list[int]] = {}
+    for v in sorted({variant[b.obs] for b in boards}):
+        by_group.setdefault(to_group[v], []).append(v)
+    return sorted(by_group.values()), checks, collector
+
+
+def tail_board(i: int, extras: int = 6) -> list[int]:
+    """The shell + unit 8 + `extras` units no other board has: a real but poorly fitting member."""
+    return SHELL8 + [8] + list(range(20 + extras * i, 20 + extras * (i + 1)))
+
+
+LARGE = [SHELL8] * 300  # a large, perfectly clean established variant
+TAILED = [SHELL8 + [8]] * 27 + [tail_board(i) for i in range(3)]  # 3/30 = 10% of this side, 3/330 < 1% merged
+CLEAN_T = [SHELL8 + [10]] * 20
+
+
+def test_s2_conditions_exact_boundaries() -> None:
+    def ok(**kw) -> bool:
+        base = dict(larger_below=0, smaller_below=0, smaller_boards=30, merged_below=0, merged_boards=330,
+                    min_post=0.7, tau=TAU)
+        return all(ar.s2_conditions(**{**base, **kw}).values())
+    assert ok() and not ok(larger_below=1, merged_below=1)  # zero larger-side failures required
+    assert ok(smaller_below=3, merged_below=3)  # exactly 10% of the smaller side
+    assert not ok(smaller_below=4, merged_below=4)  # 13.3%
+    assert ok(smaller_below=3, smaller_boards=300, merged_below=3, merged_boards=300)  # exactly 1% merged
+    assert not ok(smaller_below=4, smaller_boards=300, merged_below=4, merged_boards=300)  # 1.33% merged
+    assert ok(min_post=TAU - 0.10) and ok(min_post=0.5)  # exactly tau - 0.10 (0.5 in floating point)
+    assert not ok(min_post=math.nextafter(TAU - 0.10, 0.0))
+    assert ar.SHADOW_SMALLER_TAIL == 10 and ar.SHADOW_MERGED_TAIL == 100 and ar.SHADOW_FLOOR == 0.10  # frozen
+
+
+def test_experimental_strategies_differ_only_in_the_similarity_rule_and_controls_stay_strict() -> None:
+    boards, variant = boards_by_variant(LARGE, TAILED)
+    for control, exp in ((B_STRATEGY, B_S2), (C_STRATEGY, C_S2)):
+        same = dataclasses.replace(exp, name=control.name, label=control.label, description=control.description,
+                                   similarity_rule=control.similarity_rule, variants_from=control.variants_from)
+        assert same == control  # every other field (weights, traits, merge mode) is the control's
+    strict, checks, _ = final_sets(boards, variant, B_STRATEGY)
+    assert strict == [[0], [1]] and checks["rejected_similarity"] == 1  # the control B stays strict
+    with pytest.raises(ValueError):
+        ar.merge_variants(boards, variant, dataclasses.replace(B_STRATEGY, similarity_rule="no-such-rule"),
+                          ar.ArchetypeConfig())
+
+
+def test_s2_rejects_the_denominator_counterexample() -> None:
+    """200 clean boards + a 2-board variant with the same core whose every board fails (0.57, above the floor):
+    2/202 < 1% of the merged group, but 100% of the smaller side."""
+    boards, variant = boards_by_variant([SHELL8] * 200, [SHELL8 + list(range(20, 26)), SHELL8 + list(range(26, 32))])
+    groups, checks, collector = final_sets(boards, variant, B_S2)
+    assert groups == [[0], [1]] and checks["rejected_similarity"] == 1
+    [r] = collector.rows
+    assert (r["smaller_side_below_tau"], r["smaller_side_boards"], r["larger_side_below_tau"]) == (2, 2, 0)
+    assert 100 * r["below_tau"] <= r["merged_boards"] and r["post"]["min"] >= TAU - 0.10
+    d = decisions(r)
+    assert d["S1"] and not d["S2"]  # the merged-share-only rule would have let it in
+
+
+def test_s2_accepts_a_legitimate_bounded_tail_and_the_merge_really_happens() -> None:
+    boards, variant = boards_by_variant(LARGE, TAILED)
+    groups, checks, collector = final_sets(boards, variant, B_S2)
+    assert groups == [[0, 1]] and checks["rejected_similarity"] == 0
+    [r] = collector.rows
+    assert r["outcome"] == "accepted" and (r["below_tau"], r["larger_side_below_tau"], r["smaller_side_below_tau"]) == (3, 0, 3)
+    assert TAU - 0.10 <= r["post"]["min"] < TAU
+    summary = collector.summary("S2")
+    assert summary["decision_rule_mismatches"] == 0 and "shadow" not in summary
+    t = summary["trajectory"]
+    assert (t["accepted_merges"], t["with_any_board_below_tau"]) == (1, 1)
+    [m] = t["merges"]
+    assert (m["merged_boards"], m["larger_side_boards"], m["smaller_side_boards"], m["variants_after_merge"]) == (330, 300, 30, 2)
+    assert (m["below_tau"], m["smaller_side_below_tau"], m["smaller_side_below_tau_share"]) == (3, 3, 0.1)
+    assert t["by_variants_after_merge"]["2"]["accepted_merges"] == 1
+
+
+def test_c_s2_uses_the_s2_rule_with_c_similarity() -> None:
+    """C's similarity blends traits, so its tail boards need more foreign units to fall below tau."""
+    boards, variant = boards_by_variant(LARGE, [SHELL8 + [8]] * 27 + [tail_board(i, extras=12) for i in range(3)])
+    assert final_sets(boards, variant, C_STRATEGY)[0] == [[0], [1]]
+    groups, _, collector = final_sets(boards, variant, C_S2)
+    assert groups == [[0, 1]] and collector.rows[0]["smaller_side_below_tau"] == 3
+
+
+def test_s2_is_recursive_not_a_replay_of_the_control_trajectory() -> None:
+    """L (300 clean) ~ S (27 clean + 3 tail boards) ~ T (20 clean); both pairs have core overlap 0.889 and (L, S) is
+    judged first (lower ids). The control rejects L+S and then merges L+T. B-S2 accepts L+S, so the three tail boards
+    now belong to the LARGER side of every later attempt and the otherwise clean L+T is rejected. The one-step shadow
+    evaluation of the control's attempts says S2 would accept all of them -- the real S2 trajectory does not."""
+    boards, variant = boards_by_variant(LARGE, TAILED, CLEAN_T)
+    control, _, control_diag = final_sets(boards, variant, B_STRATEGY)
+    assert control == [[0, 2], [1]]
+    shadow = control_diag.summary()["shadow"]["candidates"]["S2"]
+    # one-step shadow on the control's attempts -- (L, S), (L, T), (L+T, S): S2 "would accept" every one of them
+    assert (shadow["attempts"], shadow["shadow_accepted"], shadow["recovered"]) == (3, 3, 2)
+    experimental, checks, diag = final_sets(boards, variant, B_S2)
+    assert experimental == [[0, 1], [2]] and checks["rejected_similarity"] == 1
+    later = diag.rows[1]
+    assert (later["b_root_variant"], later["larger_side_boards"], later["larger_side_below_tau"]) == (2, 330, 3)
+    assert later["outcome"] == "rejected_similarity"
+
+
+def test_s2_merge_and_diagnostics_are_deterministic() -> None:
+    boards, variant = boards_by_variant(LARGE, TAILED, CLEAN_T, [SHELL8 + [9]] * 5)
+    for strategy in (B_S2, C_S2):
+        first = ar.merge_variants(boards, variant, strategy, ar.ArchetypeConfig())
+        again = ar.merge_variants(boards, variant, strategy, ar.ArchetypeConfig())
+        reordered = ar.merge_variants(list(reversed(boards)), variant, strategy, ar.ArchetypeConfig())
+        assert first == again == reordered, strategy.name
+        sums = [final_sets(b, variant, strategy)[2].summary("S2") for b in (boards, list(reversed(boards)))]
+        assert sums[0] == sums[1], strategy.name
+
+
+def test_final_group_diagnostics_measure_members_against_the_final_profile() -> None:
+    boards, variant = boards_by_variant(LARGE, TAILED)
+    to_group, log, checks = ar.merge_variants(boards, variant, B_S2, ar.ArchetypeConfig())
+    grouping = ar.Grouping(variant=variant, group={k: to_group[v] for k, v in variant.items()}, log=[], converged=True,
+                           refine_moves=[], merges=len(log), merge_checks=checks)
+    final = ar.final_group_diagnostics(boards, grouping, B_S2, ar.ArchetypeConfig())
+    assert (final["groups"], final["grouped_boards"], final["boards_below_tau"]) == (1, 330, 3)
+    assert final["groups_with_any_board_below_tau"] == 1
+    assert (final["groups_over_1pct_below_tau"], final["groups_over_5pct_below_tau"]) == (0, 0)  # 3/330 = 0.9%
+    [g] = final["per_group"]
+    assert (g["variants"], g["final_core_size"]) == (2, 8) and g["core_drift"] == 0.0
+    assert TAU - 0.10 <= g["min_similarity"] < TAU
+
+
+def test_experimental_strategies_reuse_their_controls_variants_and_report_the_comparison(store: Path) -> None:
+    report, markdown, membership = run(store)
+    strategies = report["strategies"]
+    for exp, control in (("B_S2_experimental", "B_flex_tolerant"), ("C_S2_experimental", "C_structure_aware")):
+        assert strategies[exp]["log"][:-1] == strategies[control]["log"][:-1]  # same leader pass and refinement
+        assert strategies[exp]["variants_before_merge"] == strategies[control]["variants_before_merge"]
+        variants_of = lambda name: {m["observation"]: m["variant"] for m in membership if m["strategy"] == name}  # noqa: E731
+        assert variants_of(exp) == variants_of(control)
+        e = strategies[exp]["experimental_s2"]
+        assert e["control"] == control and e["decision_rule_mismatches"] == 0
+        assert {r["metric"] for r in e["comparison"]} >= {"groups", "accepted merges", "near-duplicate groups (nearest other >= tau)",
+                                                         "grouped boards below tau (final profile)", "groups with > 10% below tau"}
+        assert [f["label"] for f in e["family_review"]] == [label for label, _ in ar.FAMILY_ANCHORS]
+        assert [r["label"] for r in e["regression_review"]] == [label for label, _ in ar.REGRESSION_ANCHORS]
+        text = json.dumps(e)
+        for secret in ("PUUID", "SecretName", "M000", "M011", "NORMAL1", "EMPTYR", "match_id", "puuid"):
+            assert secret not in text, (exp, secret)
+    for heading in ("### EXPERIMENTAL B-S2.", "### EXPERIMENTAL C-S2.", "#### Accepted S2 merges",
+                    "#### Final groups after ALL recursive merges", "#### Composition-family review",
+                    "#### Regression-pattern review", "#### Chaining review"):
+        assert any(line.startswith(heading) for line in markdown), heading
+    assert sum(line.startswith("- S2 decision consistency: 0 attempts") for line in markdown) == 2
+    assert "shadow" not in strategies["B_S2_experimental"]["merge_diagnostics"]  # shadow evaluation stays on the controls
+
+
+def test_control_report_sections_are_unaffected_by_the_experimental_strategies(store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A/B/C's report (JSON, Markdown section, membership) is identical with and without the experimental strategies."""
+    full_report, full_md, full_members = run(store)
+    monkeypatch.setattr(ar, "STRATEGIES", ar.STRATEGIES[:3])
+    report, md, members = run(store)
+    for name in ("A_structural_baseline", "B_flex_tolerant", "C_structure_aware"):
+        assert full_report["strategies"][name] == report["strategies"][name], name
+    cut = next(i for i, line in enumerate(full_md) if line.startswith("## Strategy B-S2"))
+    assert full_md[:cut] == md[:next(i for i, line in enumerate(md) if line.startswith("## Statistical warnings"))]
+    assert [m for m in full_members if not m["strategy"].endswith("_experimental")] == members
 
 
 # ---------------------------------------------------------------- population / names / outputs
@@ -995,8 +1182,10 @@ def test_progress_and_timing_lines_are_printed_and_logged(store: Path, tmp_path:
     expected = ["database connection established", "read-only verified: sqlite mode=ro", "population loading started",
                 "population loading completed", "database connection closed", "normalization completed",
                 *[f"{s.name}: {what}" for s in ar.STRATEGIES for what in (
-                    "started", "leader pass completed", "refine 1 completed", "summaries/diagnostics started",
+                    "started", "variants reused from" if s.variants_from else "leader pass completed",
+                    "variant merge completed" if s.variants_from else "refine 1 completed", "summaries/diagnostics started",
                     "summaries/diagnostics completed", "completed,")],
+                *[f"{s.name}: experimental comparison completed" for s in ar.STRATEGIES if s.variants_from],
                 "report generation completed", "final report written"]
     progress_lines = [line for line in result.output.splitlines() if line.startswith("[progress +")]
     for phrase in expected:
@@ -1058,7 +1247,7 @@ def test_finished_strategies_survive_a_later_strategy_failure(store: Path, tmp_p
     assert result.exit_code != 0
     status = _status(out)
     assert status["completed_phases"] == ["population", "A_structural_baseline", "B_flex_tolerant"]
-    assert status["pending_phases"] == ["C_structure_aware", "closing"]
+    assert status["pending_phases"] == ["C_structure_aware", "B_S2_experimental", "C_S2_experimental", "closing"]
     names = sorted(p.name for p in (out / "partial").iterdir())
     assert names == ["00_STATUS.json", "00_STATUS.md", "01_population.json", "01_population.md",
                      "02_A_structural_baseline.json", "02_A_structural_baseline.md",

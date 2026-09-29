@@ -23,14 +23,17 @@ refuses to continue unless a Postgres server reports
    active traits as predeclared secondary structural signals. Placement and
    every other outcome, and the current carry qualification, are post-group
    analytics only and never influence grouping.
-3. Groups boards with three predeclared strategies (`STRATEGIES`) whose every
+3. Groups boards with predeclared strategies (`STRATEGIES`) whose every
    threshold lives in `ArchetypeConfig` and is printed with the results:
    A. structural baseline -- champion-set similarity only (the control);
    B. flex-tolerant -- A plus a structural variant merge for flex slots and
       incomplete boards, each merge kept only if the merged group itself
       stays coherent (core kept, every board >= tau to the merged profile);
    C. structure-aware -- B's idea plus documented secondary structure
-      (item counts, splash weighting, active traits).
+      (item counts, splash weighting, active traits);
+   plus two EXPERIMENTAL strategies (B_S2 / C_S2, research only): B and C
+   on the same variants with the merged-result similarity check replaced by
+   the S2 rule (`s2_conditions`); A, B and C stay unchanged controls.
 4. Reports global grouping statistics and a deterministic, human-reviewable
    sample of real groups with member boards, core/flex, carry/tank/Thief's
    Gloves diagnostics and item sets, using canonical names from committed
@@ -366,7 +369,16 @@ class Strategy:
     weighted: bool = False
     trait_share: float = 0.0
     merge: str | None = None  # None | "structural" | "structure_aware"
+    #: Merged-result similarity acceptance: "all_boards" (every member board
+    #: >= tau against the merged profile; the A/B/C controls) or "s2" (the
+    #: experimental bounded side-specific rule, `s2_conditions`).
+    similarity_rule: str = "all_boards"
+    #: Experimental strategies re-run only the variant merge, on the exact
+    #: variants of this control (same leader pass and refinement inputs).
+    variants_from: str | None = None
 
+
+SIMILARITY_RULES = ("all_boards", "s2")
 
 STRATEGIES: tuple[Strategy, ...] = (
     Strategy("A_structural_baseline", "A. structural baseline (control)",
@@ -384,6 +396,20 @@ STRATEGIES: tuple[Strategy, ...] = (
              "fully shared core of >= 5 units may merge), with B's merged-result checks. Item COUNTS only; "
              "never the carry classifier.",
              weighted=True, trait_share=0.25, merge="structure_aware"),
+    # EXPERIMENTAL (validation run #6): identical to their controls except the
+    # merged-result similarity acceptance; not production-approved.
+    Strategy("B_S2_experimental", "B-S2. EXPERIMENTAL: B with the S2 merged-result rule",
+             "EXPERIMENTAL. B's variants (reused from B_flex_tolerant) and B's structural merge and merged-core check, but "
+             "a tentative merge passes the similarity check under S2 instead of 'every board >= tau': no larger-side board "
+             "below tau, <= 10% of the smaller side below tau, <= 1% of the merged group below tau, and every board >= "
+             "tau - 0.10 (all against the tentative merged profile; thresholds frozen before validation run #5). Accepted "
+             "merges really happen, so later candidates see the changed groups.",
+             merge="structural", similarity_rule="s2", variants_from="B_flex_tolerant"),
+    Strategy("C_S2_experimental", "C-S2. EXPERIMENTAL: C with the S2 merged-result rule",
+             "EXPERIMENTAL. C's variants (reused from C_structure_aware), C's weighting, restricted merge, splash exception "
+             "and merged-core check, but the similarity check is S2 (see B-S2) instead of 'every board >= tau'.",
+             weighted=True, trait_share=0.25, merge="structure_aware", similarity_rule="s2",
+             variants_from="C_structure_aware"),
 )
 
 
@@ -587,7 +613,29 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
     # final pass: singleton groups (possible after the last reassignment) are ungrouped
     sizes = Counter(assign.values())
     assign = _renumber({k: g for k, g in assign.items() if sizes[g] >= config.min_group_size}, vecs)
+    return _merge_and_audit(eligible, vecs, assign, log, converged, moves, strategy, config, progress)
 
+
+def cluster_reusing_variants(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig, base: Grouping,
+                             progress: Callable[[str], None] | None = None) -> Grouping:
+    """Experimental strategies: the leader pass and refinement depend only on
+    the board vectors (strategy.weighted / trait_share) and the config, so the
+    control named by `strategy.variants_from` already produced exactly these
+    variants; only the variant merge (and its audit) is run again."""
+    progress = progress or _noop
+    champions = load_roster().champions
+    eligible = [b for b in boards if len(b.identity) >= config.min_identity_units]
+    vecs = {b.obs: board_vectors(b, strategy, config, champions) for b in eligible}
+    assign = dict(base.variant)
+    log = [line for line in base.log if not line.startswith("variant merge")]
+    progress(f"{strategy.name}: variants reused from {strategy.variants_from} (identical leader pass and refinement "
+             f"inputs), {len(set(assign.values()))} variants")
+    return _merge_and_audit(eligible, vecs, assign, log, base.converged, list(base.refine_moves), strategy, config, progress)
+
+
+def _merge_and_audit(eligible: Sequence[Board], vecs, assign: dict[int, int], log: list[str], converged: bool,
+                     moves: list[int], strategy: Strategy, config: ArchetypeConfig,
+                     progress: Callable[[str], None]) -> Grouping:
     group, merges, checks, diagnostics = dict(assign), 0, {}, None
     if strategy.merge:
         progress(f"{strategy.name}: variant merge started over {len(set(assign.values()))} variants")
@@ -596,12 +644,15 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
                                                      vecs=vecs, diagnostics=diagnostics)
         group = {k: to_group[v] for k, v in assign.items()}
         merges = len(merge_log)
+        rule = "" if strategy.similarity_rule == "all_boards" else f" ({strategy.similarity_rule.upper()} rule)"
         log.append(f"variant merge: {merges} merges, {len(set(assign.values()))} variants -> {len(set(group.values()))} groups; "
-                   f"tentative merges rejected: {checks['rejected_core']} core, {checks['rejected_similarity']} similarity")
+                   f"tentative merges rejected: {checks['rejected_core']} core, {checks['rejected_similarity']} similarity{rule}")
         progress(f"{strategy.name}: variant merge completed, {merges} merges, {len(set(group.values()))} groups, "
-                 f"rejected {checks['rejected_core']} core / {checks['rejected_similarity']} similarity")
+                 f"rejected {checks['rejected_core']} core / {checks['rejected_similarity']} similarity{rule}")
+    decision_rule = "S2" if strategy.similarity_rule == "s2" else "S0"
     result = Grouping(variant=assign, group=group, log=log, converged=converged, refine_moves=moves, merges=merges,
-                      merge_checks=checks, merge_diagnostics=diagnostics.summary() if diagnostics else {})
+                      merge_checks=checks,
+                      merge_diagnostics=diagnostics.summary(decision_rule) if diagnostics else {})
     progress(f"{strategy.name}: prune audit started")
     result.prune_audit = prune_audit(eligible, vecs, assign, strategy, config)
     progress(f"{strategy.name}: prune audit completed, {result.prune_audit['disagreements']} disagreements "
@@ -841,19 +892,32 @@ class MergeDiagnostics:
                 chosen[r["attempt"]] = {"reason": reason, **r}
         return list(chosen.values())
 
-    def summary(self) -> dict[str, Any]:
+    def summary(self, decision_rule: str = "S0") -> dict[str, Any]:
+        """`decision_rule`: the shadow candidate that IS the strategy's real
+        rule -- "S0" for the A/B/C controls (which also get the report-only
+        shadow evaluation), "S2" for the experimental strategies (which get a
+        consistency check and the accepted-merge trajectory instead)."""
         rejected = [r for r in self.rows if r["outcome"] == "rejected_similarity"]
         accepted = [r for r in self.rows if r["outcome"] == "accepted"]
-        return {"definitions": MERGE_DIAGNOSTIC_DEFINITIONS, "tau": self.tau, "attempts_evaluated": len(self.rows),
-                "accepted_attempts": len(accepted), "rejected_similarity_attempts": len(rejected),
-                "rejected": self._aggregate(rejected), "accepted": self._aggregate(accepted),
-                "sample": self._sample(rejected, accepted), "shadow": shadow_evaluation(self.rows, self.tau)}
+        out = {"definitions": MERGE_DIAGNOSTIC_DEFINITIONS, "tau": self.tau, "attempts_evaluated": len(self.rows),
+               "accepted_attempts": len(accepted), "rejected_similarity_attempts": len(rejected),
+               "rejected": self._aggregate(rejected), "accepted": self._aggregate(accepted),
+               "sample": self._sample(rejected, accepted)}
+        if decision_rule == "S0":
+            return {**out, "shadow": shadow_evaluation(self.rows, self.tau)}
+        return {**out, "decision_rule": decision_rule,
+                "decision_rule_mismatches": sum(
+                    all(shadow_conditions(r, self.tau)[decision_rule].values()) != (r["outcome"] == "accepted")
+                    for r in self.rows),
+                "trajectory": merge_trajectory(accepted, self.tau)}
 
 
 # ---------------------------------------------------------------- shadow merge rules (report only)
 
 #: Predeclared shadow candidates for validation run #5 (fixed before any real
-#: run; never tuned on it). Report-only: `merge_variants` never reads them.
+#: run; never tuned on it). The shadow evaluation is report-only; the S2
+#: thresholds below are ALSO the frozen thresholds of the experimental
+#: *_S2_experimental strategies (`s2_conditions`), never of A/B/C.
 SHADOW_CANDIDATES: tuple[str, ...] = ("S0", "S1", "S2", "S3", "S4")
 SHADOW_FLOOR = 0.10  # every board >= tau - 0.10 (S1-S4)
 SHADOW_MERGED_TAIL = 100  # merged group: at most 1% below tau, i.e. 100 * below <= merged boards
@@ -896,15 +960,25 @@ SHADOW_DEFINITIONS: dict[str, str] = {
 }
 
 
+def s2_conditions(*, larger_below: int, smaller_below: int, smaller_boards: int, merged_below: int,
+                  merged_boards: int, min_post: float, tau: float) -> dict[str, bool]:
+    """The S2 rule's named conditions -- used by the report-only shadow S2
+    AND by the experimental S2 strategies' real merge decision (one
+    definition). Every count is against the TENTATIVE MERGED profile; sides
+    by pre-merge board count (tie: side a, the lower group id)."""
+    return {"larger side: no board below tau": larger_below == 0,
+            "smaller side: <= 10% below tau": SHADOW_SMALLER_TAIL * smaller_below <= smaller_boards,
+            "merged: <= 1% below tau": SHADOW_MERGED_TAIL * merged_below <= merged_boards,
+            "every board >= tau - 0.10": min_post >= tau - SHADOW_FLOOR}
+
+
 def shadow_conditions(r: Mapping[str, Any], tau: float) -> dict[str, dict[str, bool]]:
     """Each candidate's named conditions for one diagnostics row; a candidate
     accepts when all of its conditions hold. Pure function of the row."""
-    floor = r["post"]["min"] >= tau - SHADOW_FLOOR
-    merged_tail = SHADOW_MERGED_TAIL * r["below_tau"] <= r["merged_boards"]
-    s2 = {"larger side: no board below tau": r["larger_side_below_tau"] == 0,
-          "smaller side: <= 10% below tau": SHADOW_SMALLER_TAIL * r["smaller_side_below_tau"] <= r["smaller_side_boards"],
-          "merged: <= 1% below tau": merged_tail,
-          "every board >= tau - 0.10": floor}
+    s2 = s2_conditions(larger_below=r["larger_side_below_tau"], smaller_below=r["smaller_side_below_tau"],
+                       smaller_boards=r["smaller_side_boards"], merged_below=r["below_tau"],
+                       merged_boards=r["merged_boards"], min_post=r["post"]["min"], tau=tau)
+    floor, merged_tail = s2["every board >= tau - 0.10"], s2["merged: <= 1% below tau"]
     gate = r["core_overlap"] >= SHADOW_OVERLAP or r["identical_cores"] or r["splash_exception_applies"]
     return {
         "S0": {"every board >= tau": r["below_tau"] == 0},
@@ -1062,6 +1136,58 @@ def shadow_evaluation(rows: Sequence[Mapping[str, Any]], tau: float) -> dict[str
     }
 
 
+# ---------------------------------------------------------------- experimental S2 strategies: report-only diagnostics
+
+#: Accepted merges bucketed by how many variants the merged group holds right
+#: after the merge (2 = two original variants; more = merging into an
+#: already-merged group) -- shows whether repeated merges degrade the result.
+TRAJECTORY_VARIANT_BANDS: tuple[tuple[str, int, int | None], ...] = (("2", 2, 2), ("3-4", 3, 4), ("5-9", 5, 9), ("10+", 10, None))
+
+
+def _variant_band(n: int) -> str:
+    return next(label for label, lo, hi in TRAJECTORY_VARIANT_BANDS if n >= lo and (hi is None or n <= hi))
+
+
+def merge_trajectory(accepted: Sequence[Mapping[str, Any]], tau: float) -> dict[str, Any]:
+    """Accepted merges of an experimental strategy, each measured AT THE TIME
+    it was accepted (against its tentative merged profile). Later merges can
+    change the final group; see the final-group diagnostics for that."""
+    def row(r: Mapping[str, Any]) -> dict[str, Any]:
+        larger, smaller = r["larger_side"], "b" if r["larger_side"] == "a" else "a"
+        return {"attempt": r["attempt"], "merged_boards": r["merged_boards"],
+                "larger_side_boards": r["larger_side_boards"], "smaller_side_boards": r["smaller_side_boards"],
+                "variants_after_merge": r["a_variants"] + r["b_variants"], "below_tau": r["below_tau"],
+                "below_tau_share": r["below_tau_share"], "smaller_side_below_tau": r["smaller_side_below_tau"],
+                "smaller_side_below_tau_share": r["smaller_side_below_tau_share"], "min_post": r["post"]["min"],
+                "post_p10": r["post"]["p10"], "post_median": r["post"]["median"], "core_overlap": r["core_overlap"],
+                "identical_cores": r["identical_cores"], "splash_exception_applies": r["splash_exception_applies"],
+                "core_larger": r[f"core_{larger}"], "core_smaller": r[f"core_{smaller}"]}
+
+    rows = [row(r) for r in accepted]
+    by_band: dict[str, Any] = {}
+    for label, _, _ in TRAJECTORY_VARIANT_BANDS:
+        band = [r for r in rows if _variant_band(r["variants_after_merge"]) == label]
+        by_band[label] = {"accepted_merges": len(band), "with_any_board_below_tau": sum(r["below_tau"] > 0 for r in band),
+                          "min_post": quantiles(r["min_post"] for r in band),
+                          "post_p10": quantiles(r["post_p10"] for r in band),
+                          "below_tau_share": quantiles(r["below_tau_share"] for r in band)}
+    return {
+        "definition": "each accepted merge measured when it was accepted, against its tentative merged profile "
+                      "(one-step); the final-group diagnostics show what later merges did to the group",
+        "accepted_merges": len(rows),
+        "with_any_board_below_tau": sum(r["below_tau"] > 0 for r in rows),
+        "splash_exception": sum(r["splash_exception_applies"] for r in rows),
+        "identical_cores": sum(r["identical_cores"] for r in rows),
+        "core_overlap_buckets": _counted(OVERLAP_LABELS, (_overlap_bucket(r) for r in accepted)),
+        "merged_size_bands": _counted([label for label, _, _ in SIZE_BANDS], (size_band(r["merged_boards"]) for r in rows)),
+        "by_variants_after_merge": by_band,
+        "quantiles": {key: quantiles(r[key] for r in rows) for key in (
+            "merged_boards", "larger_side_boards", "smaller_side_boards", "below_tau", "below_tau_share",
+            "smaller_side_below_tau_share", "min_post", "post_p10", "post_median", "core_overlap")},
+        "merges": rows,
+    }
+
+
 def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy: Strategy,
                    config: ArchetypeConfig, *, vecs: Mapping[int, tuple[dict[str, float], dict[str, float]]] | None = None,
                    diagnostics: MergeDiagnostics | None = None) -> tuple[dict[int, int], list[str], dict[str, int]]:
@@ -1143,9 +1269,24 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
         kept = all(len(merged & c) >= math.ceil(config.merge_core_retention * len(c)) for c in smaller)
         if len(merged) < config.merge_min_result_core and not kept:
             return "core"
-        if below_tau(sorted(members[a] + members[b])):
-            return "similarity"
-        return None
+        if strategy.similarity_rule == "all_boards":  # the A/B/C controls
+            if below_tau(sorted(members[a] + members[b])):
+                return "similarity"
+            return None
+        if strategy.similarity_rule == "s2":  # experimental strategies only
+            return None if all(s2_merge_conditions(a, b).values()) else "similarity"
+        raise ValueError(f"unknown similarity rule {strategy.similarity_rule!r}")
+
+    def s2_merge_conditions(a: int, b: int) -> dict[str, bool]:
+        """S2 against the tentative merged profile of a+b (sides by board count; tie: a, the lower id)."""
+        obs = sorted(members[a] + members[b])
+        profile = mean_profile([vecs[k] for k in obs])
+        post = {k: similarity(vecs[k], profile, strategy) for k in obs}
+        larger, smaller = (a, b) if sizes[a] >= sizes[b] else (b, a)
+        below = {g: sum(1 for k in members[g] if post[k] < config.tau) for g in (a, b)}
+        return s2_conditions(larger_below=below[larger], smaller_below=below[smaller], smaller_boards=sizes[smaller],
+                             merged_below=below[a] + below[b], merged_boards=len(obs), min_post=min(post.values()),
+                             tau=config.tau)
 
     pre_cache: dict[tuple[int, int], dict[int, float]] = {}
 
@@ -1733,6 +1874,294 @@ def render_shadow_evaluation(sh: Mapping[str, Any], names: Names) -> list[str]:
     return lines + [""]
 
 
+# ---------------------------------------------------------------- experimental S2 strategies: final groups, comparison, review
+
+#: Structural lookups for human review of the experimental strategies (report
+#: only; never used by grouping). A group matches when every anchor unit is in
+#: its core (presence >= the display core threshold). Labels are descriptive,
+#: not claims that a group IS that comp.
+FAMILY_ANCHORS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("Aphelios/Nidalee", frozenset({"DA_18_Aphelios", "DA_Nidalee18_AP"})),
+    ("Summoner-like (Zyra/Soraka/Malphite)", frozenset({"DA_18_Zyra", "DA_18_Soraka", "DA_18_Malphite"})),
+    ("Veigar reroll-like (Veigar/Ornn/Rek'Sai)", frozenset({"DA_18_Veigar", "DA_18_Ornn", "DA_18_RekSai"})),
+    ("Caitlyn reroll-like (Caitlyn/Scuttlecrab)", frozenset({"DA_18_Caitlyn", "DA_Scuttlecrab18"})),
+    ("Kha'Zix reroll-like (Kha'Zix/Hecarim/Diana)", frozenset({"DA_18_KhaZix", "DA_18_Hecarim", "DA_18_Diana"})),
+)
+#: Shells of the mixed groups seen under the pre-PR-#29 merge (run #2's B35,
+#: B36, B49); matched structurally, never by historical group id.
+REGRESSION_ANCHORS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("Elder Dragon / Sentinel / Draven", frozenset({"DA_18_ElderDragon", "DA_Sentinel18", "DA_Draven18"})),
+    ("Diana / Sentinel / Taric", frozenset({"DA_18_Diana", "DA_Sentinel18", "DA_Taric18"})),
+    ("Alune / Diana / Fiddlesticks", frozenset({"DA_18_Alune", "DA_18_Diana", "DA_Fiddlesticks18"})),
+)
+#: The run #2 smearing shape: a group of >= this many boards whose core has
+#: <= TINY_CORE_UNITS units.
+TINY_CORE_UNITS = 4
+TINY_CORE_MIN_BOARDS = 30
+REVIEW_PER_REASON = 3
+
+
+def final_group_diagnostics(boards: Sequence[Board], grouping: Grouping, strategy: Strategy,
+                            config: ArchetypeConfig) -> dict[str, Any]:
+    """Every grouped board against its FINAL group's mean profile (after all
+    merges), with the strategy's similarity: below-tau membership, weakest
+    member, how many variants were merged in, and core drift (1 - Jaccard of
+    the final core and the core of the group's largest original variant)."""
+    champions = load_roster().champions
+    by_obs = {b.obs: b for b in boards}
+    members: dict[int, list[int]] = defaultdict(list)
+    for k, g in sorted(grouping.group.items()):
+        members[g].append(k)
+    groups = []
+    for g, obs in sorted(members.items()):
+        vecs = [board_vectors(by_obs[k], strategy, config, champions) for k in obs]
+        profile = mean_profile(vecs)
+        sims = sorted(similarity(v, profile, strategy) for v in vecs)
+        below = sum(x < config.tau for x in sims)
+
+        def core(ks: Sequence[int]) -> set[str]:
+            c = Counter(u for k in ks for u in by_obs[k].identity)
+            return {u for u, n in c.items() if n / len(ks) >= config.core_presence}
+
+        by_variant: dict[int, list[int]] = defaultdict(list)
+        for k in obs:
+            by_variant[grouping.variant[k]].append(k)
+        largest = min(by_variant, key=lambda v: (-len(by_variant[v]), v))
+        final_core, base_core = core(obs), core(by_variant[largest])
+        union = final_core | base_core
+        groups.append({"group": g, "boards": len(obs), "variants": len(by_variant), "below_tau": below,
+                       "below_tau_share": below / len(obs), "min_similarity": sims[0],
+                       "median_similarity": sims[(len(sims) - 1) // 2],
+                       "core_drift": 1 - len(final_core & base_core) / len(union) if union else 0.0,
+                       "final_core_size": len(final_core)})
+    grouped = sum(r["boards"] for r in groups)
+    below = sum(r["below_tau"] for r in groups)
+    return {
+        "definition": "every grouped board vs its final group's mean profile after all merges (strategy similarity)",
+        "groups": len(groups), "grouped_boards": grouped, "boards_below_tau": below,
+        "boards_below_tau_share": below / grouped if grouped else None,
+        "groups_with_any_board_below_tau": sum(r["below_tau"] > 0 for r in groups),
+        "groups_over_1pct_below_tau": sum(100 * r["below_tau"] > r["boards"] for r in groups),
+        "groups_over_5pct_below_tau": sum(20 * r["below_tau"] > r["boards"] for r in groups),
+        "groups_over_10pct_below_tau": sum(10 * r["below_tau"] > r["boards"] for r in groups),
+        "groups_merged_from_2plus_variants": sum(r["variants"] > 1 for r in groups),
+        "tiny_core_large_groups": sum(r["final_core_size"] <= TINY_CORE_UNITS and r["boards"] >= TINY_CORE_MIN_BOARDS
+                                      for r in groups),
+        "quantiles": {"group_min_similarity": quantiles(r["min_similarity"] for r in groups),
+                      "group_below_tau_share": quantiles(r["below_tau_share"] for r in groups),
+                      "variants_per_group": quantiles(r["variants"] for r in groups),
+                      "core_drift": quantiles(r["core_drift"] for r in groups)},
+        "per_group": groups,
+    }
+
+
+def control_comparison(control: Mapping[str, Any], experimental: Mapping[str, Any], control_final: Mapping[str, Any],
+                       experimental_final: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Rows (metric, control, experimental, delta) -- structural outcomes, not quality judgments."""
+    def q(m: Mapping[str, Any], key: str, stat: str) -> Any:
+        return (m.get(key) or {}).get(stat)
+
+    rows = [("groups", control["groups"], experimental["groups"]),
+            ("boards assigned", control["boards_in_multi_board_groups"], experimental["boards_in_multi_board_groups"]),
+            ("boards ungrouped", control["boards_ungrouped"], experimental["boards_ungrouped"]),
+            ("accepted merges", control["merges"], experimental["merges"]),
+            ("rejected: core", control["merge_checks"].get("rejected_core"), experimental["merge_checks"].get("rejected_core")),
+            ("rejected: similarity (control: every board >= tau; experimental: S2)",
+             control["merge_checks"].get("rejected_similarity"), experimental["merge_checks"].get("rejected_similarity")),
+            ("near-duplicate groups (nearest other >= tau)", control["groups_with_nearest_other_at_or_above_tau"],
+             experimental["groups_with_nearest_other_at_or_above_tau"]),
+            ("within-group similarity median", q(control, "within_group_similarity", "median"),
+             q(experimental, "within_group_similarity", "median")),
+            ("within-group similarity p10", q(control, "within_group_similarity", "p10"),
+             q(experimental, "within_group_similarity", "p10")),
+            ("within-group similarity min", q(control, "within_group_similarity", "min"),
+             q(experimental, "within_group_similarity", "min")),
+            ("group size median", q(control, "group_size_quantiles", "median"), q(experimental, "group_size_quantiles", "median")),
+            ("group size p90", q(control, "group_size_quantiles", "p90"), q(experimental, "group_size_quantiles", "p90")),
+            ("group size max", q(control, "group_size_quantiles", "max"), q(experimental, "group_size_quantiles", "max")),
+            ("grouped boards below tau (final profile)", control_final["boards_below_tau"], experimental_final["boards_below_tau"]),
+            ("share of grouped boards below tau", control_final["boards_below_tau_share"],
+             experimental_final["boards_below_tau_share"]),
+            ("groups with >= 1 board below tau", control_final["groups_with_any_board_below_tau"],
+             experimental_final["groups_with_any_board_below_tau"]),
+            ("groups with > 1% below tau", control_final["groups_over_1pct_below_tau"], experimental_final["groups_over_1pct_below_tau"]),
+            ("groups with > 5% below tau", control_final["groups_over_5pct_below_tau"], experimental_final["groups_over_5pct_below_tau"]),
+            ("groups with > 10% below tau", control_final["groups_over_10pct_below_tau"],
+             experimental_final["groups_over_10pct_below_tau"]),
+            (f"groups >= {TINY_CORE_MIN_BOARDS} boards with core <= {TINY_CORE_UNITS} units", control_final["tiny_core_large_groups"],
+             experimental_final["tiny_core_large_groups"])]
+    rows += [(f"groups in size band {band}", control["size_bands"][band], experimental["size_bands"][band])
+             for band in control["size_bands"]]
+    rows += [(f"boards in size band {band}", control["boards_by_size_band"][band], experimental["boards_by_size_band"][band])
+             for band in control["boards_by_size_band"]]
+    out = []
+    for metric, a, b in rows:
+        delta = b - a if isinstance(a, (int, float)) and isinstance(b, (int, float)) else None
+        out.append({"metric": metric, "control": a, "experimental": b, "delta": delta})
+    return out
+
+
+def anchored_groups(summaries: Mapping[int, Mapping[str, Any]], anchors: frozenset[str]) -> list[Mapping[str, Any]]:
+    """Groups whose core contains every anchor unit, largest first (ties: group id)."""
+    return sorted((s for s in summaries.values() if anchors <= set(s["core_candidates"])),
+                  key=lambda s: (-s["boards"], s["group"]))
+
+
+def chaining_review(final: Mapping[str, Any]) -> list[tuple[str, int]]:
+    """Deterministic, bounded: (reason, group id), each group once; never by placement."""
+    groups = final["per_group"]
+    reasons = [
+        ("highest share of members below tau (>= 10 boards)", [r for r in groups if r["boards"] >= 10],
+         lambda r: (-r["below_tau_share"], -r["boards"], r["group"])),
+        ("weakest member similarity", groups, lambda r: (r["min_similarity"], -r["boards"], r["group"])),
+        ("largest groups", groups, lambda r: (-r["boards"], r["group"])),
+        ("most variants merged in", [r for r in groups if r["variants"] > 1], lambda r: (-r["variants"], -r["boards"], r["group"])),
+        ("largest core drift from its largest original variant", [r for r in groups if r["variants"] > 1],
+         lambda r: (-r["core_drift"], -r["boards"], r["group"])),
+    ]
+    chosen: dict[int, str] = {}
+    for reason, pool, key in reasons:
+        for r in [r for r in sorted(pool, key=key) if r["group"] not in chosen][:REVIEW_PER_REASON]:
+            chosen[r["group"]] = reason
+    return [(reason, g) for g, reason in chosen.items()]
+
+
+def experimental_review(boards: Sequence[Board], strategy: Strategy, grouping: Grouping, metrics: Mapping[str, Any],
+                        summaries: Mapping[int, Mapping[str, Any]], members: Mapping[int, Sequence[Board]],
+                        control: Mapping[str, Any], names: Names, config: ArchetypeConfig) -> dict[str, Any]:
+    """JSON for an experimental strategy (report-only): control comparison,
+    accepted-merge trajectory, final-group membership, review samples."""
+    final = final_group_diagnostics(boards, grouping, strategy, config)
+    control_final = final_group_diagnostics(boards, control["grouping"], control["strategy"], config)
+    ctrl_summaries = control["summaries"]
+    family = []
+    for label, anchors in FAMILY_ANCHORS:
+        ctrl, mine = anchored_groups(ctrl_summaries, anchors), anchored_groups(summaries, anchors)
+        detail = mine[0]["group"] if mine else None
+        item_sets = []
+        if detail is not None:
+            s = summaries[detail]
+            top = sorted(s["units"], key=lambda u: (-max(s["units"][u]["two_plus_items"], s["units"][u]["carry_qualified"]), u))[:2]
+            item_sets = [item_set_summary(members[detail], u, config, names) for u in top if s["units"][u]["two_plus_items"] >= 0.15]
+        family.append({"label": label, "anchors": sorted(anchors), "control_groups": len(ctrl),
+                       "control_sizes": [s["boards"] for s in ctrl[:8]], "control_boards": sum(s["boards"] for s in ctrl),
+                       "experimental_groups": len(mine), "experimental_sizes": [s["boards"] for s in mine[:8]],
+                       "experimental_boards": sum(s["boards"] for s in mine), "detail_group": detail, "item_sets": item_sets})
+    regression = []
+    for label, anchors in REGRESSION_ANCHORS:
+        ctrl, mine = anchored_groups(ctrl_summaries, anchors), anchored_groups(summaries, anchors)
+        regression.append({"label": label, "anchors": sorted(anchors), "control_groups": len(ctrl),
+                           "control_sizes": [s["boards"] for s in ctrl[:8]],
+                           "control_core_sizes": [len(s["core_candidates"]) for s in ctrl[:8]],
+                           "experimental_groups": len(mine), "experimental_sizes": [s["boards"] for s in mine[:8]],
+                           "experimental_core_sizes": [len(s["core_candidates"]) for s in mine[:8]],
+                           "experimental_detail": [s["group"] for s in mine[:REVIEW_PER_REASON]]})
+    tiny = sorted((r for r in final["per_group"] if r["final_core_size"] <= TINY_CORE_UNITS
+                   and r["boards"] >= TINY_CORE_MIN_BOARDS), key=lambda r: (-r["boards"], r["group"]))
+    return {
+        "definition": "EXPERIMENTAL strategy -- report-only review; one Patch-window research population; S2 thresholds "
+                      "frozen before validation run #5; same-population results are model-development evidence, not "
+                      "independent validation",
+        "control": strategy.variants_from,
+        "decision_rule_mismatches": grouping.merge_diagnostics["decision_rule_mismatches"],
+        "comparison": control_comparison(control["metrics"], metrics, control_final, final),
+        "trajectory": grouping.merge_diagnostics["trajectory"],
+        "final": final, "control_final": {k: v for k, v in control_final.items() if k != "per_group"},
+        "family_review": family, "regression_review": regression,
+        "tiny_core_groups": [r["group"] for r in tiny[:5]],
+        "chaining_review": chaining_review(final),
+    }
+
+
+def render_experimental_review(strategy: Strategy, exp: Mapping[str, Any], summaries: Mapping[int, Mapping[str, Any]],
+                               members: Mapping[int, Sequence[Board]], names: Names, config: ArchetypeConfig) -> list[str]:
+    """Markdown for an experimental strategy: comparison with its control,
+    accepted-merge trajectory, final-group membership, and human-review
+    samples. Every decision-relevant number is printed here."""
+    def f(x: Any) -> str:
+        return "n/a" if x is None else f"{x:.4f}" if isinstance(x, float) else str(x)
+
+    def core_line(s: Mapping[str, Any]) -> str:
+        return ", ".join(f"{names.champion(u)} {round(100 * s['units'][u]['presence'])}%" for u in s["core_candidates"])
+
+    def flex_line(s: Mapping[str, Any]) -> str:
+        return ", ".join(f"{names.champion(u)} {round(100 * s['units'][u]['presence'])}%" for u in s["other_common_units"][:8]) or "-"
+
+    per_group = {r["group"]: r for r in exp["final"]["per_group"]}
+
+    def compact(s: Mapping[str, Any], label: str = "") -> list[str]:
+        r = per_group[s["group"]]
+        return [f"- {label}group {s['group']}: {s['boards']} boards, {r['variants']} variants merged, core drift "
+                f"{f(r['core_drift'])}; below tau (final profile) {r['below_tau']} ({100 * r['below_tau_share']:.1f}%), "
+                f"min member similarity {f(r['min_similarity'])}, median {f(r['median_similarity'])}",
+                f"  - core ({len(s['core_candidates'])}): {core_line(s)} | other common: {flex_line(s)}"]
+
+    t, final = exp["trajectory"], exp["final"]
+    lines = ["", f"### EXPERIMENTAL {strategy.label}: comparison with control {exp['control']} (structural outcomes, "
+             "NOT quality judgments -- fewer groups or more merges are not better by themselves)",
+             f"- S2 decision consistency: {exp['decision_rule_mismatches']} attempts where the real decision differs from "
+             "the S2 conditions evaluated on the same measurements (must be 0).",
+             "| metric | control | experimental | delta |", "|---|---|---|---|"]
+    lines += [f"| {r['metric']} | {f(r['control'])} | {f(r['experimental'])} | {f(r['delta'])} |" for r in exp["comparison"]]
+    q = t["quantiles"]
+    lines += ["", "#### Accepted S2 merges, each measured WHEN ACCEPTED (tentative merged profile; one step)",
+              f"- accepted merges: {t['accepted_merges']}; with >= 1 board below tau at acceptance: "
+              f"{t['with_any_board_below_tau']}; identical cores: {t['identical_cores']}; C splash exception: "
+              f"{t['splash_exception']}",
+              "- core overlap: " + ", ".join(f"{k}: {v}" for k, v in t["core_overlap_buckets"].items()),
+              "- merged size band: " + ", ".join(f"{k}: {v}" for k, v in t["merged_size_bands"].items()),
+              *(f"- {k}: median {f((q[k] or {}).get('median'))}, p10 {f((q[k] or {}).get('p10'))}, min "
+                f"{f((q[k] or {}).get('min'))}, max {f((q[k] or {}).get('max'))}" for k in q),
+              "- by variants in the merged group right after the merge (later bands = merging into already-merged groups):"]
+    for band, d in t["by_variants_after_merge"].items():
+        lines.append(f"  - {band} variants: {d['accepted_merges']} merges, {d['with_any_board_below_tau']} with a board "
+                     f"below tau; median min post {f((d['min_post'] or {}).get('median'))}, median post p10 "
+                     f"{f((d['post_p10'] or {}).get('median'))}, max below-tau share {f((d['below_tau_share'] or {}).get('max'))}")
+    fq = final["quantiles"]
+    lines += ["", "#### Final groups after ALL recursive merges (every grouped board vs its final group profile)",
+              f"- grouped boards {final['grouped_boards']}; below tau {final['boards_below_tau']} "
+              f"({f(final['boards_below_tau_share'])}); groups with >= 1 below tau {final['groups_with_any_board_below_tau']}, "
+              f"> 1% {final['groups_over_1pct_below_tau']}, > 5% {final['groups_over_5pct_below_tau']}, "
+              f"> 10% {final['groups_over_10pct_below_tau']}; groups merged from 2+ variants "
+              f"{final['groups_merged_from_2plus_variants']}; groups >= {TINY_CORE_MIN_BOARDS} boards with core <= "
+              f"{TINY_CORE_UNITS} units: {final['tiny_core_large_groups']}",
+              *(f"- {k}: min {f((v or {}).get('min'))}, p10 {f((v or {}).get('p10'))}, median {f((v or {}).get('median'))}, "
+                f"p90 {f((v or {}).get('p90'))}, max {f((v or {}).get('max'))}" for k, v in fq.items())]
+    lines += ["", "#### Composition-family review (structural anchor lookup; descriptive labels, not ground truth)"]
+    for fam in exp["family_review"]:
+        lines.append(f"- **{fam['label']}**: control {fam['control_groups']} matching groups (largest sizes "
+                     f"{fam['control_sizes']}); experimental {fam['experimental_groups']} (largest sizes {fam['experimental_sizes']})")
+        if fam["detail_group"] is not None:
+            s = summaries[fam["detail_group"]]
+            lines += compact(s, "largest experimental match: ")
+            lines += ["  " + line for line in render_group(s, members[s["group"]], names, config, fam["item_sets"])]
+    lines += ["", "#### Regression-pattern review (shells of earlier mixed groups; matched by structure only)"]
+    for reg in exp["regression_review"]:
+        lines.append(f"- **{reg['label']}**: control {reg['control_groups']} matching groups (sizes {reg['control_sizes']}, "
+                     f"core sizes {reg['control_core_sizes']}); experimental {reg['experimental_groups']} (sizes "
+                     f"{reg['experimental_sizes']}, core sizes {reg['experimental_core_sizes']})")
+        for g in reg["experimental_detail"]:
+            lines += ["  " + line for line in compact(summaries[g])]
+    lines.append(f"- experimental groups >= {TINY_CORE_MIN_BOARDS} boards with core <= {TINY_CORE_UNITS} units (the run #2 "
+                 f"smearing shape): {len(exp['tiny_core_groups'])}")
+    for g in exp["tiny_core_groups"]:
+        lines += ["  " + line for line in compact(summaries[g])]
+    lines += ["", "#### Chaining review (bounded, deterministic, structure only; for human review, no score)"]
+    for reason, g in exp["chaining_review"]:
+        lines += compact(summaries[g], f"[{reason}] ")
+        lines += [f"  - member board: {line}" for line in _member_lines(members[g], names)]
+    return lines + [""]
+
+
+def _member_lines(boards: Sequence[Board], names: Names, n: int = 3) -> list[str]:
+    """A few member boards (structure only), deterministically the first by anonymous observation id."""
+    out = []
+    for b in sorted(boards, key=lambda b: b.obs)[:n]:
+        out.append(", ".join(f"{names.champion(u.cid)} {u.tier}*" + (f" [{len(u.items)} items]" if u.items else "")
+                             for u in sorted(b.shop, key=lambda u: (-len(u.items), u.cid))))
+    return out
+
+
 @dataclass(frozen=True)
 class LoadedInputs:
     """Everything the analysis needs, fully materialized in memory (plain
@@ -1803,10 +2232,15 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
     membership: list[dict[str, Any]] = []
     by_obs = {b.obs: b for b in eligible}
     unit_presence_hist: dict[str, Counter] = {}
+    # kept for the experimental strategies (variant reuse, comparison with their controls)
+    done: dict[str, dict[str, Any]] = {}
     for strategy in STRATEGIES:
         progress(f"{strategy.name}: started")
         chunk_start = len(md)
-        grouping = cluster(boards, strategy, config, progress)
+        if strategy.variants_from:
+            grouping = cluster_reusing_variants(boards, strategy, config, done[strategy.variants_from]["grouping"], progress)
+        else:
+            grouping = cluster(boards, strategy, config, progress)
         progress(f"{strategy.name}: global metrics started")
         metrics = global_metrics(boards, grouping, strategy, config)
         progress(f"{strategy.name}: global metrics completed")
@@ -1857,7 +2291,8 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
         md += [f"- {k}: {json.dumps(v, default=_json_default)}" for k, v in metrics.items() if k not in ("description", "strategy")]
         if grouping.merge_diagnostics:
             md += render_merge_diagnostics(grouping.merge_diagnostics, names)
-            md += render_shadow_evaluation(grouping.merge_diagnostics["shadow"], names)
+            if "shadow" in grouping.merge_diagnostics:
+                md += render_shadow_evaluation(grouping.merge_diagnostics["shadow"], names)
         md += ["", "### Unit-presence histogram (all groups with >= 30 boards; one count per unit per group)",
                "- " + ", ".join(f"{k}-: {v}" for k, v in sorted(hist.items())) if hist else "- no group has >= 30 boards", "",
                "### Size bands (niche test; performance quantiles are per group)"]
@@ -1887,6 +2322,14 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
                       + " vs ".join(names.champion(u) for u in case["primary_itemized_units"]))
             for g in case["groups"]:
                 md += render_group(summaries[g], members[g], names, config, item_sets.get(g, [])) + [""]
+        if strategy.variants_from:
+            progress(f"{strategy.name}: experimental comparison with {strategy.variants_from} started")
+            exp = experimental_review(boards, strategy, grouping, metrics, summaries, members, done[strategy.variants_from],
+                                      names, config)
+            report["strategies"][strategy.name]["experimental_s2"] = exp
+            md += render_experimental_review(strategy, exp, summaries, members, names, config)
+            progress(f"{strategy.name}: experimental comparison completed")
+        done[strategy.name] = {"grouping": grouping, "metrics": metrics, "summaries": summaries, "strategy": strategy}
         progress(f"{strategy.name}: summaries/diagnostics completed")
         progress(f"{strategy.name}: completed, {metrics['groups']} groups, {metrics['boards_in_multi_board_groups']} boards "
                  f"assigned, {metrics['boards_ungrouped']} ungrouped")
