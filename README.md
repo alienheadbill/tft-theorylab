@@ -2,6 +2,8 @@
 
 A patch-aware analytics prototype for discovering **low-usage, data-backed TFT carry lines**, with an emphasis on 1/2/3-cost rerolls.
 
+Project direction, current checkpoint and priorities: see [ROADMAP.md](ROADMAP.md).
+
 ## Milestone 1
 
 The first vertical slice does four things:
