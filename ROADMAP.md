@@ -44,7 +44,7 @@ Before starting substantial new work, map it to a milestone below or to a concre
 
 Details are in the README.
 
-- **Riot TFT ingestion** (`tftlab ingest-riot`, `live-ingest.yml`): manually dispatched, `main` only, with a fixed concurrency group.
+- **Riot TFT ingestion** (`tftlab ingest-riot`, `live-ingest.yml`): scheduled every 6 hours (bounded mode) and manually dispatched, `main` only, with a fixed concurrency group.
 - **Raw match storage** (SQLite or Postgres), with provenance:
   - the `seed_samples` rotation ledger;
   - `match_discoveries`;
@@ -81,7 +81,8 @@ Riot access currently uses a **development key that must be regenerated regularl
 ### Track 1: Continuous data collection
 
 - **Goal:** grow the historical dataset automatically instead of by manual dispatch.
-- **Immediate milestone (ACCEPTED/CURRENT):** add conservative scheduling around the **existing** maximum-mode collector. Do not build a new ingestion system.
+- **Scheduled collection (IMPLEMENTED):** `live-ingest.yml` runs the existing collector every 6 hours with fixed conservative settings. It uses **bounded** mode, not maximum: both production maximum-mode runs failed with 401 during deep ladder enumeration, so maximum stays manual-only until that is diagnosed. 401/403 now fail a bounded run with no ledger progress, as in maximum mode.
+- **Next (ACCEPTED/CURRENT):** measure the first scheduled runs (the metrics below), then diagnose the maximum-mode ladder 401 before any change to the scheduled mode. Do not build a new ingestion system.
 - **Preserve:**
   - request, time and match-fetch budgets;
   - concurrency protection;
@@ -189,7 +190,7 @@ Riot access currently uses a **development key that must be regenerated regularl
 **Next:**
 
 1. Adopt this roadmap.
-2. Implement safe scheduled continuous collection using the existing collector (Track 1).
+2. ~~Implement safe scheduled continuous collection using the existing collector~~ (done; now measuring it) (Track 1).
 3. Begin the Champion Investigation vertical slice (Track 4).
 4. Develop the champion, item, partner, core and trait evidence that experience needs (Track 3).
 5. In parallel, instrument unchanged S2 to quantify recursive lock-in and order dependence (Track 2).

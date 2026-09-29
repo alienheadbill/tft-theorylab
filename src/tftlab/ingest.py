@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, NamedTuple, Sequence
 
 from .normalize import CostLookup
-from .riot import RANKED_TFT_QUEUE_ID, RiotApiError, RiotClient
+from .riot import RANKED_TFT_QUEUE_ID, RiotApiError, RiotClient, is_fatal_riot_error
 from .sampling import COHORTS, DIVISION_TIERS, DIVISIONS, LADDER_TIERS, select_cohort_seeds, select_seeds
 from .storage import RUN_COMPLETED, Database
 
@@ -294,7 +294,12 @@ def ingest_ladder(
     skipped rather than aborting the whole run: a failed match fetch in
     `failed_requests`, a failed seed history in `failed_history_requests`.
     Ladder (league) requests are not tolerated this way: without them there
-    are no seeds.
+    are no seeds. Neither are FATAL Riot errors (`is_fatal_riot_error`: 401,
+    403, 400 and every other 4xx except 404/429), the same rule maximum
+    mode uses: an invalid or expired key would fail every remaining request
+    the same way, so the run stops at once and is marked failed -- no seed
+    ledger or provenance rows are finalized for it (matches already stored
+    stay stored), and the next run's rotation ignores it.
 
     A ladder PUUID's recent match history isn't exclusively standard ranked
     TFT -- it can include Normal, Hyper Roll, or Double Up games too. Every
@@ -378,7 +383,9 @@ def _ingest_run(
         stats = per_cohort[cohort]
         try:
             history = client.match_ids(puuid, count=matches_per_player, **bounds)
-        except RiotApiError:
+        except RiotApiError as exc:
+            if is_fatal_riot_error(exc):
+                raise  # e.g. an expired key: fail the run, finalize no ledger rows
             failed_histories += 1
             stats["failed"] += 1
             continue
@@ -411,7 +418,9 @@ def _ingest_run(
             continue
         try:
             payload = client.match(match_id)
-        except RiotApiError:
+        except RiotApiError as exc:
+            if is_fatal_riot_error(exc):
+                raise  # never ledger seeds whose matches could not be fetched
             failed += 1
             continue
         fetched += 1

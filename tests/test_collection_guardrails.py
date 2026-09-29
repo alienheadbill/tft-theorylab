@@ -75,9 +75,12 @@ def test_expired_key_mid_ingest_prints_the_same_guidance(monkeypatch: pytest.Mon
 def test_workflow_verifies_the_key_before_ingesting_and_stays_window_bounded() -> None:
     text = WORKFLOW.read_text()
     assert text.index("tftlab verify-riot") < text.index("tftlab ingest-riot")
-    ingest = next(line for line in text.splitlines() if "tftlab ingest-riot" in line)
-    assert "--current-trusted-window" in ingest and "--start-time" not in ingest
-    assert "schedule:" not in text  # still manual only
+    ingests = [line for line in text.splitlines() if line.strip().startswith("tftlab ingest-riot")]
+    assert len(ingests) == 2  # bounded and maximum
+    for ingest in ingests:
+        assert "--current-trusted-window" in ingest and "--start-time" not in ingest
+    # The schedule only ever runs bounded collection; maximum stays manual.
+    assert "COLLECTION_MODE: ${{ github.event_name == 'schedule' && 'bounded' || inputs.collection_mode }}" in text
 
 
 @pytest.mark.parametrize("now_ms", [END_18_3_MS, END_18_3_MS + 1, END_18_3_MS + 86_400_000])

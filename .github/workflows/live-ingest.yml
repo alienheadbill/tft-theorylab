@@ -1,9 +1,25 @@
 name: Live ingest
 
-# Manually-triggered only, on purpose: this hits the real Riot API and
-# CommunityDragon and writes to the production database (via its external
-# Postgres URL), so it must never run on push/pull_request, and has no
-# schedule yet -- that's a deliberate follow-up milestone, not this one.
+# Hits the real Riot API and CommunityDragon and writes to the production
+# database (via its external Postgres URL), so it must never run on
+# push/pull_request. It runs in two ways, through the SAME steps:
+#
+# - schedule: every 6 hours (UTC, below) with FIXED conservative settings
+#   -- bounded mode, 15/15/20/25/25 seeds (Challenger/Grandmaster/Master/
+#   Diamond/Platinum) x 10 matches each, the configuration of the two
+#   successful production runs 36286242686 and 36289198154 (about 600-730
+#   Riot requests and 15-20 minutes each). Dispatch inputs never apply to a
+#   scheduled run. Scheduled runs are bounded, not maximum: both production
+#   maximum-mode runs so far failed with 401 during deep Diamond/Platinum
+#   ladder enumeration, before any match was collected.
+# - workflow_dispatch: the operator inputs below, unchanged.
+#
+# With the Riot development key (it expires about every 24 hours), a
+# scheduled run after expiry fails at the Riot key check, before anything
+# is ingested; a key that expires mid-run fails the ingest (401/403 are
+# fatal) with no seed-ledger or provenance progress for that run. Either
+# way the run is red, and the next scheduled run after the RIOT_API_KEY
+# secret is replaced collects normally.
 #
 # Sampling is chosen per run through the inputs below: one seed count per
 # rank cohort (validated in the first step, before checkout or any
@@ -22,8 +38,13 @@ name: Live ingest
 # match-detail fetches). Each wave of seeds is finalized as its own ingest
 # run, so a stopped or failed run loses at most one wave's bookkeeping and
 # the next dispatch continues the rotation. Nothing here dispatches another
-# run, retries a run, or runs on a schedule.
+# run or retries a run; the schedule only starts fresh, independent runs.
 on:
+  schedule:
+    # 00:41, 06:41, 12:41 and 18:41 UTC. Off the hour on purpose: GitHub
+    # delays (and can drop) scheduled runs at busy top-of-hour times.
+    # Scheduled workflows run from the default branch (main) only.
+    - cron: "41 */6 * * *"
   workflow_dispatch:
     inputs:
       challenger_seeds:
@@ -77,7 +98,8 @@ permissions:
   contents: read
 
 # A single fixed group serializes runs (queued, never cancelled) so two
-# manually-triggered live ingests can never write to production at once.
+# live ingests -- scheduled or manual, in any combination -- can never
+# write to production at once.
 concurrency:
   group: live-ingest-production
   cancel-in-progress: false
@@ -90,7 +112,27 @@ jobs:
     # 200, validated below); 240 leaves room for install, verify-riot,
     # validation and the smoke test, and is the hard backstop if anything
     # hangs. Both stay well under GitHub's 360-minute job limit.
+    # (A scheduled run has no inputs, so it always gets the bounded 60.)
     timeout-minutes: ${{ inputs.collection_mode == 'maximum' && 240 || 60 }}
+    # Effective run settings, resolved once for every step. A scheduled run
+    # uses the fixed values after `&&` (none may be 0 or empty: `&&`/`||`
+    # would then fall through to the empty dispatch input); a manual run
+    # uses its dispatch inputs exactly as before. Inputs reach the shell
+    # only as these environment variables, never interpolated into a
+    # script. The maximum-mode budgets are unused by a bounded run but
+    # still validated by the preflight.
+    env:
+      RUN_TRIGGER: ${{ github.event_name }}
+      CHALLENGER_SEEDS: ${{ github.event_name == 'schedule' && '15' || inputs.challenger_seeds }}
+      GRANDMASTER_SEEDS: ${{ github.event_name == 'schedule' && '15' || inputs.grandmaster_seeds }}
+      MASTER_SEEDS: ${{ github.event_name == 'schedule' && '20' || inputs.master_seeds }}
+      DIAMOND_SEEDS: ${{ github.event_name == 'schedule' && '25' || inputs.diamond_seeds }}
+      PLATINUM_SEEDS: ${{ github.event_name == 'schedule' && '25' || inputs.platinum_seeds }}
+      MATCHES_PER_PLAYER: ${{ github.event_name == 'schedule' && '10' || inputs.matches_per_player }}
+      COLLECTION_MODE: ${{ github.event_name == 'schedule' && 'bounded' || inputs.collection_mode }}
+      MAX_DURATION_MINUTES: ${{ github.event_name == 'schedule' && '60' || inputs.max_duration_minutes }}
+      MAX_REQUESTS: ${{ github.event_name == 'schedule' && '3000' || inputs.max_requests }}
+      MAX_MATCH_FETCHES: ${{ github.event_name == 'schedule' && '2000' || inputs.max_match_fetches }}
     steps:
       # Runs before checkout/install and before any Riot or database access:
       # cheap fail-fast so a bad branch selection or missing/malformed
@@ -100,19 +142,17 @@ jobs:
         env:
           RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          # Inputs reach the shell only as environment variables, never
-          # interpolated into the script text.
-          CHALLENGER_SEEDS: ${{ inputs.challenger_seeds }}
-          GRANDMASTER_SEEDS: ${{ inputs.grandmaster_seeds }}
-          MASTER_SEEDS: ${{ inputs.master_seeds }}
-          DIAMOND_SEEDS: ${{ inputs.diamond_seeds }}
-          PLATINUM_SEEDS: ${{ inputs.platinum_seeds }}
-          MATCHES_PER_PLAYER: ${{ inputs.matches_per_player }}
-          COLLECTION_MODE: ${{ inputs.collection_mode }}
-          MAX_DURATION_MINUTES: ${{ inputs.max_duration_minutes }}
-          MAX_REQUESTS: ${{ inputs.max_requests }}
-          MAX_MATCH_FETCHES: ${{ inputs.max_match_fetches }}
         run: |
+          case "${RUN_TRIGGER}" in
+            schedule)
+              echo "Trigger: scheduled run -- fixed conservative settings; dispatch inputs do not apply." ;;
+            workflow_dispatch)
+              echo "Trigger: manual dispatch -- operator inputs." ;;
+            *)
+              echo "::error::Unexpected trigger '${RUN_TRIGGER}': only schedule and workflow_dispatch may run this workflow." >&2
+              exit 1
+              ;;
+          esac
           if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
             echo "::error::This workflow must be run with 'main' explicitly selected as the branch (got ${GITHUB_REF})." >&2
             exit 1
@@ -229,16 +269,6 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           TFT_PLATFORM: na1
           TFT_REGION: americas
-          CHALLENGER_SEEDS: ${{ inputs.challenger_seeds }}
-          GRANDMASTER_SEEDS: ${{ inputs.grandmaster_seeds }}
-          MASTER_SEEDS: ${{ inputs.master_seeds }}
-          DIAMOND_SEEDS: ${{ inputs.diamond_seeds }}
-          PLATINUM_SEEDS: ${{ inputs.platinum_seeds }}
-          MATCHES_PER_PLAYER: ${{ inputs.matches_per_player }}
-          COLLECTION_MODE: ${{ inputs.collection_mode }}
-          MAX_DURATION_MINUTES: ${{ inputs.max_duration_minutes }}
-          MAX_REQUESTS: ${{ inputs.max_requests }}
-          MAX_MATCH_FETCHES: ${{ inputs.max_match_fetches }}
           # Operator policy cap per routing host, applied on top of the
           # limits Riot advertises in its response headers (which the
           # client paces to at 90%). Riot's API Terms cap Development keys
@@ -276,11 +306,61 @@ jobs:
           retention-days: 30
 
       - name: Validate ingested data
+        id: validate
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: tftlab validate-live-data
 
       - name: Run discovery smoke test
+        id: smoke
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: tftlab discovery-smoke
+
+      # One short table per run on the run's summary page, so a scheduled
+      # run can be judged at a glance (the full report stays in the ingest
+      # step's log and the ingest-telemetry artifact). Reads only the
+      # aggregate telemetry file -- no ids, no secrets -- and never fails
+      # the job itself.
+      - name: Summarize collection
+        if: always()
+        env:
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          python3 - <<'PY' >> "${GITHUB_STEP_SUMMARY}" || true
+          import json, os
+          env = os.environ
+          print("## Live ingest collection summary\n")
+          print(f"- Trigger: `{env.get('RUN_TRIGGER', '?')}`; mode: `{env.get('COLLECTION_MODE', '?')}`")
+          try:
+              with open("ingest-telemetry/telemetry.json") as f:
+                  t = json.load(f)
+          except (OSError, ValueError):
+              print("- Ingest did not produce telemetry: the run stopped before ingestion "
+                    "(see the first failed step, e.g. Verify Riot API for an expired key).")
+              t = None
+          if t is not None:
+              c, r = t.get("collection") or {}, t.get("riot") or {}
+              pair = lambda a, b: f"{c.get(a, 'n/a')} / {c.get(b, 'n/a')}"
+              print(f"- Outcome: `{t.get('outcome')}`; run id: `{t.get('run_id')}`\n")
+              print("| Metric | Value |\n|---|---|")
+              for label, value in (
+                  ("Matches inserted (new)", c.get("matches_inserted")),
+                  ("Already stored, skipped before fetch", c.get("duplicates_skipped")),
+                  ("Match-detail fetches", c.get("matches_fetched")),
+                  ("Non-ranked matches skipped", c.get("non_target_matches_skipped")),
+                  ("Failed match requests", c.get("failed_requests")),
+                  ("Seeds (sampled / requested)", pair("seed_players", "requested_seeds")),
+                  ("Failed / empty seed histories", pair("failed_history_requests", "seeds_with_empty_history")),
+                  ("Seed ledger rows finalized", c.get("seed_ledger_rows")),
+                  ("Provenance rows finalized", c.get("discovery_rows")),
+                  ("Riot requests (total)", r.get("requests")),
+                  ("Riot responses by status", r.get("by_status")),
+                  ("Riot 429s", r.get("rate_limited")),
+                  ("Ingest elapsed (s)", r.get("elapsed_s")),
+              ):
+                  print(f"| {label} | {'n/a' if value is None else value} |")
+          print(f"\n- Validate ingested data: `{env.get('VALIDATE_OUTCOME') or 'not run'}`; "
+                f"discovery smoke: `{env.get('SMOKE_OUTCOME') or 'not run'}`")
+          PY
