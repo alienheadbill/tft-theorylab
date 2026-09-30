@@ -28,7 +28,7 @@ from .analytics import (
 from .analytics.association import Association
 from .analytics.commitment import CarryStat
 from .game_art import champion_art, champion_name, item_art, item_name, load_manifest, trait_art, trait_name
-from .research_report import WEB_DISCOVERY_MIN_SAMPLES, evidence_band
+from .research_report import WEB_DISCOVERY_MIN_SAMPLES
 from .roster import id_key, name_key
 from .scout import LOW_SAMPLE_COMMITMENT_GAMES
 from .storage import Database
@@ -37,31 +37,25 @@ from .storage import Database
 #: evidence does not exist in the backend yet and is never labelled here.
 OBSERVED = "observed"
 
-#: Player-facing wording for the existing evidence bands
-#: (`tftlab.research_report.EVIDENCE_BANDS`: >= 60 / 30 / 10 carry games).
-SAMPLE_BANDS: dict[str, tuple[str, str]] = {
-    "A_substantial": ("Solid sample", "Enough carry games that these numbers are fairly stable."),
-    "B_moderate": ("Moderate sample", "Useful, but more games could still move these numbers."),
-    "C_early": ("Early sample", "A first look only: numbers this small can swing a lot."),
-    "D_too_little": ("Too few games", "Not enough carry games to draw conclusions yet."),
-}
-
-
 def champion_slug(character_id: str, name: str | None = None) -> str:
     """URL key a player can read and type: "Kha'Zix" -> "khazix"."""
     return name_key(name or champion_name(character_id)) or id_key(character_id) or name_key(character_id)
 
 
 def sample_info(games: int) -> dict[str, Any]:
-    band = evidence_band(games)
-    label, meaning = SAMPLE_BANDS[band]
+    """Player-facing sample context without promoting research-report bands
+    into production confidence classes. The only product threshold reused
+    here is Discovery's existing LOW SAMPLE cutoff."""
+    low_sample = games < LOW_SAMPLE_COMMITMENT_GAMES
     return {
         "games": games,
-        "band": band,
-        "label": label,
-        "meaning": meaning,
-        # Same threshold as Discovery's LOW SAMPLE label.
-        "low_sample": games < LOW_SAMPLE_COMMITMENT_GAMES,
+        "label": "Low sample" if low_sample else "Observed sample",
+        "meaning": (
+            "Fewer than 30 carry games: treat these results as an early signal, not a stable estimate."
+            if low_sample
+            else "At least 30 carry games are observed in this window. The results are still observational and can move."
+        ),
+        "low_sample": low_sample,
     }
 
 
