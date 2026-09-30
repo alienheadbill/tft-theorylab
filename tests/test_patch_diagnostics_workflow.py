@@ -47,7 +47,9 @@ def test_never_prints_secret_values() -> None:
 
 
 def test_secrets_only_referenced_via_expression_not_hardcoded() -> None:
-    assert "${{ secrets.DATABASE_URL }}" in _text()
+    text = _text()
+    assert "${{ secrets.NEON_DATABASE_URL }}" in text
+    assert "${{ secrets.DATABASE_URL }}" not in text
 
 
 def test_production_preflight_runs_before_database_step() -> None:
