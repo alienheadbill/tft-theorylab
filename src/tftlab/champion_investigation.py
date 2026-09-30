@@ -16,7 +16,6 @@ player can pick a champion by name instead of by Riot id.
 
 from __future__ import annotations
 
-import math
 from typing import Any, Mapping, Sequence
 
 from .analytics import (
@@ -309,24 +308,6 @@ def champion_investigation(
 
 # ---------------------------------------------------------------- "How players carry"
 
-#: Two-sided 95% two-proportion z-test: the conventional statistical test for
-#: "is this Top 4 gap bigger than chance?". Applied only when both sides of
-#: the 3-star split have at least LOW_SAMPLE_COMMITMENT_GAMES boards (the
-#: product's existing LOW SAMPLE threshold) -- no new product threshold.
-Z_95 = 1.959964
-
-
-def top4_gap_is_clear(rate_a: float, n_a: int, rate_b: float, n_b: int) -> bool:
-    """True when two observed Top 4 rates differ by more than a two-sided 95%
-    two-proportion z-test attributes to chance."""
-    if n_a <= 0 or n_b <= 0:
-        return False
-    x_a, x_b = round(rate_a * n_a), round(rate_b * n_b)
-    pooled = (x_a + x_b) / (n_a + n_b)
-    se = math.sqrt(pooled * (1 - pooled) * (1 / n_a + 1 / n_b))
-    return se > 0 and abs(x_a / n_a - x_b / n_b) / se >= Z_95
-
-
 def _pct(v: float | None) -> str:
     return "—" if v is None else f"{v * 100:.1f}%"
 
@@ -433,20 +414,22 @@ def carry_summary(
         )
     if hit and miss and min(hit, miss) >= LOW_SAMPLE_COMMITMENT_GAMES:
         a, b = ts["hit_top4_rate"], ts["miss_top4_rate"]
-        if not top4_gap_is_clear(a, hit, b, miss):
+        gap = (a - b) * 100
+        if a > b:
             interpretation.append(
-                f"Reaching 3★ made no clear difference to Top 4 in this sample ({_pct(a)} vs {_pct(b)}); "
-                "the gap is small enough to be chance."
+                f"Boards that reached 3★ had higher observed Top 4 in this sample: {_pct(a)} vs {_pct(b)} "
+                f"below 3★ ({gap:+.1f} percentage points). Treat that as a signal, not proof that 3★ caused "
+                "the difference."
             )
-        elif a > b:
+        elif a < b:
             interpretation.append(
-                f"{name} looks dependent on reaching 3★ in this sample: Top 4 rises from {_pct(b)} below 3★ "
-                f"to {_pct(a)} at 3★, a gap larger than chance alone would usually produce."
+                f"Boards that reached 3★ had lower observed Top 4 in this sample: {_pct(a)} vs {_pct(b)} "
+                f"below 3★ ({gap:+.1f} percentage points). These observational data do not show a positive "
+                "3★ association here."
             )
         else:
             interpretation.append(
-                f"Boards that reached 3★ did not do better in this sample (Top 4 {_pct(a)} vs {_pct(b)} below 3★), "
-                "so the 3★ is not what separates good results here."
+                f"Observed Top 4 was the same at 3★ and below 3★ in this sample ({_pct(a)})."
             )
     elif hit and miss:
         interpretation.append(
