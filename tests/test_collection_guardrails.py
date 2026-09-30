@@ -79,8 +79,12 @@ def test_workflow_verifies_the_key_before_ingesting_and_stays_window_bounded() -
     assert len(ingests) == 2  # bounded and maximum
     for ingest in ingests:
         assert "--current-trusted-window" in ingest and "--start-time" not in ingest
-    # The schedule only ever runs bounded collection; maximum stays manual.
-    assert "COLLECTION_MODE: ${{ github.event_name == 'schedule' && 'bounded' || inputs.collection_mode }}" in text
+    # The schedule and the tightly-guarded Ops Control smoke are bounded;
+    # maximum remains manual-dispatch only.
+    assert (
+        "COLLECTION_MODE: ${{ github.event_name == 'schedule' && 'bounded' || "
+        "github.event_name == 'issue_comment' && 'bounded' || inputs.collection_mode }}"
+    ) in text
 
 
 @pytest.mark.parametrize("now_ms", [END_18_3_MS, END_18_3_MS + 1, END_18_3_MS + 86_400_000])
