@@ -1,0 +1,47 @@
+name: Temporary PR36 verification
+
+on:
+  push:
+    branches:
+      - claude/unzip-send-repo-fjbfqp
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tftlab_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tftlab_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: pip install -e ".[dev,postgres]"
+      - name: JavaScript syntax checks
+        run: |
+          node --check src/tftlab/web/static/app.js
+          node --check src/tftlab/web/static/champion.js
+          node --check src/tftlab/web/static/experiments.js
+          node --check src/tftlab/web/static/art.js
+      - name: SQLite suite
+        run: pytest -q
+      - name: Postgres suite
+        env:
+          TFTLAB_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/tftlab_test
+        run: pytest -q
