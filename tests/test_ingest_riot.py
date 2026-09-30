@@ -454,3 +454,120 @@ def test_cli_fails_when_every_history_request_fails(monkeypatch: pytest.MonkeyPa
     result = _run_ingest_cli(monkeypatch, tmp_path, client, ["--players", "2"])
     assert result.exit_code == 1
     assert "Failed history requests: 2" in result.output
+
+
+class _StatusFailingClient(_StubRiotClient):
+    """Answers the named history / match requests with a Riot HTTP status
+    (the real client's message format, plus `status`)."""
+
+    def __init__(self, *, history_status=None, match_status=None, **kwargs):
+        super().__init__(**kwargs)
+        self._history_status = history_status or {}
+        self._match_status = match_status or {}
+
+    def match_ids(self, puuid, **kwargs):
+        if puuid in self._history_status:
+            self.history_calls.append(puuid)
+            status = self._history_status[puuid]
+            raise RiotApiError(f"Riot API returned {status} for fake/history/{puuid}: denied", status=status)
+        return super().match_ids(puuid, **kwargs)
+
+    def match(self, match_id):
+        if match_id in self._match_status:
+            self.match_calls.append(match_id)
+            status = self._match_status[match_id]
+            raise RiotApiError(f"Riot API returned {status} for fake/{match_id}: denied", status=status)
+        return super().match(match_id)
+
+
+def _ledger_state(db: Database) -> tuple[dict, list, list]:
+    runs = db.query_all("SELECT status, failure FROM ingest_runs")
+    discoveries = db.query_all("SELECT match_id FROM match_discoveries")
+    return db.seed_last_sampled(), runs, discoveries
+
+
+@pytest.mark.parametrize("status", [401, 403, 400])
+def test_fatal_status_on_match_fetch_fails_the_run_without_ledger_progress(tmp_path: Path, status: int) -> None:
+    """A key that expires mid-run (401) or is refused (403) fails every
+    remaining request the same way. The bounded run must stop at once --
+    no further requests -- be marked failed, and ledger no seed and write
+    no provenance, so the next run samples the same players again. A match
+    stored before the failure stays stored."""
+    good = make_match("GOOD", units=[make_unit("TFT14_Foo", tier=2, items=[])])
+    later = make_match("LATER", units=[make_unit("TFT14_Foo", tier=2, items=[])])
+    client = _StatusFailingClient(
+        puuids=["p1", "p2"],
+        match_ids_by_puuid={"p1": ["GOOD", "EXPIRED"], "p2": ["LATER"]},
+        matches={"GOOD": good, "LATER": later},
+        match_status={"EXPIRED": status},
+    )
+
+    with Database(tmp_path / "fatal_match.sqlite3") as db:
+        with pytest.raises(RiotApiError):
+            ingest_ladder(client, db, player_limit=10, matches_per_player=10)
+        ledger, runs, discoveries = _ledger_state(db)
+        assert db.has_match("GOOD")
+        assert not db.has_match("LATER")
+
+    assert client.match_calls == ["GOOD", "EXPIRED"]  # nothing requested after the fatal answer
+    assert ledger == {}
+    assert discoveries == []
+    assert runs == [("failed", "RiotApiError")]
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_fatal_status_on_history_fails_the_run_before_any_match_fetch(tmp_path: Path, status: int) -> None:
+    client = _StatusFailingClient(
+        puuids=["p1", "p2", "p3"],
+        match_ids_by_puuid={"p1": ["M1"], "p3": ["M3"]},
+        matches={},
+        history_status={"p2": status},
+    )
+
+    with Database(tmp_path / "fatal_history.sqlite3") as db:
+        with pytest.raises(RiotApiError):
+            ingest_ladder(client, db, player_limit=10, matches_per_player=10)
+        ledger, runs, discoveries = _ledger_state(db)
+
+    assert client.history_calls == ["p1", "p2"]  # p3 never requested
+    assert client.match_calls == []
+    assert ledger == {} and discoveries == []
+    assert runs == [("failed", "RiotApiError")]
+
+
+@pytest.mark.parametrize("status", [404, 429, 500, 503])
+def test_non_fatal_statuses_are_still_counted_and_skipped(tmp_path: Path, status: int) -> None:
+    """Unchanged behaviour: a missing match (404) or a transient failure
+    (429/5xx after the client's own retries) is counted, not fatal."""
+    good = make_match("GOOD", units=[make_unit("TFT14_Foo", tier=2, items=[])])
+    client = _StatusFailingClient(
+        puuids=["p1"],
+        match_ids_by_puuid={"p1": ["BAD", "GOOD"]},
+        matches={"GOOD": good},
+        match_status={"BAD": status},
+    )
+
+    with Database(tmp_path / "nonfatal.sqlite3") as db:
+        result = ingest_ladder(client, db, player_limit=10, matches_per_player=10)
+
+    assert result.run_status == "completed"
+    assert result.failed_requests == 1
+    assert result.matches_inserted == 1
+
+
+def test_cli_expired_key_mid_run_exits_nonzero_with_guidance_and_no_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    good = make_match("GOOD", units=[make_unit("TFT14_Foo", tier=2, items=[])])
+    client = _StatusFailingClient(
+        puuids=["p1"],
+        match_ids_by_puuid={"p1": ["GOOD", "EXPIRED"]},
+        matches={"GOOD": good},
+        match_status={"EXPIRED": 401},
+    )
+    result = _run_ingest_cli(monkeypatch, tmp_path, client, ["--players", "1"])
+
+    assert result.exit_code != 0
+    assert "RIOT_API_KEY is invalid or expired" in result.output
+    assert "the run remains incomplete" in result.output
+    assert "super-secret-fake-key" not in result.output

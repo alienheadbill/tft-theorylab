@@ -1,5 +1,7 @@
+import json
 import os
 import re
+import sys
 import subprocess
 import textwrap
 from pathlib import Path
@@ -17,14 +19,55 @@ def test_workflow_file_exists() -> None:
     assert WORKFLOW.is_file()
 
 
-def test_only_manually_triggered() -> None:
-    """This workflow pulls real Riot data into production and must never
-    run on its own -- no push/pull_request CI trigger, and no schedule
-    yet (that's an explicit follow-up milestone, not this one)."""
+def test_triggers_are_the_schedule_and_manual_dispatch_only() -> None:
+    """This workflow pulls real Riot data into production: never on
+    push/pull_request or any other event -- only its own schedule and a
+    manual dispatch."""
     text = _text()
-    assert "workflow_dispatch" in text
-    for trigger in ("\npush:", "\n  push:", "pull_request:", "schedule:"):
+    on = text[text.index("\non:\n") : text.index("\npermissions:")]
+    assert re.findall(r"^  ([a-z_]+):", on, flags=re.M) == ["schedule", "workflow_dispatch"]
+    for trigger in ("\npush:", "\n  push:", "pull_request:", "workflow_run:", "repository_dispatch:"):
         assert trigger not in text, f"unexpected trigger {trigger!r} in live-ingest.yml"
+
+
+def test_schedule_is_every_six_hours_off_the_hour() -> None:
+    """Four conservative collection opportunities a day (UTC), at minute 41
+    rather than :00, where GitHub delays or drops scheduled runs."""
+    crons = re.findall(r'^\s+- cron: "([^"]+)"', _text(), flags=re.M)
+    assert crons == ["41 */6 * * *"]
+
+
+#: What a scheduled run uses (the proven bounded configuration of production
+#: runs 36286242686 / 36289198154), keyed by the job env var it sets.
+SCHEDULED = {
+    "CHALLENGER_SEEDS": ("challenger_seeds", "15"),
+    "GRANDMASTER_SEEDS": ("grandmaster_seeds", "15"),
+    "MASTER_SEEDS": ("master_seeds", "20"),
+    "DIAMOND_SEEDS": ("diamond_seeds", "25"),
+    "PLATINUM_SEEDS": ("platinum_seeds", "25"),
+    "MATCHES_PER_PLAYER": ("matches_per_player", "10"),
+    "COLLECTION_MODE": ("collection_mode", "bounded"),
+    "MAX_DURATION_MINUTES": ("max_duration_minutes", "60"),
+    "MAX_REQUESTS": ("max_requests", "3000"),
+    "MAX_MATCH_FETCHES": ("max_match_fetches", "2000"),
+}
+
+
+def test_scheduled_runs_use_fixed_bounded_settings_and_manual_runs_their_inputs() -> None:
+    """Each setting is resolved once at job level: the fixed scheduled value
+    on `schedule`, otherwise the matching dispatch input. A scheduled value
+    must never be 0 or empty -- with `a && b || c`, a falsy `b` would fall
+    through to the (empty) dispatch input."""
+    text = _text()
+    job = text[text.index("jobs:") : text.index("    steps:")]
+    assert "      RUN_TRIGGER: ${{ github.event_name }}" in job
+    for var, (input_name, value) in SCHEDULED.items():
+        line = f"      {var}: ${{{{ github.event_name == 'schedule' && '{value}' || inputs.{input_name} }}}}"
+        assert line in job, var
+        assert value not in ("", "0")
+    assert SCHEDULED["COLLECTION_MODE"][1] == "bounded"
+    steps = text[text.index("    steps:") :]
+    assert "${{ inputs." not in steps  # every step reads the resolved job env only
 
 
 def test_runs_the_four_cli_steps_in_order() -> None:
@@ -85,7 +128,10 @@ def test_inputs_reach_shell_only_through_env_vars() -> None:
         if "${{ inputs." in line:
             if line.strip().startswith("timeout-minutes:"):  # job setting, never a shell
                 continue
-            assert re.match(r"^\s+[A-Z_]+: \$\{\{ inputs\.[a-z_]+ \}\}$", line), line
+            assert re.match(
+                r"^\s+[A-Z_]+: \$\{\{ github\.event_name == 'schedule' && '[a-z0-9]+' \|\| inputs\.[a-z_]+ \}\}$",
+                line,
+            ), line
 
 
 def _preflight_script() -> str:
@@ -98,6 +144,7 @@ def _run_preflight(**env: str) -> subprocess.CompletedProcess:
     base = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "GITHUB_REF": "refs/heads/main",
+        "RUN_TRIGGER": "workflow_dispatch",
         "RIOT_API_KEY": "fake-riot-key-value",
         "DATABASE_URL": "postgresql://user:fake-password@example.invalid/db",
         "CHALLENGER_SEEDS": "10",
@@ -161,6 +208,9 @@ def test_preflight_prints_every_cohort_and_the_total() -> None:
         {"MATCHES_PER_PLAYER": "100"},  # the CLI allows 100; production does not
         {"MATCHES_PER_PLAYER": "abc"},
         {"GITHUB_REF": "refs/heads/claude/some-feature"},
+        {"RUN_TRIGGER": "push"},
+        {"RUN_TRIGGER": "pull_request"},
+        {"RUN_TRIGGER": ""},
         {"RIOT_API_KEY": ""},
         {"DATABASE_URL": ""},
         {"DATABASE_URL": "sqlite:///tmp/x.db"},
@@ -306,7 +356,7 @@ def test_both_modes_are_bounded_rate_capped_and_emit_telemetry() -> None:
 def test_never_launches_or_retries_runs() -> None:
     text = _text()
     for forbidden in ("gh workflow", "workflow_run", "repository_dispatch", "createWorkflowDispatch",
-                      "schedule:", "cron:", "continue-on-error", "retry"):
+                      "continue-on-error", "retry"):
         commands = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
         assert forbidden not in commands, forbidden
 
@@ -347,3 +397,90 @@ def test_preflight_rejects_bad_mode_or_budgets(env: dict) -> None:
     result = _run_preflight(**env)
     assert result.returncode == 1
     assert "hacked" not in result.stdout
+
+
+def test_preflight_accepts_the_scheduled_settings_and_says_so() -> None:
+    scheduled = {var: value for var, (_, value) in SCHEDULED.items()}
+    result = _run_preflight(RUN_TRIGGER="schedule", **scheduled)
+    assert result.returncode == 0, result.stderr
+    assert "Trigger: scheduled run" in result.stdout
+    assert "Collection mode: bounded." in result.stdout
+    assert (
+        "Planned seed cohorts: challenger=15 grandmaster=15 master=20 diamond=25 platinum=25 (total 100)"
+        in result.stdout
+    )
+    assert "Planned histories: 10 matches per seed player." in result.stdout
+
+
+def test_preflight_labels_manual_runs() -> None:
+    result = _run_preflight()
+    assert result.returncode == 0, result.stderr
+    assert "Trigger: manual dispatch" in result.stdout
+
+
+def _summary_script() -> str:
+    text = _text()
+    step = text[text.index("- name: Summarize collection") :]
+    body = textwrap.dedent(step.split("run: |\n", 1)[1])
+    after_heredoc_line = body.split("<<'PY'", 1)[1].split("\n", 1)[1]
+    return after_heredoc_line.split("\nPY\n", 1)[0]
+
+
+def _run_summary(tmp_path: Path, telemetry: dict | None, **env: str) -> subprocess.CompletedProcess:
+    if telemetry is not None:
+        (tmp_path / "ingest-telemetry").mkdir()
+        (tmp_path / "ingest-telemetry" / "telemetry.json").write_text(json.dumps(telemetry))
+    base = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "RUN_TRIGGER": "schedule", "COLLECTION_MODE": "bounded"}
+    return subprocess.run(
+        [sys.executable, "-c", _summary_script()], env={**base, **env}, cwd=tmp_path, capture_output=True, text=True
+    )
+
+
+def test_summary_reports_run_level_collection_metrics(tmp_path: Path) -> None:
+    telemetry = {
+        "mode": "bounded", "run_id": "gh-1-1", "outcome": "completed",
+        "collection": {"matches_inserted": 433, "duplicates_skipped": 121, "matches_fetched": 478,
+                       "non_target_matches_skipped": 45, "failed_requests": 0, "seed_players": 100,
+                       "requested_seeds": 100, "failed_history_requests": 0, "seeds_with_empty_history": 20,
+                       "seed_ledger_rows": 100, "discovery_rows": 586},
+        "riot": {"requests": 605, "by_status": {"200": 605}, "rate_limited": 0, "elapsed_s": 933.7},
+    }
+    result = _run_summary(tmp_path, telemetry, VALIDATE_OUTCOME="success", SMOKE_OUTCOME="success")
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert "Trigger: `schedule`; mode: `bounded`" in out
+    assert "Outcome: `completed`; run id: `gh-1-1`" in out
+    for row in ("| Matches inserted (new) | 433 |", "| Already stored, skipped before fetch | 121 |",
+                "| Match-detail fetches | 478 |", "| Seeds (sampled / requested) | 100 / 100 |",
+                "| Seed ledger rows finalized | 100 |", "| Riot requests (total) | 605 |",
+                "| Riot 429s | 0 |", "| Ingest elapsed (s) | 933.7 |"):
+        assert row in out, row
+    assert "Validate ingested data: `success`; discovery smoke: `success`" in out
+
+
+def test_summary_of_a_failed_ingest_shows_the_outcome_without_collection_rows(tmp_path: Path) -> None:
+    telemetry = {"mode": "bounded", "run_id": "gh-2-1", "outcome": "failed (RiotApiError)",
+                 "riot": {"requests": 40, "by_status": {"200": 39, "401": 1}, "rate_limited": 0, "elapsed_s": 50.0}}
+    result = _run_summary(tmp_path, telemetry, VALIDATE_OUTCOME="skipped", SMOKE_OUTCOME="skipped")
+    assert result.returncode == 0, result.stderr
+    assert "Outcome: `failed (RiotApiError)`" in result.stdout
+    assert "| Matches inserted (new) | n/a |" in result.stdout
+    assert "{'200': 39, '401': 1}" in result.stdout
+
+
+def test_summary_when_the_run_stopped_before_ingest(tmp_path: Path) -> None:
+    """E.g. an expired development key: Verify Riot API fails first, so no
+    telemetry exists. The summary still renders and points at the cause."""
+    result = _run_summary(tmp_path, None)
+    assert result.returncode == 0, result.stderr
+    assert "Ingest did not produce telemetry" in result.stdout
+    assert "Verify Riot API" in result.stdout
+    assert "Validate ingested data: `not run`" in result.stdout
+
+
+def test_summary_step_never_fails_the_job_or_reads_secrets() -> None:
+    text = _text()
+    step = text[text.index("- name: Summarize collection") :]
+    assert "if: always()" in step.split("run: |", 1)[0]
+    assert '>> "${GITHUB_STEP_SUMMARY}" || true' in step
+    assert "secrets." not in step and "RIOT_API_KEY" not in step and "DATABASE_URL" not in step
