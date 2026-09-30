@@ -168,8 +168,11 @@ def test_live_shaped_ids_resolve_to_display_names_and_art(two_windows: TestClien
 
 def test_small_samples_are_flagged(two_windows: TestClient) -> None:
     body = two_windows.get("/api/champions/khazix").json()
-    assert body["carry"]["sample"]["low_sample"] is True
-    assert body["carry"]["sample"]["band"] == "D_too_little"
+    sample = body["carry"]["sample"]
+    assert sample["low_sample"] is True
+    assert sample["label"] == "Low sample"
+    assert "stable estimate" in sample["meaning"]
+    assert "band" not in sample  # research-report bands are not production confidence classes
     assert all(r["limited_sample"] for r in body["partners"])
 
 
