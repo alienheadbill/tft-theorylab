@@ -14,6 +14,8 @@ on:
     # Weekly, off the hour. Scheduled workflows run from the default branch.
     - cron: "17 5 * * 1"
   workflow_dispatch:
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
@@ -26,6 +28,16 @@ concurrency:
 
 jobs:
   backup:
+    # Chat-triggered backups are intentionally narrow: only the repository
+    # owner, only issue #38, only the exact command below. Other triggers
+    # (schedule/workflow_dispatch) run normally.
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (
+        github.event.issue.number == 38 &&
+        github.event.comment.user.login == 'alienheadbill' &&
+        github.event.comment.body == '/backup production'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
