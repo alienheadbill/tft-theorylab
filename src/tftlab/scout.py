@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from .carry import carry_commitment_sql
 from .analytics import carry_commitment_games_with_partners, default_balance_window, discovery_candidate_for
+from .analytics.traits import split_trait_count_key
 from .experiments import Experiment, add_field_note, list_field_notes
 from .roster import Roster, id_key, load_roster, name_key
 from .sources import scout_checklist
@@ -150,6 +151,15 @@ def _assoc(a: Any) -> dict[str, Any]:
     return {"label": a.label, "games": a.games, "top4_rate": a.top4_rate, "top4_delta": a.top4_delta}
 
 
+def _trait_assoc(a: Any) -> dict[str, Any]:
+    """A trait association with its meaning saved explicitly: `num_units` is
+    Riot's observed unit count. Notes saved before this field existed have
+    only the label, whose "(N)" was Riot's tier ordinal; readers must not
+    treat those as unit counts."""
+    trait_id, num_units = split_trait_count_key(a.key)
+    return {**_assoc(a), "trait_id": trait_id, "num_units": num_units}
+
+
 def riot_evidence(
     db: Database,
     experiment: Experiment,
@@ -203,7 +213,7 @@ def riot_evidence(
         "opportunity_score": best.opportunity_score,
         "best_partners": [_assoc(a) for a in best.best_partners[:top_n]],
         "best_item_packages": [_assoc(a) for a in best.best_item_packages[:top_n]],
-        "best_trait_breakpoints": [_assoc(a) for a in best.best_trait_breakpoints[:top_n]],
+        "best_trait_breakpoints": [_trait_assoc(a) for a in best.best_trait_breakpoints[:top_n]],
     })
 
     # How often the idea's own pieces showed up with the committed carry.

@@ -147,3 +147,90 @@ def test_detail_serves_field_notes_fingerprint_and_checklist(tmp_path: Path, mon
     # The list view stays light: no notes or checklist there.
     listed = client.get("/api/experiments").json()["experiments"][0]
     assert "field_notes" not in listed and "scout_checklist" not in listed
+
+
+# ---------------------------------------------------------------- saved trait evidence
+
+LEGACY_TRAIT = {"label": "DA_18_Slayer (2)", "games": 5, "top4_rate": 0.6, "top4_delta": 0.05}  # "(2)" = old tier
+NEW_TRAIT = {**LEGACY_TRAIT, "label": "DA_18_Slayer (6)", "trait_id": "DA_18_Slayer", "num_units": 6}
+
+
+def _riot_note_data(trait: dict) -> dict:
+    return {"status": "ok", "balance_window": "14.6", "commitment_games": 10, "low_sample": True,
+            "avg_placement": 4.2, "top4_rate": 0.5, "win_rate": 0.1, "hit_3star_rate": 0.2,
+            "best_partners": [], "best_item_packages": [], "best_trait_breakpoints": [trait]}
+
+
+def test_saved_trait_evidence_is_served_as_saved_with_art_for_old_and_new_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tftlab.experiments import add_field_note
+
+    client, path = _live_client(tmp_path, monkeypatch)
+    with Database(path) as db:
+        e = create_experiment(db, {"title": "k", "carry_name": "Kha'Zix"})
+        for day, trait in (("2026-09-01", LEGACY_TRAIT), ("2026-09-02", NEW_TRAIT)):
+            add_field_note(db, e.slug, kind="riot_evidence", body="x", source="riot",
+                           data=_riot_note_data(trait), system=True, noted_at=day)
+
+    legacy, new = client.get(f"/api/experiments/{e.slug}").json()["experiment"]["field_notes"]
+    # Not migrated or reinterpreted: the legacy note gains no unit count.
+    assert legacy["data"]["best_trait_breakpoints"] == [LEGACY_TRAIT]
+    assert new["data"]["best_trait_breakpoints"] == [NEW_TRAIT]
+    for note in (legacy, new):
+        art = note["art"]["best_trait_breakpoints"][0]
+        assert art["trait_name"] == "Ravager" and art["art_url"]
+
+
+def test_field_note_art_prefers_the_saved_trait_id() -> None:
+    from tftlab.game_art import field_note_art, trait_art
+
+    note = {"kind": "riot_evidence", "data": _riot_note_data({**NEW_TRAIT, "label": "unparseable"})}
+    assert field_note_art(note)["best_trait_breakpoints"] == [
+        {"art_url": trait_art("DA_18_Slayer"), "trait_name": "Ravager"}
+    ]
+
+
+def _render_slip(data: dict, art: dict) -> str:
+    """Run the notebook's own `riotSlip` in node (DOM stubbed; the page's
+    router is not started) and return the slip's text."""
+    import json
+    import re
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    static = Path(__file__).parent.parent / "src" / "tftlab" / "web" / "static"
+    page = (static / "experiments.js").read_text()
+    assert page.rstrip().endswith("route();")
+    source = (static / "art.js").read_text() + "\n" + page.rstrip()[: -len("route();")] + "\nriotSlip"
+    script = f"""
+      const vm = require('vm');
+      const el = {{ addEventListener() {{}}, querySelector() {{ return null; }}, set innerHTML(v) {{}} }};
+      const ctx = {{ document: {{ addEventListener() {{}}, querySelector: () => el, querySelectorAll: () => [] }}, window: {{ location: {{}} }},
+                    location: {{}}, history: {{}}, fetch: () => new Promise(() => {{}}) }};
+      vm.createContext(ctx);
+      const riotSlip = vm.runInContext({json.dumps(source)}, ctx);
+      process.stdout.write(riotSlip({json.dumps(data)}, {json.dumps(art)}));
+    """
+    html = subprocess.run([node, "-e", script], check=True, capture_output=True, text=True).stdout
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", html))
+
+
+@pytest.mark.parametrize(
+    "trait, art_name, shown",
+    [
+        (LEGACY_TRAIT, "Ravager", "best trait: Ravager (2) (5 g)"),   # exactly as legacy notes render today
+        (LEGACY_TRAIT, None, "best trait: Slayer (2) (5 g)"),          # legacy fallback, unchanged
+        (NEW_TRAIT, "Ravager", "best trait: Ravager · 6 units (5 g)"),
+        (NEW_TRAIT, None, "best trait: Slayer · 6 units (5 g)"),
+    ],
+)
+def test_notebook_shows_units_only_for_notes_that_saved_them(trait: dict, art_name: str | None, shown: str) -> None:
+    art = {"best_trait_breakpoints": [{"art_url": None, "trait_name": art_name}]}
+    text = _render_slip(_riot_note_data(trait), art)
+    assert shown in text
+    if "num_units" not in trait:
+        assert "unit" not in text

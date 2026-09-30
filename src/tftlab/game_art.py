@@ -262,7 +262,9 @@ def field_note_art(note: dict[str, Any]) -> dict[str, Any] | None:
         "best_item_packages": [_item_refs(p.get("label") or "") for p in data.get("best_item_packages") or []],
         "best_trait_breakpoints": [
             {"art_url": trait_art(tid), "trait_name": trait_name(tid)}
-            for tid in (_trait_from_label(t.get("label") or "") for t in data.get("best_trait_breakpoints") or [])
+            # The explicit trait id when the note has one (newer notes); else the label's.
+            for tid in (t.get("trait_id") or _trait_from_label(t.get("label") or "")
+                        for t in data.get("best_trait_breakpoints") or [])
         ],
         "core_units": [champion_art(name=u.get("name")) for u in data.get("core_units") or []],
         "trait_targets": [trait_art(t.get("name")) for t in data.get("trait_targets") or []],

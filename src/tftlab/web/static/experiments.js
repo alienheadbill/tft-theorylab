@@ -223,7 +223,17 @@ function riotSlip(d, art) {
   const pkgRefs = a.best_item_packages?.[0] || [];
   const trait = d.best_trait_breakpoints?.[0];
   const traitArt = a.best_trait_breakpoints?.[0] || {};
+  // Newer notes save Riot's unit count as `num_units`. Older notes only have a
+  // label whose "(N)" was a tier ordinal: shown exactly as before, never as units.
   const tier = trait ? (String(trait.label).match(/\((\d+)\)$/) || [])[1] : null;
+  const traitName = traitArt.trait_name || readable(trait?.trait_id || trait?.label || '').replace(/\s\(\d+\)$/, '');
+  const traitText = !trait
+    ? ''
+    : trait.num_units != null
+      ? `${traitName} · ${trait.num_units} unit${trait.num_units === 1 ? '' : 's'}`
+      : traitArt.trait_name && tier
+        ? `${traitArt.trait_name} (${tier})`
+        : readable(trait.label);
   const best = [
     partner ? `strongest partner: ${artChip(a.best_partners?.[0], 'chip-unit')}${esc(readable(partner.label))} (${partner.games} g)` : '',
     pkg
@@ -234,9 +244,7 @@ function riotSlip(d, art) {
         } (${pkg.games} g)`
       : '',
     trait
-      ? `best trait: ${artChip(traitArt.art_url, 'chip-trait')}${
-          traitArt.trait_name && tier ? `${esc(traitArt.trait_name)} (${tier})` : esc(readable(trait.label))
-        } (${trait.games} g)`
+      ? `best trait: ${artChip(traitArt.art_url, 'chip-trait')}${esc(traitText)} (${trait.games} g)`
       : '',
   ].filter(Boolean).join(' · ');
   return `

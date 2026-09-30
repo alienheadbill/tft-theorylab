@@ -204,8 +204,6 @@ def _trait_count_row(a: Association) -> dict[str, Any]:
         "num_units": num_units,
         "art_url": trait_art(trait_id),
         **_comparison(a),
-        # The existing association ranking score; secondary evidence only.
-        "association_score": a.association_score,
     }
 
 
@@ -365,16 +363,6 @@ def _units(n: int | None) -> str:
     return f"{n} unit" + ("" if n == 1 else "s")
 
 
-def _count_label(row: dict[str, Any]) -> str:
-    return f"{row['name']} · {_units(row['num_units'])}"
-
-
-def _ranked_trait_counts(traits: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Every trait/count row on 2+ boards, in the existing association
-    ranking (the same shrinkage score partners and items use), for the
-    secondary with-vs-without line only."""
-    rows = [c for t in traits for c in t.get("counts", []) if c["games"] >= 2]
-    return sorted(rows, key=lambda r: (-r["association_score"], r["trait_id"], r["num_units"] or 0))
 
 
 def carry_summary(
@@ -458,13 +446,6 @@ def carry_summary(
                 + ", ".join(f"{t['name']} ({_pct(t['share_of_carry_games'])})" for t in others)
                 + "."
             )
-    best_count = _supported(_ranked_trait_counts(traits))
-    if best_count:
-        observed.append(
-            f"Strongest with-vs-without trait count: {_count_label(best_count)} (Top 4 "
-            f"{_pct(best_count['top4_with'])} on those {_boards(best_count['games'])} vs "
-            f"{_pct(best_count['top4_without'])} on its other carry boards)."
-        )
 
     # interpretation: fixed rules only
     if n < LOW_SAMPLE_COMMITMENT_GAMES:

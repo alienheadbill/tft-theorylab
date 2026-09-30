@@ -190,7 +190,7 @@ def test_discovery_trait_evidence_uses_unit_counts_and_never_moves_the_score(
 def _count(name, n, games, share, with_, without, score, games_without=50, limited=False):
     return {"trait_id": name, "name": name, "num_units": n, "games": games, "share_of_carry_games": share,
             "top4_with": with_, "top4_without": without, "adjusted_top4_difference": score,
-            "association_score": score, "games_without": games_without, "limited_sample": limited}
+            "games_without": games_without, "limited_sample": limited}
 
 
 def _active(name, games, share, counts):
@@ -207,28 +207,38 @@ def _carry(n=200):
 CAUSAL = ("causes", "caused by", "because of", "leads to", "makes you", "improves", "guarantee", "breakpoint")
 
 
-def test_summary_names_the_strongest_trait_count_only_as_with_vs_without() -> None:
-    traits = [_active("Solar", 150, 0.75, [
-        _count("Solar", 4, 100, 0.5, 0.62, 0.48, 0.05),
-        _count("Solar", 5, 40, 0.2, 0.70, 0.50, 0.08),
-        _count("Solar", 6, 10, 0.05, 0.9, 0.5, 0.01, limited=True),
-    ])]
+def test_trait_summary_is_source_led_and_names_no_winning_count() -> None:
+    traits = [
+        _active("Solar", 150, 0.75, [
+            _count("Solar", 4, 100, 0.5, 0.62, 0.48, 0.05),
+            _count("Solar", 5, 40, 0.2, 0.70, 0.50, 0.08),
+            _count("Solar", 6, 10, 0.05, 0.9, 0.5, 0.01, limited=True),
+        ]),
+        _active("Hunter", 90, 0.45, [_count("Hunter", 2, 90, 0.45, 0.9, 0.3, 0.3)]),
+        _active("Vanguard", 40, 0.2, [_count("Vanguard", 2, 40, 0.2, 0.5, 0.5, 0.0)]),
+    ]
     s = carry_summary("X", _carry(), [], [], traits)
-    # The association ranking picks the line; the most common count still leads the trait line.
-    assert ("Strongest with-vs-without trait count: Solar · 5 units (Top 4 70.0% on those 40 carry boards "
-            "vs 50.0% on its other carry boards).") in s["observed"]
-    assert any(l.startswith("Most common active trait: Solar, active on 75.0%") for l in s["observed"])
+    trait_lines = [l for l in s["observed"] if "trait" in l.lower()]
+    # Frequency and Riot's observed unit counts only: no line picks a winning
+    # trait/count out of the many with-vs-without comparisons, however strong.
+    assert trait_lines == [
+        "Most common active trait: Solar, active on 75.0% of carry boards (150 of 200); "
+        "most often at 4 units (100 carry boards), then 5 units (40 carry boards).",
+        "Next most common active traits: Hunter (45.0%), Vanguard (20.0%).",
+    ]
+    assert not any("strongest" in l.lower() or "best" in l.lower() for l in trait_lines)
     assert any("associations, not a proven core" in l for l in s["interpretation"])
     text = " ".join(s["observed"] + s["interpretation"]).lower()
     assert not any(w in text for w in CAUSAL)
 
 
-def test_unsupported_trait_counts_are_never_called_strongest() -> None:
-    negative = [_active("Solar", 150, 0.75, [_count("Solar", 4, 100, 0.5, 0.40, 0.48, -0.03)])]
-    limited = [_active("Solar", 150, 0.75, [_count("Solar", 6, 8, 0.04, 0.9, 0.5, 0.2, limited=True)])]
-    for traits in (negative, limited):
-        s = carry_summary("X", _carry(), [], [], traits)
-        assert not any("Strongest with-vs-without trait" in l for l in s["observed"])
+def test_trait_rows_keep_their_with_vs_without_numbers(db: Database) -> None:
+    champion = {"character_id": CARRY, "name": "Carry", "slug": "carry", "cost": 1, "art_url": None}
+    body = champion_investigation(db, champion, WINDOW)
+    four = next(c for c in body["traits"][0]["counts"] if c["num_units"] == 4)
+    assert (four["top4_with"], four["games_without"], four["avg_placement_without"]) == (1.0, 3, 5.0)
+    assert four["top4_without"] == pytest.approx(1 / 3)
+    assert not any("trait count" in l for l in body["summary"]["observed"])
 
 
 # ---------------------------------------------------------------- page text
