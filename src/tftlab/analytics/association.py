@@ -143,4 +143,6 @@ def compute_associations(
             )
         )
 
-    return sorted(results, key=lambda a: a.association_score, reverse=True)
+    # Exact ties are ordered by key, so the result never depends on row or
+    # set-iteration order (which varies between queries and processes).
+    return sorted(results, key=lambda a: (-a.association_score, a.key))

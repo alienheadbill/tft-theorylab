@@ -17,7 +17,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from .game_art_refresh import ART_DIR, MANIFEST_PATH, empty_manifest
-from .items import ITEM_STATS_PATH
+from .items import ITEM_STATS_PATH, is_component
 from .roster import id_key, load_roster, name_key
 
 if TYPE_CHECKING:
@@ -124,6 +124,60 @@ def item_name(item_id: str) -> str | None:
     return (meta or {}).get("name") or None
 
 
+#: Item classes a player must not mistake for a normal craftable build. The
+#: committed snapshots carry no class tag for these (and some ids, e.g.
+#: "DA_Artifact_LichBane" or "DA_EdgeOfNightRadiant", are absent from them
+#: entirely), so the class comes from Riot's own id naming: "_Artifact_" /
+#: "Artifact_" segments, a trailing "Radiant", an "Emblem" segment.
+SPECIAL_ITEM_KINDS = ("artifact", "radiant")
+NORMAL_ITEM_KINDS = ("standard", "emblem")
+_SMALL_WORDS = {"Of", "The", "And", "A", "An", "To", "In"}
+
+
+def item_kind(item_id: str | None) -> str:
+    """"artifact", "radiant", "emblem", "component", "standard" (a known
+    completed item) or "unknown" (in no committed metadata)."""
+    item = item_id or ""
+    if re.search(r"(?:^|_)Artifact(?:_|$)", item):
+        return "artifact"
+    if item.endswith("Radiant"):
+        return "radiant"
+    if "Emblem" in item:
+        return "emblem"
+    if is_component(item):
+        return "component"
+    if item in load_manifest().get("items", {}) or item in _item_metadata():
+        return "standard"
+    return "unknown"
+
+
+def readable_item_id(item_id: str) -> str:
+    """Last-resort display text from the id itself -- never an alias to
+    another item: "DA_Artifact_LichBane" -> "Lich Bane",
+    "DA_EdgeOfNightRadiant" -> "Edge of Night". Callers mark it as not
+    coming from metadata."""
+    text = re.sub(r"^(?:DA_|TFT\d*_)(?:Item_)?(?:\d+_)?", "", item_id or "")
+    text = re.sub(r"(?:^|_)Artifact_", "", text)
+    text = re.sub(r"Radiant$", "", text).replace("_", " ")
+    words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", text).split()
+    return " ".join(w.lower() if i and w in _SMALL_WORDS else w for i, w in enumerate(words)) or (item_id or "")
+
+
+def item_ref(item_id: str) -> dict[str, Any]:
+    """One item for the web: id, display name (metadata first, else readable
+    id text with `name_source` "id"), class and cached icon. Artifact and
+    Radiant items never borrow the icon of the item they resemble."""
+    name = item_name(item_id)
+    kind = item_kind(item_id)
+    return {
+        "id": item_id,
+        "name": name or readable_item_id(item_id),
+        "name_source": "metadata" if name else "id",
+        "kind": kind,
+        "art_url": item_art(item_id),
+    }
+
+
 def champion_name(character_id: str | None, fallback: str | None = None) -> str | None:
     """Display name for a champion id: the cached champion's name, else the
     roster's, else `fallback`. Live Match-V1 units carry no display name, so
@@ -148,7 +202,7 @@ def _item_refs(package_key: str) -> list[dict[str, Any]]:
     """One ref per item in a package key ("TFT_Item_A+TFT_Item_B") or label
     ("Infinity Edge + Last Whisper")."""
     parts = [p.strip() for p in (package_key or "").split("+")]
-    return [{"id": p, "name": item_name(p), "art_url": item_art(p)} for p in parts if p]
+    return [item_ref(p) for p in parts if p]
 
 
 def enrich_association(assoc: dict[str, Any], kind: str) -> dict[str, Any]:
@@ -208,7 +262,9 @@ def field_note_art(note: dict[str, Any]) -> dict[str, Any] | None:
         "best_item_packages": [_item_refs(p.get("label") or "") for p in data.get("best_item_packages") or []],
         "best_trait_breakpoints": [
             {"art_url": trait_art(tid), "trait_name": trait_name(tid)}
-            for tid in (_trait_from_label(t.get("label") or "") for t in data.get("best_trait_breakpoints") or [])
+            # The explicit trait id when the note has one (newer notes); else the label's.
+            for tid in (t.get("trait_id") or _trait_from_label(t.get("label") or "")
+                        for t in data.get("best_trait_breakpoints") or [])
         ],
         "core_units": [champion_art(name=u.get("name")) for u in data.get("core_units") or []],
         "trait_targets": [trait_art(t.get("name")) for t in data.get("trait_targets") or []],

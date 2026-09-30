@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -18,16 +19,16 @@ from .analytics import (
     default_balance_window,
     discover_candidates,
     discovery_candidate_for,
+    discovery_population,
     item_package_stats,
-    trait_breakpoint_associations,
+    trait_count_associations,
 )
 from .carry import carry_commitment_sql
 from .champion_investigation import (
     OBSERVED,
     champion_directory,
     champion_investigation,
-    find_champion,
-    window_carry_stats,
+    resolve_champion,
 )
 from .demo import generate_demo_matches
 from .experiments import ExperimentNotFound, get_experiment, list_experiments, seed_demo_experiments
@@ -138,6 +139,49 @@ def _resolve_database() -> tuple[Database, bool]:
             return db, False
 
     return _build_demo_db(), True
+
+
+# ---------------------------------------------------------------- Discovery population cache
+#
+# Every Discovery request needs the window-wide carry population (the
+# Opportunity Score baseline and the superset candidates are filtered from).
+# It is one expensive aggregate (seconds on a patch-sized window) and is
+# byte-for-byte the same for every cost / min-games filter and every working
+# notes click, until new matches arrive. So it -- and only it -- is kept in
+# process memory:
+#   key       : (database target, balance window)
+#   freshness : the window's match count and latest game time, read with one
+#               cheap query on every request; any new or removed match in the
+#               window changes it and forces a recompute. Nothing else is
+#               cached (per-carry evidence is always computed fresh).
+#   size      : a handful of windows; the oldest entry is dropped first.
+_POPULATION_CACHE: dict[tuple[str, str], tuple[tuple[int, int], list]] = {}
+_POPULATION_CACHE_SIZE = 8
+# Concurrent requests for a population that isn't cached yet wait for the
+# first one to compute it instead of all running the same aggregate at once.
+_POPULATION_LOCK = threading.Lock()
+
+
+def _database_target() -> str:
+    return os.getenv("DATABASE_URL") or str(_sqlite_db_path())
+
+
+def cached_discovery_population(db: Database, balance_window: str) -> list:
+    row = db.query_one(
+        "SELECT COUNT(*), MAX(game_datetime) FROM matches WHERE balance_window = ?", (balance_window,)
+    )
+    fingerprint = (int(row[0] or 0), int(row[1] or 0)) if row else (0, 0)
+    key = (_database_target(), balance_window)
+    with _POPULATION_LOCK:
+        hit = _POPULATION_CACHE.get(key)
+        if hit is not None and hit[0] == fingerprint:
+            return hit[1]
+        population = discovery_population(db, balance_window)
+        _POPULATION_CACHE.pop(key, None)
+        _POPULATION_CACHE[key] = (fingerprint, population)
+        while len(_POPULATION_CACHE) > _POPULATION_CACHE_SIZE:
+            _POPULATION_CACHE.pop(next(iter(_POPULATION_CACHE)))
+        return population
 
 
 def carry_partners(db: Database, character_id: str, balance_window: str) -> list[tuple[Any, ...]]:
@@ -484,7 +528,7 @@ def create_app() -> FastAPI:
             if resolved_window is None:
                 raise HTTPException(status_code=404, detail="No data available")
             _require_carry(db, character_id, resolved_window)
-            associations = trait_breakpoint_associations(
+            associations = trait_count_associations(
                 db, character_id, resolved_window, min_games=min_games
             )
         return {
@@ -524,11 +568,10 @@ def create_app() -> FastAPI:
         db, demo = _resolve_database()
         with db:
             resolved_window = balance_window or default_balance_window(db)
-            stats = window_carry_stats(db, resolved_window)
-            champion = find_champion(champion_directory(db, resolved_window, stats=stats), key)
+            champion = resolve_champion(db, resolved_window, key)
             if champion is None:
                 raise HTTPException(status_code=404, detail="Champion not found")
-            body = champion_investigation(db, champion, resolved_window, stats=stats, top_n=top_n)
+            body = champion_investigation(db, champion, resolved_window, top_n=top_n)
         return {"demo": demo, "backend": db.dialect, **body}
 
     @app.get("/api/discovery")
@@ -538,22 +581,36 @@ def create_app() -> FastAPI:
         balance_window: str | None = Query(None),
         top_n: int = Query(5, ge=1, le=20, description="Best partners/items/traits kept per candidate"),
         limit: int = Query(20, ge=1, le=200),
+        costs: str | None = Query(
+            None,
+            description="Exact costs, comma-separated (e.g. '4' or '1,3,5'); overrides max_cost. Only these "
+            "carries get partner/item/trait evidence built.",
+            pattern=r"^[1-5](,[1-5])*$",
+        ),
     ) -> dict[str, object]:
+        selected = sorted({int(c) for c in costs.split(",")}) if costs else list(range(1, max_cost + 1))
         db, demo = _resolve_database()
         with db:
             resolved_window = balance_window or default_balance_window(db)
+            population = cached_discovery_population(db, resolved_window) if resolved_window else []
             candidates = discover_candidates(
                 db,
                 balance_window=resolved_window,
-                min_cost=1,
-                max_cost=max_cost,
+                costs=selected,
                 min_samples=min_samples,
                 top_n=top_n,
+                population=population,
             )[:limit]
         return {
             "demo": demo,
             "backend": db.dialect,
             "balance_window": resolved_window,
+            "costs": selected,
+            "min_samples": min_samples,
+            # Carries of any cost in the window before the cost/min filters:
+            # 0 means the window genuinely has no carry data; otherwise an
+            # empty `candidates` list means the filters matched nothing.
+            "window_carries": len(population),
             "candidates": [enrich_candidate(asdict(c)) for c in candidates],
         }
 
@@ -569,7 +626,8 @@ def create_app() -> FastAPI:
             candidate = None
             if resolved_window is not None:
                 candidate = discovery_candidate_for(
-                    db, character_id, balance_window=resolved_window, top_n=top_n
+                    db, character_id, balance_window=resolved_window, top_n=top_n,
+                    population=cached_discovery_population(db, resolved_window),
                 )
         if candidate is None:
             raise HTTPException(status_code=404, detail="Carry not found")

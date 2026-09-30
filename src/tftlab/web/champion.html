@@ -50,7 +50,7 @@
     <section class="page" id="champion-picker" aria-labelledby="picker-title">
       <header class="page-head">
         <h2 id="picker-title"><span class="hl">Pick a champion</span></h2>
-        <p class="page-sub">Search by name, or browse by cost. The number under each champion is how many games in this balance window it was built as a carry.</p>
+        <p class="page-sub">Search by name, or browse by cost. The number under each champion is how many player boards in this balance window it was built as a carry on (a match has eight boards, so this can exceed the match count).</p>
       </header>
       <form class="controls picker-controls" id="picker-controls" role="search" aria-label="Find a champion">
         <label class="field field-grow">
@@ -59,7 +59,7 @@
         </label>
         <label class="check-field">
           <input type="checkbox" id="only-carried" />
-          <span>only champions with carry games</span>
+          <span>only champions with carry boards</span>
         </label>
       </form>
       <p id="picker-count" class="picker-count" aria-live="polite"></p>

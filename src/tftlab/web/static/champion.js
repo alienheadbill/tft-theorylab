@@ -55,6 +55,8 @@ const state = {
   balanceWindow: params.get('balance_window') || null,
   windows: [],
   champions: [],
+  championsStatus: 'idle',
+  championsRequestSeq: 0,
   currentId: null,
 };
 
@@ -135,18 +137,32 @@ async function loadWindows() {
 // ------------------------------------------------------------------ picker
 
 async function loadChampions() {
-  listEl.innerHTML = '<p class="state-note">Loading champions…</p>';
+  const seq = ++state.championsRequestSeq;
+  state.championsStatus = 'loading';
+  renderPicker();
   try {
     const q = state.balanceWindow ? `?balance_window=${encodeURIComponent(state.balanceWindow)}` : '';
     const data = await fetchJson(`/api/champions${q}`);
+    if (seq !== state.championsRequestSeq) return;
     state.champions = data.champions;
+    state.championsStatus = 'loaded';
     renderPicker();
   } catch (err) {
+    if (seq !== state.championsRequestSeq) return;
+    state.championsStatus = 'error';
+    countEl.textContent = '';
     listEl.innerHTML = `<div class="state-note error"><div>Couldn't load the champion list: ${esc(err.message)}</div><button type="button" class="retry-btn" data-action="retry-picker">Try again</button></div>`;
   }
 }
 
 function renderPicker() {
+  if (state.championsStatus === 'idle' || state.championsStatus === 'loading') {
+    countEl.textContent = '';
+    listEl.innerHTML = '<p class="state-note">Loading champions…</p>';
+    return;
+  }
+  if (state.championsStatus === 'error') return;
+
   const wanted = nameKey(searchInput.value);
   const shown = state.champions.filter(
     c => (!wanted || nameKey(c.name).includes(wanted)) && (!onlyCarried.checked || c.carry_games > 0),
@@ -170,8 +186,8 @@ function renderPicker() {
         .map(c => {
           const current = c.character_id === state.currentId;
           const games = c.carry_games
-            ? `<span class="champ-games">${plural(c.carry_games, 'carry game')}</span>`
-            : '<span class="champ-games none">no carry games</span>';
+            ? `<span class="champ-games">${plural(c.carry_games, 'carry board')}</span>`
+            : '<span class="champ-games none">no carry boards</span>';
           return `<li><a class="champ-link" href="${esc(championHref(c.slug))}"${current ? ' aria-current="page"' : ''} style="--c:${costAccent(c.cost)}">${portrait(c.name, c.cost, c.art_url)}<span class="champ-name">${esc(c.name)}</span>${games}</a></li>`;
         })
         .join('');
@@ -195,11 +211,34 @@ function sampleBlock(sample) {
   return `
     <div class="sample-note${sample.low_sample ? ' is-low' : ''}">
       ${stamp(sample.low_sample ? 'low' : 'observed', sample.label)}
-      <p>${esc(sample.meaning)} <span class="aside">(${plural(sample.games, 'carry game')})</span></p>
+      <p>${esc(sample.meaning)} <span class="aside">(${plural(sample.games, 'carry board')})</span></p>
     </div>`;
 }
 
 const vsAverage = (avg, fmt) => (avg == null ? '' : `<span class="vs-avg">all carries: ${fmt(avg)}</span>`);
+
+// "How players carry with X": the page's own numbers restated (OBSERVED) and,
+// kept visibly apart, what fixed rules conclude from them (INTERPRETATION).
+// Both lists come from the API; nothing here is generated or inferred.
+function summarySection(inv, name) {
+  const summary = inv.summary || { observed: [], interpretation: [] };
+  const list = lines => `<ul class="summary-list">${lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul>`;
+  return `
+    <section class="inv-section summary" aria-labelledby="sec-summary">
+      <h3 id="sec-summary">How players carry with ${esc(name)}</h3>
+      <div class="summary-grid">
+        <div class="summary-block">
+          <p class="summary-head">${stamp('observed', 'Observed')} <span>what the carry boards show</span></p>
+          ${list(summary.observed)}
+        </div>
+        <div class="summary-block interpretation">
+          <p class="summary-head">${stamp('interpretation', 'Interpretation')} <span>what TheoryLabs reads from those numbers</span></p>
+          ${summary.interpretation.length ? list(summary.interpretation) : '<p class="none-note">Not enough evidence for a reading yet.</p>'}
+          <p class="inv-help">Fixed rules applied to the observed numbers, nothing more: no roll timing, leveling, economy or positioning advice, and no claim that a partner or trait causes a result.</p>
+        </div>
+      </div>
+    </section>`;
+}
 
 function carrySection(inv) {
   const carry = inv.carry;
@@ -209,29 +248,28 @@ function carrySection(inv) {
     <div class="${cls}">
       <p class="hm-label">${label}</p>
       <p class="hm-num">${fmtPct(rate)}</p>
-      <p class="hm-sub">top 4 · avg place ${fmtPlace(place)} · ${plural(n, 'game')}</p>
+      <p class="hm-sub">top 4 · avg place ${fmtPlace(place)} · ${plural(n, 'board')}</p>
       ${n > 0 && n < SMALL_SPLIT ? `<p class="hm-warn">${stamp('low', 'Limited sample')}</p>` : ''}
     </div>`;
   const hitMiss =
     ts.hit_games === 0
-      ? `<p class="none-note">None of these carry games reached 3★, so there is no hit vs. miss split. Every result above is from 2★ (or lower) boards.</p>`
+      ? `<p class="none-note">None of these carry boards reached 3★, so there is no hit vs. miss split. Every result above is from 2★ (or lower) boards.</p>`
       : ts.miss_games === 0
-        ? `<p class="none-note">Every carry game here reached 3★, so there are no miss games to compare against.</p>`
+        ? `<p class="none-note">Every carry board here reached 3★, so there are no misses to compare against.</p>`
         : `<div class="hitmiss">${hitSplit('when it hit 3★', ts.hit_top4_rate, ts.hit_avg_placement, ts.hit_games, ts.hit_sample, 'hm-hit')}<span class="hm-vs" aria-hidden="true">vs.</span>${hitSplit('when it stayed below 3★', ts.miss_top4_rate, ts.miss_avg_placement, ts.miss_games, ts.miss_sample, 'hm-miss')}</div>`;
   return `
     <section class="inv-section" aria-labelledby="sec-carry">
-      <h3 id="sec-carry">How it does as a carry ${stamp('observed', 'Observed')}</h3>
+      <h3 id="sec-carry">Observed results ${stamp('observed', 'Observed')}</h3>
       <p class="inv-lead">
-        Built as a carry in <b>${plural(carry.games, 'game')}</b>: it finished with 2+ completed items, at least one of them a carry item.
-        That is <b>${fmtPct(carry.carry_conversion_rate)}</b> of the ${plural(carry.appearances, 'board')} it appeared on in this window.
+        Built as a carry on <b>${plural(carry.games, 'observed board')}</b> in this window: <b>${fmtPct(carry.carry_conversion_rate)}</b> of the ${plural(carry.appearances, 'board')} it appeared on.
       </p>
       <dl class="results big inv-results">
         <div><dt>average placement</dt><dd>${fmtPlace(carry.avg_placement)}</dd>${vsAverage(avg.avg_placement, fmtPlace)}</div>
         <div><dt>top 4</dt><dd>${fmtPct(carry.top4_rate)}</dd>${vsAverage(avg.top4_rate, fmtPct)}</div>
         <div><dt>first place</dt><dd>${fmtPct(carry.win_rate)}</dd>${vsAverage(avg.win_rate, fmtPct)}</div>
-        <div><dt>reached 3★</dt><dd>${fmtPct(ts.hit_rate)}</dd><span class="vs-avg">${plural(ts.hit_games, 'game')}</span></div>
+        <div><dt>reached 3★</dt><dd>${fmtPct(ts.hit_rate)}</dd><span class="vs-avg">${plural(ts.hit_games, 'board')}</span></div>
       </dl>
-      <p class="inv-help">"All carries" is every champion's carry games in this window, for comparison (a board with two carries counts once for each).</p>
+      <p class="inv-help">"All carries" is every champion's carry boards in this window, for comparison (a board with two carries counts once for each).</p>
       ${sampleBlock(carry.sample)}
       <h4>Hit vs. miss</h4>
       <p class="inv-help">The ceiling when you find the 3★, and the floor when you don't. A line that only works on the hit is fragile.</p>
@@ -251,16 +289,24 @@ function comparisonText(row, carryName) {
 function rowMeta(row, carryName) {
   return `
     <span class="row-meta">
-      <span class="share">on ${fmtPctShort(row.share_of_carry_games)} of carry boards · ${plural(row.games, 'game')}</span>
+      <span class="share">on ${fmtPctShort(row.share_of_carry_games)} of carry boards · ${plural(row.games, 'board')}</span>
       ${comparisonText(row, carryName)}
       ${row.limited_sample ? stamp('low', 'Limited sample') : ''}
     </span>`;
 }
 
+// Artifact / Radiant / unrecognized items are labelled so they can't pass for
+// a normal craftable build; a name taken from the Riot id (no metadata) says so.
+const ITEM_TAGS = { artifact: 'Artifact', radiant: 'Radiant', unknown: 'Unrecognized item' };
+function itemName(i) {
+  const tag = ITEM_TAGS[i.kind] ? ` <span class="item-tag item-${esc(i.kind)}">${ITEM_TAGS[i.kind]}</span>` : '';
+  const title = i.name_source === 'id' ? ` title="Name read from the Riot item id; not in the item metadata"` : '';
+  return `<span class="item-name"${title}>${esc(i.name)}</span>${tag}`;
+}
 function itemRowInner(row, carryName) {
-  const names = row.items.map(i => i.name).join(' + ');
+  const names = row.items.map(itemName).join(' + ');
   const icons = `<span class="ref-stack">${row.items.map(i => refIcon(i.name, i.art_url, { kind: 'item' })).join('')}</span>`;
-  return `${icons}<span class="row-name">${esc(names)}</span>${rowMeta(row, carryName)}`;
+  return `${icons}<span class="row-name">${names}</span>${rowMeta(row, carryName)}`;
 }
 const itemRow = (row, carryName) => `<li class="ev-row">${itemRowInner(row, carryName)}</li>`;
 
@@ -270,19 +316,24 @@ function evidenceList(rows, render, emptyText) {
 
 function itemSection(inv, name) {
   const items = inv.items;
-  const common = items.most_common_build;
-  const commonLine = common
-    ? `<div class="callout"><p class="callout-label">Most common full build</p><div class="ev-row">${itemRowInner(common, name)}</div></div>`
-    : '';
+  const normal = items.most_common_normal_build;
+  const overall = items.most_common_build;
+  const callout = (label, row) =>
+    `<div class="callout"><p class="callout-label">${label}</p><div class="ev-row">${itemRowInner(row, name)}</div></div>`;
+  const commonLine =
+    (normal ? callout('Most common normal full build', normal) : '') +
+    (overall && !overall.normal_build && (!normal || overall.games > normal.games)
+      ? callout('Most common full build overall (includes an Artifact, Radiant or unrecognized item)', overall)
+      : '');
   return `
     <section class="inv-section" aria-labelledby="sec-items">
       <h3 id="sec-items">What to build on it ${stamp('observed', 'Observed')}</h3>
-      <p class="inv-help">Completed items on the carry itself. Each row shows how often its carry boards used the build, and how those boards finished compared with its carry boards that didn't. Best first: rows are ordered by that difference, adjusted so a handful of lucky games can't top the list. A green top-4 number means those boards did better than the ones without it; red means worse. These are packages observed together, not a guaranteed best-in-slot.</p>
+      <p class="inv-help">Completed items on the carry itself. Each row shows how often its carry boards used the build, and how those boards finished compared with its carry boards that didn't. Best first: rows are ordered by that difference, adjusted so a handful of lucky boards can't top the list. A green top-4 number means those boards did better than the ones without it; red means worse. These are packages observed together, not a guaranteed best-in-slot. Artifact and Radiant items aren't normal crafts, so they are labelled and never lead the normal-build summary.</p>
       ${commonLine}
       <h4>Full builds (exact 3 items)</h4>
-      ${evidenceList(items.builds, r => itemRow(r, name), 'No full 3-item build shows up in at least 2 carry games yet.')}
+      ${evidenceList(items.builds, r => itemRow(r, name), 'No full 3-item build shows up on at least 2 carry boards yet.')}
       <h4>Item pairs</h4>
-      ${evidenceList(items.pairs, r => itemRow(r, name), 'No item pair shows up in at least 2 carry games yet.')}
+      ${evidenceList(items.pairs, r => itemRow(r, name), 'No item pair shows up on at least 2 carry boards yet.')}
     </section>`;
 }
 
@@ -297,14 +348,37 @@ function partnerSection(inv, name) {
     </section>`;
 }
 
+// Traits around the carry: how often each trait was active, then the unit
+// counts Riot reported for it (`num_units`). Riot's tier ordinal is never
+// shown as a count, and no threshold names are guessed.
+function traitCountRow(c) {
+  const other = c.games_without
+    ? ` <span class="count-other">other ${esc(fmtPctShort(c.top4_without))}</span>`
+    : '';
+  return `
+    <li class="count-row">
+      <span class="count-units">${plural(c.num_units, 'unit')}</span>
+      <span class="count-stats">${plural(c.games, 'board')} (${fmtPctShort(c.share_of_carry_games)}) · top 4 ${fmtPctShort(c.top4_with)}${other} · avg ${fmtPlace(c.avg_placement_with)}</span>
+      ${c.limited_sample ? `<span class="count-limited" title="Limited sample: fewer than ${SMALL_SPLIT} boards on one side of the comparison">limited sample</span>` : ''}
+    </li>`;
+}
+
 function traitSection(inv, name) {
-  const render = row =>
-    `<li class="ev-row">${refIcon(row.name, row.art_url, { kind: 'trait' })}<span class="row-name">${esc(row.name)}${row.tier ? ` <span class="tier" title="Which of the trait's breakpoints was active (1 = the first). Not a unit count.">breakpoint ${row.tier}</span>` : ''}</span>${rowMeta(row, name)}</li>`;
+  const total = inv.carry.games;
+  const render = t => `
+    <li class="trait-group">
+      <div class="ev-row">
+        ${refIcon(t.name, t.art_url, { kind: 'trait' })}
+        <span class="row-name">${esc(t.name)}</span>
+        ${rowMeta(t, name)}
+      </div>
+      <ol class="count-list" aria-label="${esc(t.name)} by observed unit count">${t.counts.map(traitCountRow).join('')}</ol>
+    </li>`;
   return `
     <section class="inv-section" aria-labelledby="sec-traits">
-      <h3 id="sec-traits">Traits on its boards ${stamp('observed', 'Observed')}</h3>
-      <p class="inv-help">Active trait breakpoints on ${esc(name)} carry boards. "Breakpoint 2" means the trait's second breakpoint was active. These are observed associations: forcing a trait won't necessarily produce the same result.</p>
-      ${evidenceList(inv.traits, render, 'No trait breakpoint shows up in at least 2 carry games yet.')}
+      <h3 id="sec-traits">Traits around ${esc(name)} ${stamp('observed', 'Observed')}</h3>
+      <p class="inv-help">The traits most often active on ${esc(name)} carry boards, most common first. Under each, the unit counts Riot reported for that trait on those final boards ("4 units"), with how many carry boards had that count and how they placed; "other" is top 4 on the rest of its carry boards. Every share is out of the same ${plural(total, 'carry board')}, and one board counts under each trait it had active, so shares don't add up to 100%. These are associations: forcing a trait won't necessarily produce the same result.</p>
+      ${inv.traits.length ? `<ol class="ev-list trait-list">${inv.traits.map(render).join('')}</ol>` : '<p class="none-note">No active traits recorded on these carry boards yet.</p>'}
     </section>`;
 }
 
@@ -316,8 +390,10 @@ function trustSection(inv) {
       <dl class="trust-list">
         <div><dt>Evidence</dt><dd>${stamp('observed', 'Observed')} Every number comes from indexed ranked matches. Nothing on this page is predicted or theorycrafted.</dd></div>
         <div><dt>Balance window</dt><dd><b>${esc(inv.balance_window)}</b>${w ? ` · ${plural(w.matches, 'match', 'matches')} · latest game ${esc(fmtDate(w.latest_game_datetime))}` : ''}. Other patches are never mixed in.</dd></div>
-        <div><dt>Carry game</dt><dd>A game where this champion finished with 2+ completed items, at least one of them a carry item. Games that missed the 3★ still count, so bad outcomes aren't hidden.</dd></div>
-        <div><dt>With vs. without</dt><dd>Item, partner and trait rows compare this champion's carry boards that had the thing against its carry boards that didn't. Rows marked ${stamp('low', 'Limited sample')} have fewer than ${SMALL_SPLIT} games on one side of that comparison.</dd></div>
+        <div><dt>Carry board</dt><dd>One player's final board where this champion finished with 2+ completed items, at least one of them a carry item. Boards that missed the 3★ still count, so bad outcomes aren't hidden.</dd></div>
+        <div><dt>Boards, not matches</dt><dd>Every match has eight player boards, so a champion can be carried on more boards than there are matches in the window.</dd></div>
+        <div><dt>With vs. without</dt><dd>Item, partner and trait rows compare this champion's carry boards that had the thing against its carry boards that didn't. Rows marked ${stamp('low', 'Limited sample')} have fewer than ${SMALL_SPLIT} boards on one side of that comparison.</dd></div>
+        <div><dt>Interpretation</dt><dd>The reading in "How players carry" comes from fixed rules, not a model. The 3★ comparison needs at least 30 boards on each side before TheoryLabs interprets it; then it reports the observed Top 4 difference in percentage points. That is an association, not proof that reaching 3★ caused the result.</dd></div>
         <div><dt>Not shown yet</dt><dd>Full comp families and recurring cores (that research is still experimental and unvalidated), positioning, augments, and leveling or rolling plans.</dd></div>
       </dl>
     </section>`;
@@ -351,17 +427,18 @@ function renderInvestigation(inv) {
   }
   if (!inv.carry) {
     const seen = inv.appearances
-      ? `${esc(c.name)} was on ${plural(inv.appearances, 'board')} in balance window ${esc(inv.balance_window)}, but never finished with 2+ completed items including a carry item, so there are no carry games to investigate.`
+      ? `${esc(c.name)} was on ${plural(inv.appearances, 'board')} in balance window ${esc(inv.balance_window)}, but never finished with 2+ completed items including a carry item, so there are no carry boards to investigate.`
       : `${esc(c.name)} wasn't seen on any indexed board in balance window ${esc(inv.balance_window)}.`;
     showView(
-      `<article class="investigation">${headerBlock(inv)}<div class="state-note empty-evidence"><p>${seen}</p><p>Try another balance window, or pick a champion below with carry games.</p></div></article>`,
-      `${c.name}: no carry games in this balance window.`,
+      `<article class="investigation">${headerBlock(inv)}<div class="state-note empty-evidence"><p>${seen}</p><p>Try another balance window, or pick a champion below with carry boards.</p></div></article>`,
+      `${c.name}: no carry boards in this balance window.`,
     );
     return;
   }
   showView(`
     <article class="investigation">
       ${headerBlock(inv)}
+      ${summarySection(inv, c.name)}
       ${carrySection(inv)}
       ${itemSection(inv, c.name)}
       ${partnerSection(inv, c.name)}

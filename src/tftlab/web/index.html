@@ -69,7 +69,7 @@
           </div>
         </fieldset>
         <label class="field">
-          <span class="field-label">min. committed games</span>
+          <span class="field-label">min. carry boards</span>
           <input type="number" id="min-games" min="1" max="1000" value="10" inputmode="numeric" />
         </label>
         <label class="field">
@@ -92,7 +92,7 @@
           <svg class="hand-arrow heading-arrow" viewBox="0 0 34 14" aria-hidden="true" focusable="false"><path d="M2 8 C 9 5, 18 9, 30 7"/><path d="M24 2.5 L 31 7 L 24.5 12"/></svg>
           Working notes
         </h2>
-        <p class="page-sub">Open any entry above for its hit-vs-miss split, partners, item packages, and trait breakpoints.</p>
+        <p class="page-sub">Open any entry above for its hit-vs-miss split, partners, item packages, and active traits.</p>
       </header>
       <div id="detail" class="notes-page is-empty"></div>
     </section>
@@ -102,8 +102,8 @@
         <h2 id="method-title">How to read this notebook</h2>
       </header>
       <ol class="method-list">
-        <li><h3>Commitment first</h3><p>A carry enters the sample when it holds at least two completed items, even if the reroll never reaches 3★. The misses are counted, not quietly dropped.</p></li>
-        <li><h3>Hit vs. miss</h3><p>Games that actually hit 3★ are kept apart from committed games that missed, so you can see both the ceiling and what happens when it goes wrong.</p></li>
+        <li><h3>Commitment first</h3><p>A carry enters the sample when it holds at least two completed items, even if the reroll never reaches 3★. The misses are counted, not quietly dropped. Counts are player <em>boards</em>, not matches: every match has eight boards, so a champion can be carried on more boards than there are matches.</p></li>
+        <li><h3>Hit vs. miss</h3><p>Boards that actually hit 3★ are kept apart from committed boards that missed, so you can see both the ceiling and what happens when it goes wrong.</p></li>
         <li><h3>Sample shrinkage</h3><p>Small samples are pulled toward baseline performance, so a handful of lucky games can't outrank a line with real evidence behind it.</p></li>
         <li><h3>Rarity matters</h3><p>The Opportunity Score rewards strong, low-usage lines instead of re-ranking the boards everyone already plays.</p></li>
       </ol>

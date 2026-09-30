@@ -342,6 +342,19 @@ def test_recorded_riot_evidence_note(db: Database) -> None:
     assert "LOW SAMPLE" in note["body"]
 
 
+def test_new_riot_evidence_saves_trait_counts_explicitly(db: Database) -> None:
+    _seed_kha(db)
+    e = ex.create_experiment(db, {"title": "k", "carry_name": "Kha'Zix"})
+    note = record_riot_evidence(db, e, riot_evidence(db, e))
+    traits = note["data"]["best_trait_breakpoints"]
+    assert traits
+    for t in traits:
+        # Riot's num_units (6 or 2 Ravager here), never the tier_current ordinal (2 for both).
+        assert t["trait_id"] == "DA_18_Slayer" and t["num_units"] in (6, 2)
+        assert t["label"] == f"DA_18_Slayer ({t['num_units']})"
+    assert {t["num_units"] for t in traits} == {6, 2}
+
+
 def test_resolve_source_is_name_only() -> None:
     assert resolve_source("TFT Academy").key == resolve_source("tftacademy").key == "tft_academy"
     assert resolve_source("Reddit").key == "community"
