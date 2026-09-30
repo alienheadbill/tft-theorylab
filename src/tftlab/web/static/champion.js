@@ -55,6 +55,8 @@ const state = {
   balanceWindow: params.get('balance_window') || null,
   windows: [],
   champions: [],
+  championsStatus: 'idle',
+  championsRequestSeq: 0,
   currentId: null,
 };
 
@@ -135,18 +137,32 @@ async function loadWindows() {
 // ------------------------------------------------------------------ picker
 
 async function loadChampions() {
-  listEl.innerHTML = '<p class="state-note">Loading champions…</p>';
+  const seq = ++state.championsRequestSeq;
+  state.championsStatus = 'loading';
+  renderPicker();
   try {
     const q = state.balanceWindow ? `?balance_window=${encodeURIComponent(state.balanceWindow)}` : '';
     const data = await fetchJson(`/api/champions${q}`);
+    if (seq !== state.championsRequestSeq) return;
     state.champions = data.champions;
+    state.championsStatus = 'loaded';
     renderPicker();
   } catch (err) {
+    if (seq !== state.championsRequestSeq) return;
+    state.championsStatus = 'error';
+    countEl.textContent = '';
     listEl.innerHTML = `<div class="state-note error"><div>Couldn't load the champion list: ${esc(err.message)}</div><button type="button" class="retry-btn" data-action="retry-picker">Try again</button></div>`;
   }
 }
 
 function renderPicker() {
+  if (state.championsStatus === 'idle' || state.championsStatus === 'loading') {
+    countEl.textContent = '';
+    listEl.innerHTML = '<p class="state-note">Loading champions…</p>';
+    return;
+  }
+  if (state.championsStatus === 'error') return;
+
   const wanted = nameKey(searchInput.value);
   const shown = state.champions.filter(
     c => (!wanted || nameKey(c.name).includes(wanted)) && (!onlyCarried.checked || c.carry_games > 0),
