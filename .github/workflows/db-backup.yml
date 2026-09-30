@@ -4,7 +4,7 @@ name: Encrypted Postgres backup
 # This workflow never runs on push/pull_request and never writes to production.
 #
 # Required repository secrets:
-# - DATABASE_URL: production Postgres connection string (already used by live ingest)
+# - NEON_DATABASE_URL: production Neon Postgres connection string (also used by live ingest)
 # - DB_BACKUP_PASSPHRASE: long random passphrase stored separately by the operator
 #
 # The plaintext dump exists only on GitHub's ephemeral runner. The uploaded
@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       DB_BACKUP_PASSPHRASE: ${{ secrets.DB_BACKUP_PASSPHRASE }}
     steps:
       - name: Validate backup configuration
@@ -53,7 +53,7 @@ jobs:
             exit 1
           fi
           if [ -z "${DATABASE_URL}" ]; then
-            echo "::error::DATABASE_URL repository secret is not set." >&2
+            echo "::error::NEON_DATABASE_URL repository secret is not set." >&2
             exit 1
           fi
           case "${DATABASE_URL}" in
