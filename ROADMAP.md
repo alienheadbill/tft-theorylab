@@ -137,13 +137,15 @@ Riot access currently uses a **development key that must be regenerated regularl
   - observed vs inferred results.
 - **Sequencing:** the slice uses whatever evidence is ready (Track 3). Families and variants arrive when Track 2 supports them. Once the slice works, generalize it across champions.
 - **First vertical slice (IMPLEMENTED):** `/champions` (pick a champion by name) and `/champions/<name>`, one data-driven template for every champion. It shows carry and 3★ hit/miss evidence, item builds and pairs, partners, trait breakpoints, sample size, balance window, freshness and the evidence type (observed only). Still FUTURE: recurring cores, composition families/variants and practical alternatives.
-- **Next (ACCEPTED/CURRENT):** review the page against real production data and refine it from what players need.
+- **Refined from production use (IMPLEMENTED):** the page leads with "How players carry with {champion}" (observed facts and a separate rule-based interpretation), counts are "carry boards", special items are labelled and kept out of the normal-build summary, and Discovery no longer shows "no data" while loading.
+- **Next (ACCEPTED/CURRENT):** keep refining from real use.
 
 ### Track 5: Analytics/API performance
 
 - **Goal:** website requests read prepared analytics. They do not run expensive research calculations.
 - **Target architecture (FUTURE):** Riot/raw data → normalization → offline/precomputed analytics → prepared API results → website.
 - Measure actual latency before adding caching or infrastructure. Do not add them just because they sound useful.
+- **Done (from measured page loads):** the champion picker uses a light count query, a champion page aggregates only that champion, and Discovery builds evidence only for the selected costs in batched queries, reusing one window-wide population per window until new matches arrive. The window-wide aggregate is still computed on request; precomputing it is the next step if page loads need it.
 
 ### Track 6: Patch/set lifecycle
 

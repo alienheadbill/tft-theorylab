@@ -148,7 +148,8 @@ def test_enrich_candidate_adds_local_urls_for_every_evidence_kind() -> None:
     items = enriched["best_item_packages"][0]["items"]
     assert [i["id"] for i in items] == ["TFT_Item_InfinityEdge", "TFT_Item_Made_Up"]
     assert items[0]["name"] == "Infinity Edge" and items[0]["art_url"] == item_art("TFT_Item_InfinityEdge")
-    assert items[1] == {"id": "TFT_Item_Made_Up", "name": None, "art_url": None}
+    # Not in any metadata: readable id text, marked as such, never another item's icon.
+    assert items[1] == {"id": "TFT_Item_Made_Up", "name": "Made Up", "name_source": "id", "kind": "unknown", "art_url": None}
     trait = enriched["best_trait_breakpoints"][0]
     assert trait["art_url"] == trait_art("DA_18_Slayer") and trait["trait_name"] == "Ravager"
 
@@ -262,7 +263,7 @@ def test_art_lookups_never_touch_the_network(client: TestClient, monkeypatch: py
 
     app = create_app()
     routes = {r.path: r.endpoint for r in app.routes if hasattr(r, "endpoint")}
-    assert routes["/api/discovery"](max_cost=3, min_samples=1, balance_window=None, top_n=5, limit=20)["candidates"]
+    assert routes["/api/discovery"](max_cost=3, min_samples=1, balance_window=None, top_n=5, limit=20, costs=None)["candidates"]
     assert routes["/api/experiments"](status=None, lifecycle=None, carry=None, tag=None)["experiments"]
 
 

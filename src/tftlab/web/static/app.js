@@ -71,6 +71,15 @@ const state = {
   sortBy: 'opportunity_score',
   balanceWindow: null,
   candidates: [],
+  // 'loading' | 'loaded' | 'error'. Nothing is ever called "empty" while a
+  // request is in flight.
+  status: 'loading',
+  errorMessage: '',
+  // Carries of any cost in the window (from the API), to tell "these filters
+  // match nothing" apart from "this window has no carry data at all".
+  windowCarries: null,
+  requestSeq: 0,
+  controller: null,
   selectedId: null,
 };
 
@@ -120,8 +129,8 @@ function evidenceIcons(assoc, kind, label) {
 const lowSampleNote = () =>
   `<p class="low-sample"><span class="stamp stamp-low">Low sample</span><span class="pencil">tiny sample — don't trust this yet</span></p>`;
 
-async function fetchJson(url) {
-  const res = await fetch(url);
+async function fetchJson(url, options = {}) {
+  const res = await fetch(url, options);
   if (!res.ok) {
     let detail = '';
     try {
@@ -183,23 +192,58 @@ function showState(message, { error = false, retry = false } = {}) {
     </div>`;
 }
 
-async function loadDiscovery(showLoading = true) {
-  if (showLoading) showState('Working through the carry lines…');
+// The server builds partner/item/trait evidence only for the selected costs
+// and minimum, so every filter change asks it again. Each request supersedes
+// the previous one: the old fetch is aborted, and a response that still
+// arrives late is ignored (its sequence number is no longer current), so a
+// slow earlier request can never overwrite a newer selection.
+async function loadDiscovery() {
+  state.requestSeq += 1;
+  const seq = state.requestSeq;
+  state.controller?.abort();
+  const controller = new AbortController();
+  state.controller = controller;
+  state.status = 'loading';
+  renderCards();
   statusDot.classList.remove('error');
   try {
-    const params = new URLSearchParams({ max_cost: '5', min_samples: '1', top_n: '5', limit: '200' });
+    const params = new URLSearchParams({
+      costs: [...state.costs].sort((a, b) => a - b).join(','),
+      min_samples: String(state.minGames),
+      top_n: '5',
+      limit: '200',
+    });
     if (state.balanceWindow) params.set('balance_window', state.balanceWindow);
-    const data = await fetchJson(`/api/discovery?${params}`);
+    const data = await fetchJson(`/api/discovery?${params}`, { signal: controller.signal });
+    if (seq !== state.requestSeq) return; // superseded by a newer selection
     state.candidates = data.candidates;
+    state.windowCarries = data.window_carries ?? null;
+    state.status = 'loaded';
     setSource(data.demo);
     renderCards();
   } catch (err) {
+    if (seq !== state.requestSeq || err.name === 'AbortError') return;
+    state.status = 'error';
+    state.errorMessage = err.message;
     statusDot.classList.add('error');
-    showState(`Couldn't load discovery data: ${err.message}`, { error: true, retry: true });
+    renderCards();
   }
 }
 
+// Filter clicks within a short pause become one request: the loading state
+// shows at once, but the server isn't asked for every intermediate selection.
+let filterTimer = null;
+function filtersChanged() {
+  state.requestSeq += 1; // any response still in flight is now stale
+  state.status = 'loading';
+  renderCards();
+  clearTimeout(filterTimer);
+  filterTimer = setTimeout(loadDiscovery, 350);
+}
+
 function filteredSortedCandidates() {
+  // The server already applied these filters; re-applying them only guards
+  // against a response for an older selection ever being shown.
   const list = state.candidates.filter(c => state.costs.has(c.cost) && c.commitment_games >= state.minGames);
   const dir = { opportunity_score: -1, top4_rate: -1, avg_placement: 1, commitment_rate: 1 }[state.sortBy] ?? -1;
   return [...list].sort((a, b) => dir * (a[state.sortBy] - b[state.sortBy]));
@@ -216,7 +260,7 @@ function evidenceNote(kindLabel, assoc, kind) {
       <span class="ev-kind">${kindLabel}</span>
       <span class="ev-icons">${evidenceIcons(assoc, kind, label)}</span>
       <span class="ev-what">${esc(label)}</span>
-      <span class="ev-num">${fmtNum(assoc.games)} g${delta}</span>
+      <span class="ev-num">${fmtNum(assoc.games)} boards${delta}</span>
     </li>`;
 }
 
@@ -235,7 +279,7 @@ function entryHtml(c, i, isLead) {
         ${portrait(displayName(c), c.cost, c.art_url)}
         <div class="entry-title">
           <h3>${esc(displayName(c))}</h3>
-          <p class="sample">n = <b>${fmtNum(n)}</b> committed games</p>
+          <p class="sample"><b>${fmtNum(n)}</b> carry boards</p>
           ${low ? lowSampleNote() : ''}
         </div>
         ${scoreMark(c.opportunity_score, i)}
@@ -270,15 +314,26 @@ function entryHtml(c, i, isLead) {
 }
 
 function renderCards() {
-  const list = filteredSortedCandidates();
-  document.querySelector('#candidate-count').textContent = fmtNum(list.length);
-
-  if (!state.candidates.length) {
-    showState('No discovery data for this balance window yet. Once matches are ingested, entries will show up here.');
+  const countEl = document.querySelector('#candidate-count');
+  if (state.status === 'loading') {
+    countEl.textContent = '…';
+    const costs = [...state.costs].sort((a, b) => a - b).join(', ');
+    showState(`Working through the ${costs}-cost carry lines… this can take a few seconds on a large window.`);
     return;
   }
+  if (state.status === 'error') {
+    countEl.textContent = '—';
+    showState(`Couldn't load discovery data: ${state.errorMessage}`, { error: true, retry: true });
+    return;
+  }
+  const list = filteredSortedCandidates();
+  countEl.textContent = fmtNum(list.length);
   if (!list.length) {
-    showState('Nothing matches these filters. Try a lower minimum of committed games, or tick more costs.');
+    showState(
+      state.windowCarries === 0
+        ? 'No discovery data for this balance window yet. Once matches are ingested, entries will show up here.'
+        : 'Nothing matches these filters. Try a lower minimum of carry boards, or tick more costs.',
+    );
     return;
   }
 
@@ -311,11 +366,11 @@ function ledgerList(items, kind) {
           ${evidenceIcons(a, kind, label)}
           <span class="ll-name">${esc(label)}</span>
           <span class="ll-dots" aria-hidden="true"></span>
-          <span class="ll-num"><span class="t4">${fmtPct(a.top4_rate)}</span> T4${delta} · ${fmtNum(a.games)} g</span>
+          <span class="ll-num"><span class="t4">${fmtPct(a.top4_rate)}</span> T4${delta} · ${fmtNum(a.games)} boards</span>
         </li>`;
     })
     .join('');
-  return `<p class="col-legend">top 4 with it · Δ top 4 vs. without it (pts, shrinkage-adjusted) · games</p><ol class="ledger-list">${rows}</ol>`;
+  return `<p class="col-legend">top 4 with it · Δ top 4 vs. without it (pts, shrinkage-adjusted) · carry boards with it</p><ol class="ledger-list">${rows}</ol>`;
 }
 
 async function showDetail(id) {
@@ -340,7 +395,7 @@ async function showDetail(id) {
           <div>
             <p class="notes-kicker">working notes</p>
             <h3 tabindex="-1">${esc(displayName(c))}</h3>
-            <p class="notes-meta">${c.cost}-cost · n = <b>${fmtNum(n)}</b> committed games</p>
+            <p class="notes-meta">${c.cost}-cost · <b>${fmtNum(n)}</b> carry boards</p>
             <p class="notes-meta"><a class="back-link" href="${esc(investigationHref(c))}">full champion investigation →</a></p>
             ${low ? lowSampleNote() : ''}
           </div>
@@ -430,13 +485,14 @@ function bindControls() {
       } else {
         state.costs.delete(cost);
       }
-      renderCards();
+      filtersChanged();
     });
   });
 
   minGamesInput.addEventListener('change', () => {
     state.minGames = Math.max(1, Number(minGamesInput.value) || 1);
-    renderCards();
+    minGamesInput.value = state.minGames;
+    filtersChanged();
   });
 
   sortSelect.addEventListener('change', () => {
@@ -453,7 +509,7 @@ function bindControls() {
 
   cardsEl.addEventListener('click', e => {
     if (e.target.closest('[data-action="retry"]')) {
-      loadDiscovery(true);
+      loadDiscovery();
       return;
     }
     const entry = e.target.closest('.entry');

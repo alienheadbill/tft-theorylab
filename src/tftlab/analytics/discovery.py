@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Collection, Sequence
 
 from ..storage import Database
 from .association import Association
 from .commitment import CarryStat, carry_commitment_stats, default_balance_window
-from .item_packages import item_package_stats
-from .partners import carry_partner_associations
-from .traits import trait_breakpoint_associations
+from .item_packages import item_package_stats_for_many
+from .partners import carry_partner_associations_for_many
+from .traits import trait_breakpoint_associations_for_many
 
 # Opportunity Score v2: a confidence-adjusted blend of several *mostly
 # orthogonal* signals, deliberately not just "raw Top 4 rate":
@@ -221,6 +222,21 @@ class DiscoveryCandidate:
     opportunity_components: dict[str, float] = field(default_factory=dict)
 
 
+def discovery_population(db: Database, balance_window: str) -> list[CarryStat]:
+    """Every carry (any cost, `min_samples=1`) in the window: the population
+    the Opportunity Score's baseline is computed over, and the superset
+    every Discovery candidate list is filtered from. One window-wide
+    aggregate; callers reuse it instead of re-running it per filter."""
+    return carry_commitment_stats(db, balance_window=balance_window, min_cost=1, max_cost=5, min_samples=1)
+
+
+def _baseline_from(population: Sequence[CarryStat]) -> float:
+    total_games = sum(s.commitment_games for s in population)
+    if not population or total_games == 0:
+        return 0.0
+    return sum(s.posterior_top4 * s.commitment_games for s in population) / total_games
+
+
 def _population_baseline_top4(db: Database, balance_window: str) -> float:
     """Commitment-observation-weighted average posterior Top4 rate across
     every carry (any cost, `min_samples=1`) in this balance window.
@@ -232,26 +248,29 @@ def _population_baseline_top4(db: Database, balance_window: str) -> float:
     handful of games from an extreme outlier carry swing the "typical"
     performance for the whole window just as much as a well-evidenced one.
     """
-    population = carry_commitment_stats(
-        db, balance_window=balance_window, min_cost=1, max_cost=5, min_samples=1
-    )
-    total_games = sum(s.commitment_games for s in population)
-    if not population or total_games == 0:
-        return 0.0
-    return sum(s.posterior_top4 * s.commitment_games for s in population) / total_games
+    return _baseline_from(discovery_population(db, balance_window))
+
+
+def _evidence_for(db: Database, stats: Sequence[CarryStat], balance_window: str) -> dict[str, tuple]:
+    """Partner, item and trait evidence for every carry in `stats`: three
+    row queries in total (one per kind), not three per carry. Each carry's
+    evidence is exactly what the single-carry functions return."""
+    ids = [s.character_id for s in stats]
+    partners = carry_partner_associations_for_many(db, ids, balance_window)
+    items = item_package_stats_for_many(db, ids, balance_window)
+    traits = trait_breakpoint_associations_for_many(db, ids, balance_window)
+    return {cid: (partners[cid], items[cid], traits[cid]) for cid in ids}
 
 
 def _build_candidate(
-    db: Database,
     stat: CarryStat,
     balance_window: str,
+    evidence: tuple,
     *,
     population_baseline_top4: float,
     top_n: int,
 ) -> DiscoveryCandidate:
-    partners = carry_partner_associations(db, stat.character_id, balance_window)
-    item_stats = item_package_stats(db, stat.character_id, balance_window)
-    traits = trait_breakpoint_associations(db, stat.character_id, balance_window)
+    partners, item_stats, traits = evidence
 
     best_partner_score = max((a.association_score for a in partners), default=0.0)
     item_flexibility = compute_item_flexibility(item_stats["items"])
@@ -302,6 +321,8 @@ def discover_candidates(
     max_cost: int = 3,
     min_samples: int = 10,
     top_n: int = 5,
+    costs: Collection[int] | None = None,
+    population: Sequence[CarryStat] | None = None,
 ) -> list[DiscoveryCandidate]:
     """The first comp-discovery pass: carries enriched with statistically-
     adjusted partner/item/trait evidence and a confidence-adjusted
@@ -320,24 +341,28 @@ def discover_candidates(
     coverage. Ranking itself also biases toward 1-3 cost carries via the
     Opportunity Score's `cost_bias` component (see `compute_opportunity_score`),
     but a 4/5-cost carry can still rank if its evidence is strong.
+
+    `costs` selects exact costs (e.g. {4} or {1, 3, 5}) instead of the
+    `min_cost`..`max_cost` range. The window-wide population aggregate runs
+    once (or is passed in as `population`); the baseline uses all of it,
+    and only the carries that pass the cost and `min_samples` filters get
+    their partner/item/trait evidence built -- the expensive per-carry part.
     """
     resolved_window = balance_window or default_balance_window(db)
     if resolved_window is None:
         return []
 
-    population_baseline = _population_baseline_top4(db, resolved_window)
+    if population is None:
+        population = discovery_population(db, resolved_window)
+    population_baseline = _baseline_from(population)
+    wanted = set(costs) if costs is not None else set(range(min_cost, max_cost + 1))
+    stats = [s for s in population if s.cost in wanted and s.commitment_games >= min_samples]
 
-    stats = carry_commitment_stats(
-        db,
-        balance_window=resolved_window,
-        min_cost=min_cost,
-        max_cost=max_cost,
-        min_samples=min_samples,
-    )
-
+    evidence = _evidence_for(db, stats, resolved_window)
     candidates = [
         _build_candidate(
-            db, stat, resolved_window, population_baseline_top4=population_baseline, top_n=top_n
+            stat, resolved_window, evidence[stat.character_id],
+            population_baseline_top4=population_baseline, top_n=top_n,
         )
         for stat in stats
     ]
@@ -353,6 +378,7 @@ def discovery_candidate_for(
     max_cost: int = 5,
     min_samples: int = 1,
     top_n: int = 8,
+    population: Sequence[CarryStat] | None = None,
 ) -> DiscoveryCandidate | None:
     """A single carry's `DiscoveryCandidate`, or `None` if it has no
     qualifying commitment games in the resolved balance window."""
@@ -360,18 +386,21 @@ def discovery_candidate_for(
     if resolved_window is None:
         return None
 
-    population_baseline = _population_baseline_top4(db, resolved_window)
-    stats = carry_commitment_stats(
-        db,
-        balance_window=resolved_window,
-        min_cost=min_cost,
-        max_cost=max_cost,
-        min_samples=min_samples,
+    # One window-wide aggregate serves both the baseline and this carry's row.
+    if population is None:
+        population = discovery_population(db, resolved_window)
+    population_baseline = _baseline_from(population)
+    stat = next(
+        (
+            s for s in population
+            if s.character_id == character_id and min_cost <= s.cost <= max_cost and s.commitment_games >= min_samples
+        ),
+        None,
     )
-    stat = next((s for s in stats if s.character_id == character_id), None)
     if stat is None:
         return None
 
     return _build_candidate(
-        db, stat, resolved_window, population_baseline_top4=population_baseline, top_n=top_n
+        stat, resolved_window, _evidence_for(db, [stat], resolved_window)[stat.character_id],
+        population_baseline_top4=population_baseline, top_n=top_n,
     )

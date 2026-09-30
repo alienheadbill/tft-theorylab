@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Sequence
 
 from ..patch import patch_sort_key
 from ..carry import carry_commitment_sql
@@ -100,6 +101,7 @@ def carry_commitment_stats(
     commitment_items: int = 2,
     min_samples: int = 3,
     prior_strength: float = 60.0,
+    character_ids: Sequence[str] | None = None,
 ) -> list[CarryStat]:
     """Return low-usage carry stats from final-board Match-V1 data.
 
@@ -117,6 +119,12 @@ def carry_commitment_stats(
     items entirely, so mixing them by default would quietly blend unrelated
     data. When `balance_window` is omitted, the chronologically latest window
     in the store is used.
+
+    `character_ids` restricts the per-champion aggregation to those
+    champions (the denominator stays every unit-observable participant in
+    the window), so each returned `CarryStat` is identical to the same
+    champion's row in the unrestricted result -- one champion's page
+    needn't aggregate the whole window.
     """
     resolved_window = balance_window or default_balance_window(db)
     if resolved_window is None:
@@ -149,6 +157,12 @@ def carry_commitment_stats(
     # with Riot carry evidence (tftlab.carry). Appearance is unaffected:
     # every unit row still counts as an appearance below.
     eligible_sql, eligible_params = carry_commitment_sql("u", commitment_items)
+    only_sql, only_params = "", []
+    if character_ids is not None:
+        if not character_ids:
+            return []
+        only_sql = f" AND u.character_id IN ({', '.join('?' for _ in character_ids)})"
+        only_params = list(character_ids)
     rows = db.query_all(
         f"""
         WITH per_champion AS (
@@ -172,7 +186,7 @@ def carry_commitment_stats(
                 MAX(CASE WHEN {eligible_sql} AND u.tier >= 3 THEN 1 ELSE 0 END) AS hit_3star
             FROM units u
             JOIN matches m ON m.match_id = u.match_id
-            WHERE m.balance_window = ?
+            WHERE m.balance_window = ?{only_sql}
             GROUP BY u.match_id, u.participant_index, u.character_id
         )
         SELECT
@@ -201,6 +215,7 @@ def carry_commitment_stats(
             *eligible_params,
             *eligible_params,
             resolved_window,
+            *only_params,
             min_cost,
             max_cost,
             min_samples,
@@ -275,3 +290,75 @@ def carry_commitment_stats(
         )
 
     return sorted(stats, key=lambda x: x.opportunity_score, reverse=True)
+
+
+def _committed_boards_sql(balance_window: str, min_cost: int, max_cost: int, commitment_items: int) -> tuple[str, list]:
+    """One row per (board, champion) the champion was carried on -- the same
+    commitment rule, window and cost range as `carry_commitment_stats` --
+    evaluating the rule once per unit row and nothing else."""
+    eligible_sql, eligible_params = carry_commitment_sql("u", commitment_items)
+    return (
+        f"""
+        SELECT DISTINCT u.match_id, u.participant_index, u.character_id
+        FROM units u
+        JOIN matches m ON m.match_id = u.match_id
+        WHERE m.balance_window = ? AND u.cost BETWEEN ? AND ? AND {eligible_sql}
+        """,
+        [balance_window, min_cost, max_cost, *eligible_params],
+    )
+
+
+def carry_board_counts(
+    db: Database,
+    balance_window: str | None,
+    *,
+    min_cost: int = 1,
+    max_cost: int = 5,
+    commitment_items: int = 2,
+) -> dict[str, int]:
+    """Committed boards per champion in one window: exactly each champion's
+    `commitment_games` from `carry_commitment_stats`, without the placement,
+    hit/miss and appearance aggregates a picker list doesn't need."""
+    if balance_window is None:
+        return {}
+    boards_sql, params = _committed_boards_sql(balance_window, min_cost, max_cost, commitment_items)
+    rows = db.query_all(
+        f"SELECT b.character_id, COUNT(*) FROM ({boards_sql}) AS b GROUP BY b.character_id", tuple(params)
+    )
+    return {str(r[0]): int(r[1]) for r in rows}
+
+
+def carry_board_average(
+    db: Database,
+    balance_window: str | None,
+    *,
+    min_cost: int = 1,
+    max_cost: int = 5,
+    commitment_items: int = 2,
+) -> dict[str, float | int] | None:
+    """Results across every champion's committed boards in one window (a
+    board with two carries counts once for each): the commitment-games-
+    weighted average of `carry_commitment_stats`' per-champion rates, in one
+    aggregate. None when the window has no carry boards."""
+    if balance_window is None:
+        return None
+    boards_sql, params = _committed_boards_sql(balance_window, min_cost, max_cost, commitment_items)
+    row = db.query_one(
+        f"""
+        SELECT COUNT(*),
+               AVG(p.placement * 1.0),
+               AVG(CASE WHEN p.placement <= 4 THEN 1.0 ELSE 0.0 END),
+               AVG(CASE WHEN p.placement = 1 THEN 1.0 ELSE 0.0 END)
+        FROM ({boards_sql}) AS b
+        JOIN participants p ON p.match_id = b.match_id AND p.participant_index = b.participant_index
+        """,
+        tuple(params),
+    )
+    if not row or not row[0]:
+        return None
+    return {
+        "carry_games": int(row[0]),
+        "avg_placement": float(row[1]),
+        "top4_rate": float(row[2]),
+        "win_rate": float(row[3]),
+    }

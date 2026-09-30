@@ -16,20 +16,30 @@ player can pick a champion by name instead of by Riot id.
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+import math
+from typing import Any, Mapping, Sequence
 
 from .analytics import (
     available_balance_windows,
+    carry_board_average,
+    carry_board_counts,
     carry_commitment_stats,
     carry_partner_associations,
     item_package_stats,
     trait_breakpoint_associations,
 )
 from .analytics.association import Association
-from .analytics.commitment import CarryStat
-from .game_art import champion_art, champion_name, item_art, item_name, load_manifest, trait_art, trait_name
+from .game_art import (
+    NORMAL_ITEM_KINDS,
+    champion_art,
+    champion_name,
+    item_ref,
+    load_manifest,
+    trait_art,
+    trait_name,
+)
 from .research_report import WEB_DISCOVERY_MIN_SAMPLES
-from .roster import id_key, name_key
+from .roster import id_key, load_roster, name_key
 from .scout import LOW_SAMPLE_COMMITMENT_GAMES
 from .storage import Database
 
@@ -51,41 +61,37 @@ def sample_info(games: int) -> dict[str, Any]:
         "games": games,
         "label": "Low sample" if low_sample else "Observed sample",
         "meaning": (
-            "Fewer than 30 carry games: treat these results as an early signal, not a stable estimate."
+            "Fewer than 30 carry boards: treat these results as an early signal, not a stable estimate."
             if low_sample
-            else "At least 30 carry games are observed in this window. The results are still observational and can move."
+            else "At least 30 carry boards are observed in this window. The results are still observational and can move."
         ),
         "low_sample": low_sample,
     }
 
 
-def window_carry_stats(db: Database, balance_window: str | None) -> list[CarryStat]:
-    """Every champion with at least one carry game in the window, any cost."""
-    if balance_window is None:
-        return []
-    return carry_commitment_stats(db, balance_window=balance_window, min_cost=1, max_cost=5, min_samples=1)
-
-
 def champion_directory(
-    db: Database, balance_window: str | None, *, stats: Sequence[CarryStat] | None = None
+    db: Database, balance_window: str | None, *, counts: Mapping[str, int] | None = None
 ) -> list[dict[str, Any]]:
     """Every current-set champion (the art manifest's champion list: shop
     champions and trait-bearing specials, costs 1-5), plus any champion with
-    carry games in the window that the manifest lacks, with its carry-game
+    carry boards in the window that the manifest lacks, with its carry-board
     count in that window (0 when it was never built as a carry). Sorted by
-    cost, then name."""
-    if stats is None:
-        stats = window_carry_stats(db, balance_window)
-    by_id = {s.character_id: s for s in stats}
+    cost, then name.
+
+    Counts come from `carry_board_counts` -- one light aggregate -- unless
+    `counts` is passed; the picker never runs the full carry statistics."""
+    if counts is None:
+        counts = carry_board_counts(db, balance_window)
+    roster = load_roster()
     entries: dict[str, dict[str, Any]] = {}
     for character_id, meta in (load_manifest().get("champions") or {}).items():
         entries[character_id] = {"character_id": character_id, "name": meta.get("name"), "cost": meta.get("cost")}
-    for character_id, stat in by_id.items():
+    for character_id in counts:
         if character_id not in entries:
             entries[character_id] = {
                 "character_id": character_id,
-                "name": champion_name(character_id, stat.name),
-                "cost": stat.cost,
+                "name": champion_name(character_id, character_id),
+                "cost": (roster.champions.get(character_id) or {}).get("cost"),
             }
 
     taken: set[str] = set()
@@ -95,15 +101,36 @@ def champion_directory(
         if slug in taken:  # two champions with one display name: fall back to the id
             slug = name_key(entry["character_id"])
         taken.add(slug)
-        stat = by_id.get(entry["character_id"])
         directory.append({
             **entry,
             "name": entry["name"] or entry["character_id"],
             "slug": slug,
             "art_url": champion_art(entry["character_id"], entry["name"]),
-            "carry_games": stat.commitment_games if stat else 0,
+            # Committed player boards (8 per match), not matches.
+            "carry_games": int(counts.get(entry["character_id"], 0)),
         })
     return directory
+
+
+def _observed_character_ids(db: Database, balance_window: str) -> list[str]:
+    rows = db.query_all(
+        "SELECT DISTINCT u.character_id FROM units u JOIN matches m ON m.match_id = u.match_id "
+        "WHERE m.balance_window = ?",
+        (balance_window,),
+    )
+    return [str(r[0]) for r in rows]
+
+
+def resolve_champion(db: Database, balance_window: str | None, key: str) -> dict[str, Any] | None:
+    """The champion a page key names, without computing any carry statistics:
+    the manifest's champions first; only an unmatched key costs one cheap
+    query for the champions observed in the window (e.g. a unit the cached
+    manifest lacks)."""
+    entry = find_champion(champion_directory(db, balance_window, counts={}), key)
+    if entry is not None or balance_window is None:
+        return entry
+    observed = {cid: 0 for cid in _observed_character_ids(db, balance_window)}
+    return find_champion(champion_directory(db, balance_window, counts=observed), key)
 
 
 def find_champion(directory: Sequence[dict[str, Any]], key: str) -> dict[str, Any] | None:
@@ -144,16 +171,16 @@ def _comparison(a: Association) -> dict[str, Any]:
     }
 
 
-def _item_refs(key: str) -> list[dict[str, Any]]:
-    return [
-        {"id": part, "name": item_name(part) or part, "art_url": item_art(part)}
-        for part in key.split("+")
-        if part
-    ]
-
-
 def _item_row(a: Association) -> dict[str, Any]:
-    return {"items": _item_refs(a.key), **_comparison(a)}
+    items = [item_ref(part) for part in a.key.split("+") if part]
+    return {
+        "items": items,
+        # Every item is a standard completed item or an emblem: a build a
+        # player can craft. Artifact / Radiant / unrecognized items stay in
+        # the observed lists, labelled, but never lead the build summary.
+        "normal_build": all(i["kind"] in NORMAL_ITEM_KINDS for i in items),
+        **_comparison(a),
+    }
 
 
 def _partner_row(a: Association) -> dict[str, Any]:
@@ -195,33 +222,19 @@ def _appearances(db: Database, character_id: str, balance_window: str) -> int:
     return int(row[0]) if row else 0
 
 
-def _window_average(stats: Sequence[CarryStat]) -> dict[str, Any] | None:
-    """Observed results across every champion's carry games in the window
-    (a board with two carries counts once for each), for context."""
-    games = sum(s.commitment_games for s in stats)
-    if not games:
-        return None
-    return {
-        "carry_games": games,
-        "top4_rate": sum(s.top4_rate * s.commitment_games for s in stats) / games,
-        "win_rate": sum(s.win_rate * s.commitment_games for s in stats) / games,
-        "avg_placement": sum(s.avg_placement * s.commitment_games for s in stats) / games,
-    }
-
-
 def champion_investigation(
     db: Database,
     champion: dict[str, Any],
     balance_window: str | None,
     *,
-    stats: Sequence[CarryStat] | None = None,
     top_n: int = 6,
 ) -> dict[str, Any]:
     """Everything the Champion Investigation page shows for `champion` (a
     `champion_directory` entry) in one balance window. `carry` is None when
-    the champion has no carry games there; the evidence lists are empty then."""
-    if stats is None:
-        stats = window_carry_stats(db, balance_window)
+    the champion has no carry boards there; the evidence lists are empty then.
+
+    Only this champion's carry statistics are aggregated (`character_ids`);
+    the window-wide comparison is one light `carry_board_average` query."""
     window = next((w for w in available_balance_windows(db) if w[0] == balance_window), None)
     character_id = champion["character_id"]
     body: dict[str, Any] = {
@@ -233,14 +246,19 @@ def champion_investigation(
         "champion": {k: champion[k] for k in ("character_id", "name", "slug", "cost", "art_url")},
         "carry": None,
         "appearances": 0,
-        "window_average": _window_average(stats),
-        "items": {"most_common_build": None, "builds": [], "pairs": []},
+        "window_average": None,
+        "summary": None,
+        "items": {"most_common_build": None, "most_common_normal_build": None, "builds": [], "pairs": []},
         "partners": [],
         "traits": [],
     }
     if balance_window is None or window is None:
         return body
-    stat = next((s for s in stats if s.character_id == character_id), None)
+    body["window_average"] = carry_board_average(db, balance_window)
+    stats = carry_commitment_stats(
+        db, balance_window=balance_window, min_cost=1, max_cost=5, min_samples=1, character_ids=[character_id]
+    )
+    stat = stats[0] if stats else None
     if stat is None:
         body["appearances"] = _appearances(db, character_id, balance_window)
         return body
@@ -271,12 +289,181 @@ def champion_investigation(
     }
 
     item_stats = item_package_stats(db, character_id, balance_window)
-    builds = item_stats["packages"]
-    if builds:
-        most_common = max(builds, key=lambda a: (a.games, a.association_score))
-        body["items"]["most_common_build"] = _item_row(most_common)
-    body["items"]["builds"] = [_item_row(a) for a in builds[:top_n]]
+    rows = [_item_row(a) for a in item_stats["packages"]]  # ranked by association score
+    frequency = lambda r: (r["games"], r["adjusted_top4_difference"] or 0.0)  # noqa: E731
+    if rows:
+        body["items"]["most_common_build"] = max(rows, key=frequency)
+        normal = [r for r in rows if r["normal_build"]]
+        body["items"]["most_common_normal_build"] = max(normal, key=frequency) if normal else None
+    body["items"]["builds"] = rows[:top_n]
     body["items"]["pairs"] = [_item_row(a) for a in item_stats["pairs"][:top_n]]
-    body["partners"] = [_partner_row(a) for a in carry_partner_associations(db, character_id, balance_window)[:top_n]]
-    body["traits"] = [_trait_row(a) for a in trait_breakpoint_associations(db, character_id, balance_window)[:top_n]]
+    partners = [_partner_row(a) for a in carry_partner_associations(db, character_id, balance_window)]
+    traits = [_trait_row(a) for a in trait_breakpoint_associations(db, character_id, balance_window)]
+    body["partners"] = partners[:top_n]
+    body["traits"] = traits[:top_n]
+    body["summary"] = carry_summary(
+        champion["name"], body["carry"], rows, partners, traits
+    )
     return body
+
+
+# ---------------------------------------------------------------- "How players carry"
+
+#: Two-sided 95% two-proportion z-test: the conventional statistical test for
+#: "is this Top 4 gap bigger than chance?". Applied only when both sides of
+#: the 3-star split have at least LOW_SAMPLE_COMMITMENT_GAMES boards (the
+#: product's existing LOW SAMPLE threshold) -- no new product threshold.
+Z_95 = 1.959964
+
+
+def top4_gap_is_clear(rate_a: float, n_a: int, rate_b: float, n_b: int) -> bool:
+    """True when two observed Top 4 rates differ by more than a two-sided 95%
+    two-proportion z-test attributes to chance."""
+    if n_a <= 0 or n_b <= 0:
+        return False
+    x_a, x_b = round(rate_a * n_a), round(rate_b * n_b)
+    pooled = (x_a + x_b) / (n_a + n_b)
+    se = math.sqrt(pooled * (1 - pooled) * (1 / n_a + 1 / n_b))
+    return se > 0 and abs(x_a / n_a - x_b / n_b) / se >= Z_95
+
+
+def _pct(v: float | None) -> str:
+    return "—" if v is None else f"{v * 100:.1f}%"
+
+
+def _boards(n: int) -> str:
+    return f"{n:,} carry board" + ("" if n == 1 else "s")
+
+
+def _items_label(row: dict[str, Any]) -> str:
+    return " + ".join(i["name"] for i in row["items"])
+
+
+def _supported(rows: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
+    """The top-ranked row (existing association ranking) if its evidence
+    actually points the positive way: enough games on both sides, a
+    positive shrinkage-adjusted difference and a higher raw Top 4 with it."""
+    for row in rows[:1]:
+        if (
+            not row["limited_sample"]
+            and row["games_without"]
+            and (row["adjusted_top4_difference"] or 0) > 0
+            and row["top4_with"] > (row["top4_without"] or 0)
+        ):
+            return row
+    return None
+
+
+def _most_frequent(rows: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
+    return max(rows, key=lambda r: (r["games"], r["adjusted_top4_difference"] or 0.0)) if rows else None
+
+
+def carry_summary(
+    name: str,
+    carry: dict[str, Any],
+    builds: Sequence[dict[str, Any]],
+    partners: Sequence[dict[str, Any]],
+    traits: Sequence[dict[str, Any]],
+) -> dict[str, list[str]]:
+    """"How players carry with {name}": OBSERVED facts restated from the
+    page's own numbers, and a separate INTERPRETATION produced by fixed rules
+    from those same numbers (never generated, never strategy: no roll timing,
+    leveling, positioning or causal claims)."""
+    observed: list[str] = []
+    interpretation: list[str] = []
+    n = carry["games"]
+    ts = carry["three_star"]
+    hit, miss = ts["hit_games"], ts["miss_games"]
+
+    # 3-star dependency
+    if hit and miss:
+        observed.append(f"{hit:,} of {n:,} carry boards reached 3★ ({_pct(ts['hit_rate'])}).")
+        observed.append(
+            f"Top 4 was {_pct(ts['hit_top4_rate'])} on boards that reached 3★ and "
+            f"{_pct(ts['miss_top4_rate'])} on boards that stayed below 3★."
+        )
+    elif not hit:
+        observed.append(f"None of the {_boards(n)} reached 3★: every result here is from 2★ or lower.")
+    else:
+        observed.append(f"All {_boards(n)} reached 3★, so there is nothing to compare a miss against.")
+
+    # items
+    normal = _most_frequent([b for b in builds if b["normal_build"]])
+    overall = _most_frequent(builds)
+    if normal:
+        observed.append(
+            f"Most common normal full build: {_items_label(normal)}, on {_boards(normal['games'])} "
+            f"({_pct(normal['share_of_carry_games'])})."
+        )
+    else:
+        observed.append("No normal 3-item build appears on 2 or more carry boards yet.")
+    if overall and not overall["normal_build"] and (not normal or overall["games"] > normal["games"]):
+        observed.append(
+            f"The most common full build overall includes an Artifact, Radiant or unrecognized item: "
+            f"{_items_label(overall)} ({_boards(overall['games'])})."
+        )
+    best_build = _supported(builds)
+    if best_build:
+        observed.append(
+            f"Best with-vs-without result among full builds: {_items_label(best_build)} "
+            f"(Top 4 {_pct(best_build['top4_with'])} with vs {_pct(best_build['top4_without'])} without, "
+            f"{_boards(best_build['games'])})."
+        )
+
+    # partners and traits
+    for rows, what in ((partners, "partner"), (traits, "trait breakpoint")):
+        label = (lambda r: r["name"]) if what == "partner" else (lambda r: f"{r['name']} (breakpoint {r['tier']})")
+        frequent = _most_frequent(rows)
+        if frequent:
+            observed.append(
+                f"Most frequent {what}: {label(frequent)}, on {_pct(frequent['share_of_carry_games'])} of carry boards."
+            )
+        best = _supported(rows)
+        if best:
+            observed.append(
+                f"Strongest with-vs-without {what}: {label(best)} (Top 4 {_pct(best['top4_with'])} with vs "
+                f"{_pct(best['top4_without'])} without)."
+            )
+
+    # interpretation: fixed rules only
+    if n < LOW_SAMPLE_COMMITMENT_GAMES:
+        interpretation.append(
+            f"Fewer than {LOW_SAMPLE_COMMITMENT_GAMES} carry boards: treat everything above as an early signal, "
+            "not a pattern."
+        )
+    if hit and miss and min(hit, miss) >= LOW_SAMPLE_COMMITMENT_GAMES:
+        a, b = ts["hit_top4_rate"], ts["miss_top4_rate"]
+        if not top4_gap_is_clear(a, hit, b, miss):
+            interpretation.append(
+                f"Reaching 3★ made no clear difference to Top 4 in this sample ({_pct(a)} vs {_pct(b)}); "
+                "the gap is small enough to be chance."
+            )
+        elif a > b:
+            interpretation.append(
+                f"{name} looks dependent on reaching 3★ in this sample: Top 4 rises from {_pct(b)} below 3★ "
+                f"to {_pct(a)} at 3★, a gap larger than chance alone would usually produce."
+            )
+        else:
+            interpretation.append(
+                f"Boards that reached 3★ did not do better in this sample (Top 4 {_pct(a)} vs {_pct(b)} below 3★), "
+                "so the 3★ is not what separates good results here."
+            )
+    elif hit and miss:
+        interpretation.append(
+            f"Too few boards on one side of the 3★ split ({hit:,} reached 3★, {miss:,} did not) to judge how much "
+            f"hitting 3★ matters; each side needs at least {LOW_SAMPLE_COMMITMENT_GAMES}."
+        )
+    if normal and best_build:
+        if best_build is normal:
+            interpretation.append("The normal build players use most is also the best-supported one here.")
+        else:
+            interpretation.append(
+                f"The best-supported build differs from the most common normal build and has "
+                f"{best_build['games']:,} boards behind it versus {normal['games']:,}: weigh both."
+            )
+    if partners or traits:
+        interpretation.append(
+            "Frequent partners and traits describe the boards players built. They are associations, not a proven "
+            "core, and not a cause of the results."
+        )
+    return {"observed": observed, "interpretation": interpretation}
