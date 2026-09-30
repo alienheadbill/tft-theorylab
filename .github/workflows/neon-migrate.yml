@@ -1,0 +1,197 @@
+name: Migrate production data to Neon
+
+# One-time safe copy of the current Render Postgres database into the empty
+# Neon production database. This workflow does NOT cut the app over and does
+# NOT change any production environment variables.
+#
+# Required repository secrets:
+# - DATABASE_URL: current Render production Postgres URL
+# - NEON_DATABASE_URL: target Neon production Postgres URL
+#
+# The target must contain zero user tables. The workflow refuses to overwrite
+# an already-populated Neon database.
+on:
+  workflow_dispatch:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+# Serialize with live ingestion and backups so the source database cannot be
+# modified by our collector while pg_dump is taking its snapshot.
+concurrency:
+  group: live-ingest-production
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (
+        github.event.issue.number == 38 &&
+        github.event.comment.user.login == 'alienheadbill' &&
+        github.event.comment.body == '/migrate neon'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SOURCE_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      TARGET_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+    steps:
+      - name: Validate migration configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::Migration must run from main (got ${GITHUB_REF})." >&2
+            exit 1
+          fi
+
+          if [ -z "${SOURCE_DATABASE_URL}" ]; then
+            echo "::error::DATABASE_URL repository secret is not set." >&2
+            exit 1
+          fi
+
+          if [ -z "${TARGET_DATABASE_URL}" ]; then
+            echo "::error::NEON_DATABASE_URL repository secret is not set." >&2
+            exit 1
+          fi
+
+          case "${SOURCE_DATABASE_URL}" in
+            postgres://*|postgresql://*) ;;
+            *) echo "::error::DATABASE_URL must be a Postgres URL." >&2; exit 1 ;;
+          esac
+
+          case "${TARGET_DATABASE_URL}" in
+            postgres://*|postgresql://*) ;;
+            *) echo "::error::NEON_DATABASE_URL must be a Postgres URL." >&2; exit 1 ;;
+          esac
+
+          if [ "${SOURCE_DATABASE_URL}" = "${TARGET_DATABASE_URL}" ]; then
+            echo "::error::Source and target URLs are identical; refusing migration." >&2
+            exit 1
+          fi
+
+          echo "Migration secrets are present. Values are not printed."
+
+      - name: Copy Render Postgres to empty Neon database
+        id: migrate
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+
+          DUMP="render-to-neon.dump"
+          SOURCE_COUNTS="source-counts.txt"
+          TARGET_COUNTS="target-counts.txt"
+
+          cleanup() {
+            rm -f "${DUMP}" "${SOURCE_COUNTS}" "${TARGET_COUNTS}"
+          }
+          trap cleanup EXIT
+
+          pg() {
+            docker run --rm postgres:18 "$@"
+          }
+
+          # Fail closed if the target has any user tables. The Neon project is
+          # intentionally empty before this first migration, so there is no
+          # reason for this workflow to drop or overwrite anything.
+          TARGET_TABLES="$(docker run --rm --env TARGET_DATABASE_URL postgres:18 \
+            sh -c 'psql "$TARGET_DATABASE_URL" -Atqc "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname NOT IN ('"'"'pg_catalog'"'"','"'"'information_schema'"'"') AND schemaname NOT LIKE '"'"'pg_%'"'"';"')"
+
+          case "${TARGET_TABLES}" in
+            ''|*[!0-9]*)
+              echo "::error::Could not determine target table count safely." >&2
+              exit 1
+              ;;
+          esac
+
+          if [ "${TARGET_TABLES}" -ne 0 ]; then
+            echo "::error::Target Neon database already has ${TARGET_TABLES} user tables. Refusing to overwrite it." >&2
+            exit 1
+          fi
+
+          SOURCE_BYTES="$(docker run --rm --env SOURCE_DATABASE_URL postgres:18 \
+            sh -c 'psql "$SOURCE_DATABASE_URL" -Atqc "SELECT pg_database_size(current_database());"')"
+
+          # Capture every public user table and its row count before dumping.
+          docker run --rm --env SOURCE_DATABASE_URL postgres:18 sh -c '
+            set -eu
+            psql "$SOURCE_DATABASE_URL" -Atqc "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname='"'"'public'"'"' ORDER BY tablename;" |
+            while IFS= read -r table; do
+              case "$table" in
+                ""|*[!A-Za-z0-9_]*)
+                  echo "Unsafe table name: $table" >&2
+                  exit 1
+                  ;;
+              esac
+              count="$(psql "$SOURCE_DATABASE_URL" -Atqc "SELECT count(*) FROM public.\"$table\";")"
+              printf "%s|%s\n" "$table" "$count"
+            done
+          ' > "${SOURCE_COUNTS}"
+
+          test -s "${SOURCE_COUNTS}"
+
+          # Custom-format pg_dump is compressed and supports reliable restore.
+          docker run --rm --env SOURCE_DATABASE_URL postgres:18 \
+            sh -c 'pg_dump --format=custom --compress=9 --no-owner --no-acl "$SOURCE_DATABASE_URL"' \
+            > "${DUMP}"
+
+          test -s "${DUMP}"
+
+          # Restore into the still-empty Neon database. No --clean: the safety
+          # model is "empty target or fail", never destructive replacement.
+          docker run --rm \
+            --env TARGET_DATABASE_URL \
+            -v "$PWD:/backup:ro" \
+            postgres:18 \
+            sh -c 'pg_restore --exit-on-error --no-owner --no-acl --dbname="$TARGET_DATABASE_URL" /backup/render-to-neon.dump'
+
+          # Recount the same source table set in Neon and require exact equality.
+          docker run --rm \
+            --env TARGET_DATABASE_URL \
+            -v "$PWD:/work:ro" \
+            postgres:18 sh -c '
+              set -eu
+              while IFS="|" read -r table expected; do
+                case "$table" in
+                  ""|*[!A-Za-z0-9_]*)
+                    echo "Unsafe table name: $table" >&2
+                    exit 1
+                    ;;
+                esac
+                count="$(psql "$TARGET_DATABASE_URL" -Atqc "SELECT count(*) FROM public.\"$table\";")"
+                printf "%s|%s\n" "$table" "$count"
+              done < /work/source-counts.txt
+            ' > "${TARGET_COUNTS}"
+
+          if ! diff -u "${SOURCE_COUNTS}" "${TARGET_COUNTS}"; then
+            echo "::error::Render and Neon row counts differ after restore." >&2
+            exit 1
+          fi
+
+          TARGET_BYTES="$(docker run --rm --env TARGET_DATABASE_URL postgres:18 \
+            sh -c 'psql "$TARGET_DATABASE_URL" -Atqc "SELECT pg_database_size(current_database());"')"
+          DUMP_BYTES="$(stat -c %s "${DUMP}")"
+          TABLE_COUNT="$(wc -l < "${SOURCE_COUNTS}" | tr -d ' ')"
+
+          {
+            echo "### Render → Neon migration"
+            echo
+            echo "- Source database size: ${SOURCE_BYTES} bytes"
+            echo "- Target database size after restore: ${TARGET_BYTES} bytes"
+            echo "- Compressed dump size: ${DUMP_BYTES} bytes"
+            echo "- Tables compared: ${TABLE_COUNT}"
+            echo "- Table-by-table row counts: **exact match**"
+            echo "- Production cutover performed: **no**"
+            echo
+            echo "Next step is independent read-only verification against Neon before changing any production DATABASE_URL."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Migration completed without cutover
+        run: |
+          echo "Data copy and verification passed."
+          echo "Render remains the live database until a separate reviewed cutover."
