@@ -9,9 +9,9 @@ inferred, synthesized or taken from the experimental archetype research.
 
 What it adds is player-facing shape: display names and cached art (live
 Match-V1 units carry no names, so ids are resolved through the committed
-art manifest / roster / item snapshot), a sample-size band built from the
-repository's existing thresholds, and a champion directory so a player
-can pick a champion by name instead of by Riot id.
+art manifest / roster / item snapshot), cautious sample-size context using
+Discovery's existing LOW SAMPLE threshold, and a champion directory so a
+player can pick a champion by name instead of by Riot id.
 """
 
 from __future__ import annotations
