@@ -125,7 +125,7 @@ These separate a champion being rare to see (`appearance_rate`) from a champion 
 - **Production**: set `DATABASE_URL` to a Postgres connection string. Install the `postgres` extra (`pip install -e ".[postgres]"`, already done for you by `render.yaml`) so `psycopg` is available.
 - **Schema/migrations**: the schema is created automatically on first connect (`CREATE TABLE IF NOT EXISTS ...`), for either backend — no manual migration step for a fresh database. Schema changes since (adding `matches.patch`/`matches.balance_window`, and `units.unit_index` — see below) are applied automatically to older databases too on every connect, idempotently, without wiping or recreating anything, so upgrading a database that already has real match data in place is also automatic.
 - **`units.unit_index`**: a real TFT board can field more than one instance of the same champion in one game (e.g. via clone/duplication effects), so `units`' primary key is `(match_id, participant_index, unit_index)`, not `character_id` — `character_id` remains a normal, indexed column. A database created before this existed is migrated in place the next time `Database` connects to it (backfilling `unit_index` from each row's original insertion order), and every analytics query that reads `units` collapses a participant's duplicate champion instances back down to one observation per game rather than double-counting them (see `analytics/commitment.py`, `analytics/item_packages.py`, and `tests/test_duplicate_units.py`).
-- **Ingest writes**: each match is stored in one transaction, with its participants, units and traits written as one batch per table (`Database.executemany`; psycopg pipelines these). Over a remote connection (GitHub Actions to Render Postgres) this is what keeps a larger ingest within the workflow timeout -- one round trip per row made a 34-match run take about ten minutes.
+- **Ingest writes**: each match is stored in one transaction, with its participants, units and traits written as one batch per table (`Database.executemany`; psycopg pipelines these). Over a remote connection (GitHub Actions to Neon Postgres) this is what keeps a larger ingest within the workflow timeout -- one round trip per row made a 34-match run take about ten minutes.
 - Never commit a real `DATABASE_URL` (or any credential) — set it in your host's environment/secret manager. `.env` is gitignored and `.env.example` only has placeholders.
 
 ## Balance-window-aware analytics
@@ -476,11 +476,11 @@ uvicorn tftlab.webapp:app --host 0.0.0.0 --port $PORT
 
 With no `DATABASE_URL` configured, the app automatically falls back to a generated demo dataset, so it boots and serves data even with zero configuration. `/api/health` and `/api/carries` report `"demo"` (true/false) and `"backend"` (`"sqlite"`/`"postgres"`) so it's always clear which one is live. Once `DATABASE_URL` **is** set, that changes: see "Production safety" above -- an unreachable configured database now fails loudly (HTTP 503 from every endpoint, including `/api/health`) instead of quietly serving demo data. Since `render.yaml`'s `healthCheckPath` points at `/api/health`, this means Render will correctly flag the service as unhealthy if the configured database goes down -- that's the intended behavior, not a bug to work around.
 
-To move off ephemeral SQLite in production: create a Postgres database (a Render Postgres instance's "Internal Connection String" works well) and set `DATABASE_URL` in the Render dashboard — `render.yaml` already declares it (and `RIOT_API_KEY`) as `sync: false`, meaning Render will prompt for a value but never store one in the repo. After setting it, confirm `/api/health` reports `"backend": "postgres"` and `"demo": false` before relying on it.
+**Current production hosting:** the web/API service runs on Render in **Ohio** and its runtime `DATABASE_URL` points to the Neon **Ohio** production branch (`neondb`). `render.yaml` pins `region: ohio` and declares `DATABASE_URL` as `sync: false`, so the credential stays in Render's environment rather than the repository. After any hosting/database change, confirm `/api/health` reports `"backend": "postgres"` and `"demo": false` before relying on it. The previous Oregon Render Postgres database is temporarily retained as a rollback snapshot, not as the active production database.
 
 ## Live ingestion via GitHub Actions
 
-`.github/workflows/live-ingest.yml` pulls real Riot data into the production database, **automatically every 6 hours** and on manual dispatch, through the same steps: `tftlab verify-riot`, then `tftlab ingest-riot` sized by the run's settings, then `tftlab validate-live-data`, then `tftlab discovery-smoke`.
+`.github/workflows/live-ingest.yml` pulls real Riot data into the Neon production database, **automatically every 6 hours**, on manual dispatch, and through the owner-only Ops Control smoke command `/ingest smoke`. Every path uses the same guarded steps: `tftlab verify-riot`, then `tftlab ingest-riot`, then `tftlab validate-live-data`, then `tftlab discovery-smoke`.
 
 ### Scheduled collection (every 6 hours)
 
@@ -506,19 +506,20 @@ To move off ephemeral SQLite in production: create a Postgres database (a Render
 
 **Inputs** (Run workflow form): one seed count per cohort -- `challenger_seeds` (default 10), `grandmaster_seeds`, `master_seeds`, `diamond_seeds`, `platinum_seeds` (default 0 each); each is 0-100 and the total across cohorts must be 1-100 -- plus `matches_per_player` (recent matches per seed, 1-10, default 5 -- the CLI's deeper 100-match maximum is deliberately not exposed here, since more players beats deeper histories of the same players). For example 20 / 20 / 20 / 20 / 20 is 100 seeds. The preflight prints every cohort's count and the total. The defaults reproduce the original conservative 10 x 5 Challenger run. It has **no** `push`, `pull_request`, or `schedule` trigger -- it only ever runs when someone explicitly starts it, and a failure in any step (bad key, unreachable CommunityDragon, unreachable database, a severe integrity issue) stops the run there rather than continuing partway.
 
-**Two different `DATABASE_URL`s, on purpose:**
+**Production database credentials, by purpose:**
 
-- The **Render web service** connects using Postgres's **Internal Connection String** -- it and the database live on Render's private network, so the internal URL is faster and never leaves Render.
-- **GitHub Actions** runs on GitHub's infrastructure, which cannot reach Render's private network at all, so it needs the same database's **External Connection String** instead.
-
-Both URLs point at the same database; only the host/network path differs. Getting this backwards (e.g. putting the internal URL in the GitHub secret) just means the workflow can't connect -- it does not affect Render's own `DATABASE_URL`.
+- The **Ohio Render web service** receives a runtime environment variable named `DATABASE_URL`; its value is the Neon Ohio production connection string.
+- **GitHub Actions production workflows** use the repository secret `NEON_DATABASE_URL` and expose it to the CLI as the process-level `DATABASE_URL` variable. Live ingest, production backups, patch diagnostics, and read-only research reports therefore all target the same Neon production database.
+- The repository secret `DATABASE_URL` is temporarily retained as the **legacy Render Postgres rollback/migration-source URL**. Production workflows must not write to it after cutover.
 
 **Required GitHub repository secrets** (Settings → Secrets and variables → Actions → New repository secret, on the repo, not in any file):
 
-- `RIOT_API_KEY` -- the same Riot key used locally/on Render.
-- `DATABASE_URL` -- the production Postgres database's **External** Connection String (from the Render Postgres dashboard, not the Internal one used by the web service).
+- `RIOT_API_KEY` -- the Riot API key used by live ingestion.
+- `NEON_DATABASE_URL` -- the Neon Ohio production branch Postgres connection string.
+- `DATABASE_URL` -- legacy Render Postgres URL retained temporarily for rollback/migration tooling.
+- `DB_BACKUP_PASSPHRASE` -- independent encryption passphrase for verified database backup artifacts.
 
-Neither secret is ever printed in the workflow's logs.
+No secret value is printed in workflow logs.
 
 ### Patch-wide collection plan (18.3)
 
@@ -595,13 +596,13 @@ With an expired key, `Verify Riot API` exits 1 with: *"401 Unauthorized -- RIOT_
 
 **Running it:** GitHub → **Actions** tab → **Live ingest** in the left-hand workflow list → **Run workflow** button → keep **`main`** selected as the branch (it is the repository's default branch; picking anything else fails immediately, see below) → **Run workflow**.
 
-**Production safety checks:** before touching Riot or the database, a first `Validate production configuration` step fails the run (with a static error message, never a secret value) if the selected branch isn't `main`, if `RIOT_API_KEY`/`DATABASE_URL` is missing, if `DATABASE_URL` doesn't start with `postgres://`/`postgresql://` -- this exists specifically so the ingest CLI's normal local-SQLite fallback can never be silently used in production -- or if an input is out of bounds (each `<cohort>_seeds` a plain whole number 0-100, their total 1-100, `matches_per_player` 1-10, `collection_mode` bounded/maximum and the three budgets within their ranges). Inputs reach the shell only as environment variables. The workflow also declares `permissions: contents: read` (it never needs to write to the repo), a 60-minute job timeout (240 for maximum mode), and a fixed `concurrency` group so two runs -- scheduled or manual, in any combination -- can never ingest into production at the same time (a second run queues rather than cancelling the first). The same step also refuses any trigger other than the schedule and a manual dispatch, and logs which of the two started the run.
+**Production safety checks:** before touching Riot or the database, a first `Validate production configuration` step fails the run (with a static error message, never a secret value) if the selected branch isn't `main`, if `RIOT_API_KEY`/`NEON_DATABASE_URL` is missing, if the resolved production URL doesn't start with `postgres://`/`postgresql://` -- this exists specifically so the ingest CLI's normal local-SQLite fallback can never be silently used in production -- or if an input is out of bounds. Inputs reach the shell only as environment variables. The workflow declares `permissions: contents: read`, a bounded timeout, and shares the fixed `live-ingest-production` concurrency group with backups so production writes and dumps cannot overlap. Allowed triggers are the schedule, a manual dispatch, and the owner-only exact `/ingest smoke` command on Ops Control issue #38; all other issue comments create only a skipped job.
 
 ## Patch diagnostics via GitHub Actions
 
 `.github/workflows/patch-diagnostics.yml` runs `tftlab patch-diagnostics` (see above) against production -- read-only, no Riot or CommunityDragon calls, no ingestion. Use it to read off the real masked-Unreal `game_datetime` range needed to fill in `UNREAL_PATCH_REGISTRY` without running another live ingest.
 
-Same production-safety shape as `live-ingest.yml`: `workflow_dispatch`-only (no `push`/`pull_request`/`schedule`), a `Validate production configuration` step that requires `main` explicitly selected and a well-formed `DATABASE_URL` before anything else runs, `permissions: contents: read`, a bounded job timeout, and its own fixed `concurrency` group (`patch-diagnostics-production`). It needs only the `DATABASE_URL` repository secret -- never `RIOT_API_KEY`, since it makes no Riot calls at all.
+Same production-safety shape as `live-ingest.yml`: `workflow_dispatch`-only (no `push`/`pull_request`/`schedule`), a `Validate production configuration` step that requires `main` explicitly selected and a well-formed Neon production URL before anything else runs, `permissions: contents: read`, a bounded job timeout, and its own fixed `concurrency` group (`patch-diagnostics-production`). It consumes the `NEON_DATABASE_URL` repository secret as the process-level `DATABASE_URL` -- never `RIOT_API_KEY`, since it makes no Riot calls at all.
 
 **Running it:** GitHub → **Actions** tab → **Patch diagnostics** in the left-hand workflow list → **Run workflow** button → **explicitly select `main`** as the branch → **Run workflow**.
 
