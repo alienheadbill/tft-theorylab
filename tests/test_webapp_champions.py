@@ -161,7 +161,9 @@ def test_live_shaped_ids_resolve_to_display_names_and_art(two_windows: TestClien
     partner = body["partners"][0]
     assert partner["name"] == "Hecarim" and partner["slug"] == "hecarim" and partner["art_url"]
     trait = body["traits"][0]
-    assert trait["name"] == "Ravager" and trait["tier"] == 2 and trait["art_url"]
+    assert trait["name"] == "Ravager" and trait["art_url"] and "tier" not in trait
+    # Riot's num_units (4), never the tier_current ordinal (2).
+    assert [c["num_units"] for c in trait["counts"]] == [4]
     text = json.dumps({k: body[k] for k in ("champion", "items", "partners", "traits")})
     assert '"name": "DA_' not in text
 

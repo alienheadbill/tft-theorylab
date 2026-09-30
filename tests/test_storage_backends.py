@@ -441,7 +441,7 @@ def test_postgres_discovery_and_association_queries() -> None:
         assert len(item_stats["items"]) == 2  # BlueBuff, Deathcap
 
         traits = trait_breakpoint_associations(db, "TFT14_Carry", balance_window, min_games=1)
-        assert [t.key for t in traits] == ["Juggernaut:2"]
+        assert [t.key for t in traits] == ["Juggernaut:4"]  # Riot's num_units, not tier_current
 
         candidates = discover_candidates(db, min_cost=1, max_cost=3, min_samples=1)
         assert any(c.character_id == "TFT14_Carry" for c in candidates)

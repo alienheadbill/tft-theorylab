@@ -17,7 +17,7 @@ from .discovery import (
 )
 from .item_packages import CANONICAL_UNIT_TIEBREAK_SQL, item_package_stats
 from .partners import carry_commitment_games_with_partners, carry_partner_associations
-from .traits import trait_breakpoint_associations
+from .traits import TraitProfile, trait_breakpoint_associations, trait_count_associations, trait_profile
 
 __all__ = [
     "CarryStat",
@@ -33,6 +33,9 @@ __all__ = [
     "item_package_stats",
     "CANONICAL_UNIT_TIEBREAK_SQL",
     "trait_breakpoint_associations",
+    "trait_count_associations",
+    "trait_profile",
+    "TraitProfile",
     "DiscoveryCandidate",
     "discover_candidates",
     "discovery_candidate_for",

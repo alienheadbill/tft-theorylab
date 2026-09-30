@@ -196,7 +196,7 @@ def _carry(games, hit, miss, hit_top4, miss_top4):
 
 
 def _row(name, games, share, with_, without, adj, limited=False, normal=True, games_without=50):
-    return {"items": [{"name": name}], "name": name, "tier": 2, "games": games, "share_of_carry_games": share,
+    return {"items": [{"name": name}], "name": name, "games": games, "share_of_carry_games": share,
             "top4_with": with_, "top4_without": without, "adjusted_top4_difference": adj,
             "limited_sample": limited, "normal_build": normal, "games_without": games_without}
 

@@ -348,14 +348,37 @@ function partnerSection(inv, name) {
     </section>`;
 }
 
+// Traits around the carry: how often each trait was active, then the unit
+// counts Riot reported for it (`num_units`). Riot's tier ordinal is never
+// shown as a count, and no threshold names are guessed.
+function traitCountRow(c) {
+  const other = c.games_without
+    ? ` <span class="count-other">other ${esc(fmtPctShort(c.top4_without))}</span>`
+    : '';
+  return `
+    <li class="count-row">
+      <span class="count-units">${plural(c.num_units, 'unit')}</span>
+      <span class="count-stats">${plural(c.games, 'board')} (${fmtPctShort(c.share_of_carry_games)}) · top 4 ${fmtPctShort(c.top4_with)}${other} · avg ${fmtPlace(c.avg_placement_with)}</span>
+      ${c.limited_sample ? `<span class="count-limited" title="Limited sample: fewer than ${SMALL_SPLIT} boards on one side of the comparison">limited sample</span>` : ''}
+    </li>`;
+}
+
 function traitSection(inv, name) {
-  const render = row =>
-    `<li class="ev-row">${refIcon(row.name, row.art_url, { kind: 'trait' })}<span class="row-name">${esc(row.name)}${row.tier ? ` <span class="tier" title="Which of the trait's breakpoints was active (1 = the first). Not a unit count.">breakpoint ${row.tier}</span>` : ''}</span>${rowMeta(row, name)}</li>`;
+  const total = inv.carry.games;
+  const render = t => `
+    <li class="trait-group">
+      <div class="ev-row">
+        ${refIcon(t.name, t.art_url, { kind: 'trait' })}
+        <span class="row-name">${esc(t.name)}</span>
+        ${rowMeta(t, name)}
+      </div>
+      <ol class="count-list" aria-label="${esc(t.name)} by observed unit count">${t.counts.map(traitCountRow).join('')}</ol>
+    </li>`;
   return `
     <section class="inv-section" aria-labelledby="sec-traits">
-      <h3 id="sec-traits">Traits on its boards ${stamp('observed', 'Observed')}</h3>
-      <p class="inv-help">Active trait breakpoints on ${esc(name)} carry boards. "Breakpoint 2" means the trait's second breakpoint was active. These are observed associations: forcing a trait won't necessarily produce the same result.</p>
-      ${evidenceList(inv.traits, render, 'No trait breakpoint shows up on at least 2 carry boards yet.')}
+      <h3 id="sec-traits">Traits around ${esc(name)} ${stamp('observed', 'Observed')}</h3>
+      <p class="inv-help">The traits most often active on ${esc(name)} carry boards, most common first. Under each, the unit counts Riot reported for that trait on those final boards ("4 units"), with how many carry boards had that count and how they placed; "other" is top 4 on the rest of its carry boards. Every share is out of the same ${plural(total, 'carry board')}, and one board counts under each trait it had active, so shares don't add up to 100%. These are associations: forcing a trait won't necessarily produce the same result.</p>
+      ${inv.traits.length ? `<ol class="ev-list trait-list">${inv.traits.map(render).join('')}</ol>` : '<p class="none-note">No active traits recorded on these carry boards yet.</p>'}
     </section>`;
 }
 

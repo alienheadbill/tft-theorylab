@@ -957,10 +957,10 @@ def discovery_smoke(
         if c.best_trait_breakpoints:
             t = c.best_trait_breakpoints[0]
             console.print(
-                f"  top trait breakpoint: {t.label} (association {t.association_score:.4f}, {t.games} games)"
+                f"  top trait (unit count): {t.label} (association {t.association_score:.4f}, {t.games} games)"
             )
         else:
-            console.print("  top trait breakpoint: none")
+            console.print("  top trait (unit count): none")
         console.print("")
 
 
@@ -1475,7 +1475,7 @@ def experiment_scout(
                       f"Win: {pct(ev['win_rate'])}   3\u2605 hit: {pct(ev['hit_3star_rate'])}")
         console.print(f"  Opportunity Score (ours): {ev['opportunity_score']:.1f}")
         for title, rows_ in (("Partners", ev["best_partners"]), ("Item packages", ev["best_item_packages"]),
-                             ("Trait breakpoints", ev["best_trait_breakpoints"])):
+                             ("Trait unit counts", ev["best_trait_breakpoints"])):
             if rows_:
                 console.print(f"  Strongest {title.lower()}: " + "; ".join(f"{_readable(r['label'])} ({r['games']} g)" for r in rows_),
                               markup=False)

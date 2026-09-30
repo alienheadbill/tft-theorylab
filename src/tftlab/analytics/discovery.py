@@ -8,7 +8,7 @@ from .association import Association
 from .commitment import CarryStat, carry_commitment_stats, default_balance_window
 from .item_packages import item_package_stats_for_many
 from .partners import carry_partner_associations_for_many
-from .traits import trait_breakpoint_associations_for_many
+from .traits import trait_count_associations_for_many
 
 # Opportunity Score v2: a confidence-adjusted blend of several *mostly
 # orthogonal* signals, deliberately not just "raw Top 4 rate":
@@ -216,6 +216,8 @@ class DiscoveryCandidate:
     miss_top4_rate: float | None
     best_partners: list[Association]
     best_item_packages: list[Association]
+    # Field name kept for API compatibility: active traits keyed by Riot's
+    # observed unit count (`"TraitName:num_units"`), not a tier ordinal.
     best_trait_breakpoints: list[Association]
     confidence: float
     opportunity_score: float
@@ -258,7 +260,7 @@ def _evidence_for(db: Database, stats: Sequence[CarryStat], balance_window: str)
     ids = [s.character_id for s in stats]
     partners = carry_partner_associations_for_many(db, ids, balance_window)
     items = item_package_stats_for_many(db, ids, balance_window)
-    traits = trait_breakpoint_associations_for_many(db, ids, balance_window)
+    traits = trait_count_associations_for_many(db, ids, balance_window)
     return {cid: (partners[cid], items[cid], traits[cid]) for cid in ids}
 
 
@@ -332,7 +334,7 @@ def discover_candidates(
     matches (see `tftlab.sampling` for the population): no champion
     allowlist, and saved experiments play no part in selection. v1 is
     carry-centric -- it surfaces unusual carries and their partner shells,
-    item packages and trait breakpoints, but not arbitrary complete boards
+    item packages and trait counts, but not arbitrary complete boards
     as entities of their own (a niche comp around a common carry isn't
     separated out); board signatures / clustering are a later milestone.
 

@@ -2,8 +2,8 @@
 
 A read-only view model over the existing carry analytics -- no new
 statistics. Every number comes straight from `carry_commitment_stats`,
-`carry_partner_associations`, `item_package_stats` or
-`trait_breakpoint_associations` for a single balance window, and every
+`carry_partner_associations`, `item_package_stats` or `trait_profile`
+for a single balance window, and every
 section is OBSERVED evidence from indexed matches: nothing here is
 inferred, synthesized or taken from the experimental archetype research.
 
@@ -25,9 +25,10 @@ from .analytics import (
     carry_commitment_stats,
     carry_partner_associations,
     item_package_stats,
-    trait_breakpoint_associations,
+    trait_profile,
 )
 from .analytics.association import Association
+from .analytics.traits import TraitProfile, split_trait_count_key
 from .game_art import (
     NORMAL_ITEM_KINDS,
     champion_art,
@@ -193,17 +194,37 @@ def _partner_row(a: Association) -> dict[str, Any]:
     }
 
 
-def _trait_row(a: Association) -> dict[str, Any]:
-    trait_id, _, tier = a.key.rpartition(":")
+def _trait_count_row(a: Association) -> dict[str, Any]:
+    trait_id, num_units = split_trait_count_key(a.key)
     return {
         "trait_id": trait_id,
         "name": trait_name(trait_id) or trait_id,
-        # Riot's `tier_current`: which breakpoint of the trait is active
-        # (1 = the first), not a unit count.
-        "tier": int(tier) if tier.isdigit() else None,
+        # Riot's own `num_units` for this trait on the board. Riot's
+        # `tier_current` (an ordinal) is never shown as a unit count.
+        "num_units": num_units,
         "art_url": trait_art(trait_id),
         **_comparison(a),
+        # The existing association ranking score; secondary evidence only.
+        "association_score": a.association_score,
     }
+
+
+def _trait_rows(profile: TraitProfile) -> list[dict[str, Any]]:
+    """One row per active trait (most common first; ties by display name,
+    then id), each with its observed unit counts (lowest count first).
+    Shares are of the champion's carry boards; one board is counted under
+    every trait it had active."""
+    rows = [
+        {
+            "trait_id": a.key,
+            "name": trait_name(a.key) or a.key,
+            "art_url": trait_art(a.key),
+            **_comparison(a),
+            "counts": [_trait_count_row(c) for c in profile.counts.get(a.key, [])],
+        }
+        for a in profile.active
+    ]
+    return sorted(rows, key=lambda r: (-r["games"], r["name"].casefold(), r["trait_id"]))
 
 
 def _appearances(db: Database, character_id: str, balance_window: str) -> int:
@@ -227,6 +248,7 @@ def champion_investigation(
     balance_window: str | None,
     *,
     top_n: int = 6,
+    trait_top_n: int = 8,
 ) -> dict[str, Any]:
     """Everything the Champion Investigation page shows for `champion` (a
     `champion_directory` entry) in one balance window. `carry` is None when
@@ -249,6 +271,8 @@ def champion_investigation(
         "summary": None,
         "items": {"most_common_build": None, "most_common_normal_build": None, "builds": [], "pairs": []},
         "partners": [],
+        # Active traits on the carry boards, each with Riot's observed unit
+        # counts (`num_units`). Denominator: `carry.games`.
         "traits": [],
     }
     if balance_window is None or window is None:
@@ -297,12 +321,10 @@ def champion_investigation(
     body["items"]["builds"] = rows[:top_n]
     body["items"]["pairs"] = [_item_row(a) for a in item_stats["pairs"][:top_n]]
     partners = [_partner_row(a) for a in carry_partner_associations(db, character_id, balance_window)]
-    traits = [_trait_row(a) for a in trait_breakpoint_associations(db, character_id, balance_window)]
+    traits = _trait_rows(trait_profile(db, character_id, balance_window))
     body["partners"] = partners[:top_n]
-    body["traits"] = traits[:top_n]
-    body["summary"] = carry_summary(
-        champion["name"], body["carry"], rows, partners, traits
-    )
+    body["traits"] = traits[:trait_top_n]
+    body["summary"] = carry_summary(champion["name"], body["carry"], rows, partners, traits)
     return body
 
 
@@ -337,6 +359,22 @@ def _supported(rows: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
 
 def _most_frequent(rows: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
     return max(rows, key=lambda r: (r["games"], r["adjusted_top4_difference"] or 0.0)) if rows else None
+
+
+def _units(n: int | None) -> str:
+    return f"{n} unit" + ("" if n == 1 else "s")
+
+
+def _count_label(row: dict[str, Any]) -> str:
+    return f"{row['name']} · {_units(row['num_units'])}"
+
+
+def _ranked_trait_counts(traits: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every trait/count row on 2+ boards, in the existing association
+    ranking (the same shrinkage score partners and items use), for the
+    secondary with-vs-without line only."""
+    rows = [c for t in traits for c in t.get("counts", []) if c["games"] >= 2]
+    return sorted(rows, key=lambda r: (-r["association_score"], r["trait_id"], r["num_units"] or 0))
 
 
 def carry_summary(
@@ -391,20 +429,42 @@ def carry_summary(
             f"{_boards(best_build['games'])})."
         )
 
-    # partners and traits
-    for rows, what in ((partners, "partner"), (traits, "trait breakpoint")):
-        label = (lambda r: r["name"]) if what == "partner" else (lambda r: f"{r['name']} (breakpoint {r['tier']})")
-        frequent = _most_frequent(rows)
-        if frequent:
+    # partners
+    frequent = _most_frequent(partners)
+    if frequent:
+        observed.append(
+            f"Most frequent partner: {frequent['name']}, on {_pct(frequent['share_of_carry_games'])} of carry boards."
+        )
+    best = _supported(partners)
+    if best:
+        observed.append(
+            f"Strongest with-vs-without partner: {best['name']} (Top 4 {_pct(best['top4_with'])} with vs "
+            f"{_pct(best['top4_without'])} without)."
+        )
+
+    # traits: how often each was active, then Riot's observed unit counts
+    if traits:
+        top = traits[0]
+        counts = sorted(top["counts"], key=lambda c: (-c["games"], c["num_units"] or 0))[:2]
+        common = ", then ".join(f"{_units(c['num_units'])} ({_boards(c['games'])})" for c in counts)
+        observed.append(
+            f"Most common active trait: {top['name']}, active on {_pct(top['share_of_carry_games'])} of carry boards "
+            f"({top['games']:,} of {n:,}); most often at {common}."
+        )
+        others = traits[1:3]
+        if others:
             observed.append(
-                f"Most frequent {what}: {label(frequent)}, on {_pct(frequent['share_of_carry_games'])} of carry boards."
+                "Next most common active traits: "
+                + ", ".join(f"{t['name']} ({_pct(t['share_of_carry_games'])})" for t in others)
+                + "."
             )
-        best = _supported(rows)
-        if best:
-            observed.append(
-                f"Strongest with-vs-without {what}: {label(best)} (Top 4 {_pct(best['top4_with'])} with vs "
-                f"{_pct(best['top4_without'])} without)."
-            )
+    best_count = _supported(_ranked_trait_counts(traits))
+    if best_count:
+        observed.append(
+            f"Strongest with-vs-without trait count: {_count_label(best_count)} (Top 4 "
+            f"{_pct(best_count['top4_with'])} on those {_boards(best_count['games'])} vs "
+            f"{_pct(best_count['top4_without'])} on its other carry boards)."
+        )
 
     # interpretation: fixed rules only
     if n < LOW_SAMPLE_COMMITMENT_GAMES:

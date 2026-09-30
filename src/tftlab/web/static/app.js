@@ -16,11 +16,14 @@ const humanizeId = id =>
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .trim();
 const humanizeItemLabel = label => label.split('+').map(humanizeId).join(' + ');
+// Trait evidence is keyed by Riot's observed unit count (`num_units`), e.g.
+// "DA_18_Slayer (4)" = four units with that trait on the board.
+const unitsText = n => `${n} unit${Number(n) === 1 ? '' : 's'}`;
 const humanizeTraitLabel = label => {
   const m = label.match(/^(.*)\s\((\d+)\)$/);
-  return m ? `${humanizeId(m[1])} (${m[2]})` : humanizeId(label);
+  return m ? `${humanizeId(m[1])} · ${unitsText(m[2])}` : humanizeId(label);
 };
-const traitTier = label => (String(label).match(/\((\d+)\)$/) || [])[1];
+const traitUnits = label => (String(label).match(/\((\d+)\)$/) || [])[1];
 const labelFor = (assoc, kind) => {
   if (kind === 'item') {
     return assoc.items?.length
@@ -28,8 +31,8 @@ const labelFor = (assoc, kind) => {
       : humanizeItemLabel(assoc.label);
   }
   if (kind === 'trait') {
-    const tier = traitTier(assoc.label);
-    return assoc.trait_name && tier ? `${assoc.trait_name} (${tier})` : humanizeTraitLabel(assoc.label);
+    const units = traitUnits(assoc.label);
+    return assoc.trait_name && units ? `${assoc.trait_name} · ${unitsText(units)}` : humanizeTraitLabel(assoc.label);
   }
   return assoc.display_name || assoc.label;
 };
@@ -453,9 +456,9 @@ async function showDetail(id) {
       </div>
 
       <div class="notes-row">
-        <p class="margin-note quiet">active trait breakpoints on the carry's board</p>
-        <section class="notes-section" aria-label="Trait breakpoints">
-          <h4>Trait breakpoints ${stamp('observed')}</h4>
+        <p class="margin-note quiet">active traits on the carry's board, by the unit count Riot reported</p>
+        <section class="notes-section" aria-label="Traits">
+          <h4>Traits ${stamp('observed')}</h4>
           ${ledgerList(c.best_trait_breakpoints, 'trait')}
         </section>
       </div>

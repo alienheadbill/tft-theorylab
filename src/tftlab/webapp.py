@@ -21,7 +21,7 @@ from .analytics import (
     discovery_candidate_for,
     discovery_population,
     item_package_stats,
-    trait_breakpoint_associations,
+    trait_count_associations,
 )
 from .carry import carry_commitment_sql
 from .champion_investigation import (
@@ -528,7 +528,7 @@ def create_app() -> FastAPI:
             if resolved_window is None:
                 raise HTTPException(status_code=404, detail="No data available")
             _require_carry(db, character_id, resolved_window)
-            associations = trait_breakpoint_associations(
+            associations = trait_count_associations(
                 db, character_id, resolved_window, min_games=min_games
             )
         return {

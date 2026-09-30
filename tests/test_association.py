@@ -197,7 +197,8 @@ def test_trait_breakpoint_associations_scoped_to_balance_window(tmp_path: Path) 
 
     assert len(associations) == 1
     juggernaut = associations[0]
-    assert juggernaut.key == "Juggernaut:2"
+    # Keyed by Riot's observed unit count (num_units=4), not tier_current (2).
+    assert juggernaut.key == "Juggernaut:4"
     assert juggernaut.games == 5
     assert juggernaut.top4_rate == 1.0
     assert juggernaut.top4_rate_without == 0.0

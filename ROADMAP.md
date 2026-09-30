@@ -56,7 +56,7 @@ Details are in the README.
   - proactive rate-limit pacing;
   - fatal-error abort when the key expires.
 - **Sampling and seed rotation** across the Challenger, Grandmaster, Master, Diamond and Platinum cohorts.
-- **Carry-centric analytics:** commitment, partners, item packages, trait breakpoints, Discovery / Opportunity Score.
+- **Carry-centric analytics:** commitment, partners, item packages, active traits by observed unit count, Discovery / Opportunity Score.
 - **Web prototype:** Discovery dashboard, "My Experiments" notebook and Comp Scout. It runs on a read-only database connection.
 - **Read-only research reports**, each run by manual dispatch: data diagnostics, Discovery and board archetypes.
 
@@ -136,8 +136,9 @@ Riot access currently uses a **development key that must be regenerated regularl
   - confidence and evidence type;
   - observed vs inferred results.
 - **Sequencing:** the slice uses whatever evidence is ready (Track 3). Families and variants arrive when Track 2 supports them. Once the slice works, generalize it across champions.
-- **First vertical slice (IMPLEMENTED):** `/champions` (pick a champion by name) and `/champions/<name>`, one data-driven template for every champion. It shows carry and 3★ hit/miss evidence, item builds and pairs, partners, trait breakpoints, sample size, balance window, freshness and the evidence type (observed only). Still FUTURE: recurring cores, composition families/variants and practical alternatives.
+- **First vertical slice (IMPLEMENTED):** `/champions` (pick a champion by name) and `/champions/<name>`, one data-driven template for every champion. It shows carry and 3★ hit/miss evidence, item builds and pairs, partners, traits, sample size, balance window, freshness and the evidence type (observed only). Still FUTURE: recurring cores, composition families/variants and practical alternatives.
 - **Refined from production use (IMPLEMENTED):** the page leads with "How players carry with {champion}" (observed facts and a separate rule-based interpretation), counts are "carry boards", special items are labelled and kept out of the normal-build summary, and Discovery no longer shows "no data" while loading.
+- **Traits use Riot's own counts (IMPLEMENTED):** trait evidence is grouped by Riot Match-V1's observed `num_units` ("Solar · 4 units"), with a separate active-trait share. Riot's `tier_current` ordinal is not presented as a unit count. Canonical threshold names need verified static trait metadata, which is not stored yet.
 - **Next (ACCEPTED/CURRENT):** keep refining from real use.
 
 ### Track 5: Analytics/API performance
