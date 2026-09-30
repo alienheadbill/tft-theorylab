@@ -105,10 +105,6 @@ permissions:
 # A single fixed group serializes runs (queued, never cancelled) so two
 # live ingests -- scheduled or manual, in any combination -- can never
 # write to production at once.
-concurrency:
-  group: live-ingest-production
-  cancel-in-progress: false
-
 jobs:
   live-ingest:
     if: >-
@@ -118,6 +114,9 @@ jobs:
         github.event.comment.user.login == 'alienheadbill' &&
         github.event.comment.body == '/ingest smoke'
       )
+    concurrency:
+      group: live-ingest-production
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     # Bounded: room for a 100 x 10 run at Riot development-key rate limits.
     # Maximum: the ingest step stops itself at max_duration_minutes (at most
