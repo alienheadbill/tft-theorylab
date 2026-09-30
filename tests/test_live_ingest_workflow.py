@@ -415,7 +415,7 @@ def test_preflight_rejects_bad_mode_or_budgets(env: dict) -> None:
 
 
 def test_preflight_accepts_the_scheduled_settings_and_says_so() -> None:
-    scheduled = {var: value for var, (_, value) in SCHEDULED.items()}
+    scheduled = {var: value for var, (_, value, _) in RUN_SETTINGS.items()}
     result = _run_preflight(RUN_TRIGGER="schedule", **scheduled)
     assert result.returncode == 0, result.stderr
     assert "Trigger: scheduled run" in result.stdout
@@ -425,6 +425,19 @@ def test_preflight_accepts_the_scheduled_settings_and_says_so() -> None:
         in result.stdout
     )
     assert "Planned histories: 10 matches per seed player." in result.stdout
+
+
+def test_preflight_accepts_the_fixed_ops_smoke_settings_and_says_so() -> None:
+    smoke = {var: value for var, (_, _, value) in RUN_SETTINGS.items()}
+    result = _run_preflight(RUN_TRIGGER="issue_comment", **smoke)
+    assert result.returncode == 0, result.stderr
+    assert "Trigger: owner-only Ops Control smoke" in result.stdout
+    assert "Collection mode: bounded." in result.stdout
+    assert (
+        "Planned seed cohorts: challenger=3 grandmaster=0 master=0 diamond=0 platinum=0 (total 3)"
+        in result.stdout
+    )
+    assert "Planned histories: 3 matches per seed player." in result.stdout
 
 
 def test_preflight_labels_manual_runs() -> None:
