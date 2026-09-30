@@ -136,6 +136,8 @@ Riot access currently uses a **development key that must be regenerated regularl
   - confidence and evidence type;
   - observed vs inferred results.
 - **Sequencing:** the slice uses whatever evidence is ready (Track 3). Families and variants arrive when Track 2 supports them. Once the slice works, generalize it across champions.
+- **First vertical slice (IMPLEMENTED):** `/champions` (pick a champion by name) and `/champions/<name>`, one data-driven template for every champion. It shows carry and 3★ hit/miss evidence, item builds and pairs, partners, trait breakpoints, sample size, balance window, freshness and the evidence type (observed only). Still FUTURE: recurring cores, composition families/variants and practical alternatives.
+- **Next (ACCEPTED/CURRENT):** review the page against real production data and refine it from what players need.
 
 ### Track 5: Analytics/API performance
 
@@ -191,7 +193,7 @@ Riot access currently uses a **development key that must be regenerated regularl
 
 1. Adopt this roadmap.
 2. ~~Implement safe scheduled continuous collection using the existing collector~~ (done; now measuring it) (Track 1).
-3. Begin the Champion Investigation vertical slice (Track 4).
+3. ~~Begin the Champion Investigation vertical slice~~ (first slice done; refining it) (Track 4).
 4. Develop the champion, item, partner, core and trait evidence that experience needs (Track 3).
 5. In parallel, instrument unchanged S2 to quantify recursive lock-in and order dependence (Track 2).
 6. Improve prepared analytics and API performance as real product requirements expose bottlenecks (Track 5).

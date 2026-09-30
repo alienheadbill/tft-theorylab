@@ -16,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tftlab import game_art
-from tftlab.game_art import champion_art, enrich_candidate, field_note_art, item_art, trait_art
+from tftlab.game_art import champion_art, champion_name, enrich_candidate, field_note_art, item_art, item_name, trait_art
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32  # the resolver never decodes; content is irrelevant
 
@@ -36,6 +36,7 @@ ITEMS = {
     "TFT_Item_RabadonsDeathcap": "Rabadon's Deathcap",
     "TFT_Item_RapidFireCannon": "Red Buff",
     "TFT_Item_RedBuff": "Sunfire Cape",
+    "TFT_Item_MadredsBloodrazor": "Giant Slayer",  # Set 18's DA_GiantSlayer aliases it
 }
 MISSING_FILE = "TFT_Item_LastWhisper"  # in the manifest, but its file is gone
 
@@ -138,16 +139,16 @@ def test_enrich_candidate_adds_local_urls_for_every_evidence_kind() -> None:
         "character_id": "DA_18_KhaZix",
         "name": "Kha'Zix",
         "best_partners": [{"key": "DA_18_Cassiopeia", "label": "Cassiopeia"}],
-        "best_item_packages": [{"key": "TFT_Item_InfinityEdge+TFT_Item_Unknown", "label": "TFT_Item_InfinityEdge+TFT_Item_Unknown"}],
+        "best_item_packages": [{"key": "TFT_Item_InfinityEdge+TFT_Item_Made_Up", "label": "TFT_Item_InfinityEdge+TFT_Item_Made_Up"}],
         "best_trait_breakpoints": [{"key": "DA_18_Slayer:2", "label": "DA_18_Slayer (2)"}],
     }
     enriched = enrich_candidate(candidate)
     assert enriched["art_url"] == champion_art("DA_18_KhaZix")
     assert enriched["best_partners"][0]["art_url"] == champion_art("DA_18_Cassiopeia")
     items = enriched["best_item_packages"][0]["items"]
-    assert [i["id"] for i in items] == ["TFT_Item_InfinityEdge", "TFT_Item_Unknown"]
+    assert [i["id"] for i in items] == ["TFT_Item_InfinityEdge", "TFT_Item_Made_Up"]
     assert items[0]["name"] == "Infinity Edge" and items[0]["art_url"] == item_art("TFT_Item_InfinityEdge")
-    assert items[1] == {"id": "TFT_Item_Unknown", "name": None, "art_url": None}
+    assert items[1] == {"id": "TFT_Item_Made_Up", "name": None, "art_url": None}
     trait = enriched["best_trait_breakpoints"][0]
     assert trait["art_url"] == trait_art("DA_18_Slayer") and trait["trait_name"] == "Ravager"
 
@@ -288,3 +289,18 @@ def test_frontend_art_is_lazy_sized_and_has_a_fallback() -> None:
     assert 'loading="lazy"' in js and 'width="${size}" height="${size}"' in js and 'alt=""' in js
     assert "startsWith('/static/game/')" in js  # only local URLs are ever rendered
     assert "addEventListener(\n  'error'" in js  # broken files fall back instead of showing a broken image
+
+
+def test_set_specific_item_ids_resolve_name_and_art_through_the_item_snapshot() -> None:
+    """Live Set 18 boards carry the set's own item ids ("DA_GiantSlayer"),
+    not the "TFT_Item_*" ids the art cache is keyed by. The committed item
+    snapshot names them and lists the standard id they alias."""
+    assert item_name("DA_GiantSlayer") == "Giant Slayer"
+    assert item_art("DA_GiantSlayer") == item_art("TFT_Item_MadredsBloodrazor") is not None
+    assert item_name("TFT_Item_Made_Up") is None and item_art("TFT_Item_Made_Up") is None
+
+
+def test_champion_name_prefers_cached_then_roster_then_fallback() -> None:
+    assert champion_name("DA_18_KhaZix", "DA_18_KhaZix") == "Kha'Zix"
+    assert champion_name("TFT99_Nobody", "fallback") == "fallback"
+    assert champion_name(None) is None

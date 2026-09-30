@@ -31,7 +31,14 @@ const labelFor = (assoc, kind) => {
     const tier = traitTier(assoc.label);
     return assoc.trait_name && tier ? `${assoc.trait_name} (${tier})` : humanizeTraitLabel(assoc.label);
   }
-  return assoc.label;
+  return assoc.display_name || assoc.label;
+};
+// Live Match-V1 units carry no names, so `name` can be the raw id; the API
+// adds `display_name` from the cached roster/art manifest.
+const displayName = c => c.display_name || c.name;
+const investigationHref = c => {
+  const q = state.balanceWindow ? `?balance_window=${encodeURIComponent(state.balanceWindow)}` : '';
+  return `/champions/${encodeURIComponent(c.slug || c.character_id)}${q}`;
 };
 
 // Matches `_LOW_SAMPLE_COMMITMENT_GAMES` in tftlab.cli's discovery-smoke.
@@ -225,9 +232,9 @@ function entryHtml(c, i, isLead) {
         ${isLead ? `<span class="lead-note">top of the list, by ${SORT_LABELS[state.sortBy]}</span>` : ''}
       </div>
       <div class="entry-head">
-        ${portrait(c.name, c.cost, c.art_url)}
+        ${portrait(displayName(c), c.cost, c.art_url)}
         <div class="entry-title">
-          <h3>${esc(c.name)}</h3>
+          <h3>${esc(displayName(c))}</h3>
           <p class="sample">n = <b>${fmtNum(n)}</b> committed games</p>
           ${low ? lowSampleNote() : ''}
         </div>
@@ -257,7 +264,7 @@ function entryHtml(c, i, isLead) {
         </div>
       </div>
       <div class="entry-foot">
-        <button type="button" class="open-notes" data-action="open" aria-label="Open working notes for ${esc(c.name)}">open working notes ${ARROW}</button>
+        <button type="button" class="open-notes" data-action="open" aria-label="Open working notes for ${esc(displayName(c))}">open working notes ${ARROW}</button>
       </div>
     </article>`;
 }
@@ -332,8 +339,9 @@ async function showDetail(id) {
         <div class="notes-head">
           <div>
             <p class="notes-kicker">working notes</p>
-            <h3 tabindex="-1">${esc(c.name)}</h3>
+            <h3 tabindex="-1">${esc(displayName(c))}</h3>
             <p class="notes-meta">${c.cost}-cost · n = <b>${fmtNum(n)}</b> committed games</p>
+            <p class="notes-meta"><a class="back-link" href="${esc(investigationHref(c))}">full champion investigation →</a></p>
             ${low ? lowSampleNote() : ''}
           </div>
           ${scoreMark(c.opportunity_score, hashIndex(c.character_id))}

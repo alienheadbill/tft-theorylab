@@ -17,6 +17,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from .game_art_refresh import ART_DIR, MANIFEST_PATH, empty_manifest
+from .items import ITEM_STATS_PATH
 from .roster import id_key, load_roster, name_key
 
 if TYPE_CHECKING:
@@ -34,6 +35,18 @@ def load_manifest() -> dict[str, Any]:
     if not MANIFEST_PATH.exists():
         return empty_manifest()
     return json.loads(MANIFEST_PATH.read_text())
+
+
+@lru_cache(maxsize=1)
+def _item_metadata() -> dict[str, Any]:
+    """The committed CommunityDragon item snapshot (`data/item_stats.json`):
+    display names for every item id Match-V1 can return -- including a set's
+    own ids such as Set 18's `DA_GiantSlayer` -- and `alias_of`, the standard
+    `TFT_Item_*` ids the same item is known by. Empty if absent."""
+    try:
+        return json.loads(ITEM_STATS_PATH.read_text()).get("items") or {}
+    except FileNotFoundError:
+        return {}
 
 
 @lru_cache(maxsize=4096)
@@ -78,12 +91,18 @@ def champion_art(character_id: str | None = None, name: str | None = None) -> st
 
 
 def item_art(item: str | None) -> str | None:
-    """By canonical id ("TFT_Item_InfinityEdge"), else an exact, unique match
+    """By canonical id ("TFT_Item_InfinityEdge"); else through the item
+    snapshot's `alias_of` (a set's own id, e.g. "DA_GiantSlayer", is an alias
+    of the cached "TFT_Item_MadredsBloodrazor"); else an exact, unique match
     on the display name or the id's normalized form ("Infinity Edge")."""
     if not item:
         return None
-    if item in load_manifest().get("items", {}):
+    cached = load_manifest().get("items", {})
+    if item in cached:
         return _url("items", item)
+    for alias in (_item_metadata().get(item) or {}).get("alias_of") or ():
+        if alias in cached:
+            return _url("items", alias)
     return _url("items", _unique_by_name("items", item, extra_key=id_key))
 
 
@@ -97,8 +116,22 @@ def trait_art(trait: str | None) -> str | None:
 
 
 def item_name(item_id: str) -> str | None:
+    """The cached item's name, else the item snapshot's name for that id."""
     entry = load_manifest().get("items", {}).get(item_id)
-    return entry["name"] if entry else None
+    if entry:
+        return entry["name"]
+    meta = _item_metadata().get(item_id)
+    return (meta or {}).get("name") or None
+
+
+def champion_name(character_id: str | None, fallback: str | None = None) -> str | None:
+    """Display name for a champion id: the cached champion's name, else the
+    roster's, else `fallback`. Live Match-V1 units carry no display name, so
+    the stored `unit_name` is usually the id itself ("DA_18_KhaZix")."""
+    entry = load_manifest().get("champions", {}).get(character_id or "")
+    if entry and entry.get("name"):
+        return entry["name"]
+    return load_roster().champion_name(character_id) or fallback
 
 
 def trait_name(trait_id: str) -> str | None:
@@ -119,9 +152,11 @@ def _item_refs(package_key: str) -> list[dict[str, Any]]:
 
 
 def enrich_association(assoc: dict[str, Any], kind: str) -> dict[str, Any]:
-    """Add local art to one partner/item/trait association (additive keys only)."""
+    """Add local art (and, for partners, the display name) to one
+    partner/item/trait association (additive keys only)."""
     if kind == "partner":
         assoc["art_url"] = champion_art(assoc.get("key"), assoc.get("label"))
+        assoc["display_name"] = champion_name(assoc.get("key"), assoc.get("label"))
     elif kind == "item":
         assoc["items"] = _item_refs(assoc.get("key") or "")
     elif kind == "trait":
@@ -133,6 +168,8 @@ def enrich_association(assoc: dict[str, Any], kind: str) -> dict[str, Any]:
 
 def enrich_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     candidate["art_url"] = champion_art(candidate.get("character_id"), candidate.get("name"))
+    candidate["display_name"] = champion_name(candidate.get("character_id"), candidate.get("name"))
+    candidate["slug"] = name_key(candidate["display_name"]) or id_key(candidate.get("character_id"))
     for key, kind in (("best_partners", "partner"), ("best_item_packages", "item"), ("best_trait_breakpoints", "trait")):
         for assoc in candidate.get(key) or []:
             enrich_association(assoc, kind)
