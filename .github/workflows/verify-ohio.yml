@@ -1,0 +1,112 @@
+name: Verify Ohio production candidate
+
+on:
+  workflow_dispatch:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (
+        github.event.issue.number == 38 &&
+        github.event.comment.user.login == 'alienheadbill' &&
+        github.event.comment.body == '/verify ohio'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OLD_BASE: https://tft-theory-lab.onrender.com
+      NEW_BASE: https://tft-theory-lab-ohio.onrender.com
+    steps:
+      - name: Verify correctness and collect timings
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p verify
+
+          fetch() {
+            local base="$1"
+            local path="$2"
+            local out="$3"
+            curl --fail-with-body --silent --show-error --retry 2 --retry-delay 1 --connect-timeout 20 --max-time 180 "${base}${path}" -o "${out}"
+          }
+
+          measure() {
+            local base="$1"
+            local path="$2"
+            curl --fail-with-body --silent --show-error --connect-timeout 20 --max-time 180 -o /dev/null -w '%{time_total}' "${base}${path}"
+          }
+
+          paths=(
+            "/api/health"
+            "/api/champions"
+            "/api/champions/khazix"
+            "/api/discovery?max_cost=3&min_samples=10&top_n=5&limit=20"
+          )
+
+          for i in "${!paths[@]}"; do
+            path="${paths[$i]}"
+            fetch "${OLD_BASE}" "${path}" "verify/old-${i}.json"
+            fetch "${NEW_BASE}" "${path}" "verify/new-${i}.json"
+          done
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          names = ['health', 'champions', 'khazix', 'discovery']
+          for i, name in enumerate(names):
+              old = json.loads(Path(f'verify/old-{i}.json').read_text())
+              new = json.loads(Path(f'verify/new-{i}.json').read_text())
+              if old != new:
+                  raise SystemExit(f'{name}: old and Ohio JSON responses differ')
+              print(f'{name}: semantic JSON match')
+
+          health = json.loads(Path('verify/new-0.json').read_text())
+          assert health['ok'] is True, health
+          assert health['demo'] is False, health
+          assert health['backend'] == 'postgres', health
+          assert health['matches'] == 3343, health
+          assert health['participants'] == 26744, health
+          print('Ohio health confirms live Postgres data: 3343 matches / 26744 participants')
+          PY
+
+          {
+            echo '### Ohio candidate verification'
+            echo
+            echo 'Correctness:'
+            echo '- Health API: semantic match'
+            echo '- Champion directory API: semantic match'
+            echo "- Kha'Zix investigation API: semantic match"
+            echo '- Discovery API: semantic match'
+            echo '- Ohio backend: Postgres, non-demo, 3,343 matches / 26,744 participants'
+            echo
+            echo 'Warm request timings from this GitHub runner (seconds; network path is not controlled):'
+            echo
+            echo '| Endpoint | Oregon app | Ohio app |'
+            echo '|---|---:|---:|'
+
+            for path in "${paths[@]}"; do
+              measure "${OLD_BASE}" "${path}" >/dev/null
+              measure "${NEW_BASE}" "${path}" >/dev/null
+              old_sum=0
+              new_sum=0
+              for _ in 1 2 3; do
+                old_t="$(measure "${OLD_BASE}" "${path}")"
+                new_t="$(measure "${NEW_BASE}" "${path}")"
+                old_sum="$(awk -v a="${old_sum}" -v b="${old_t}" 'BEGIN { printf "%.6f", a+b }')"
+                new_sum="$(awk -v a="${new_sum}" -v b="${new_t}" 'BEGIN { printf "%.6f", a+b }')"
+              done
+              old_avg="$(awk -v x="${old_sum}" 'BEGIN { printf "%.3f", x/3 }')"
+              new_avg="$(awk -v x="${new_sum}" 'BEGIN { printf "%.3f", x/3 }')"
+              printf '| %s | %s | %s |\n' "${path}" "${old_avg}" "${new_avg}"
+            done
+
+            echo
+            echo 'Timing figures above are comparative smoke data only; Render server-side latency metrics are the better follow-up signal.'
+          } >> "${GITHUB_STEP_SUMMARY}"
