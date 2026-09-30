@@ -3,7 +3,7 @@ name: Read-only archetype research report
 # RESEARCH / VALIDATION INFRASTRUCTURE -- not a production feature.
 #
 # Manually-triggered, read-only board-archetype research report against the
-# production database (DATABASE_URL lives only in this repository's Actions
+# production database (NEON_DATABASE_URL lives only in this repository's Actions
 # secrets). It runs exactly one command, `tftlab archetype-report`, which
 # opens the database with Database.open_existing only: the session is
 # started with default_transaction_read_only=on, the report refuses to run
@@ -42,7 +42,7 @@ jobs:
       # only -- never echoes DATABASE_URL.
       - name: Validate production configuration
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           BALANCE_WINDOW: ${{ github.event.inputs.balance_window }}
         run: |
           if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
@@ -50,7 +50,7 @@ jobs:
             exit 1
           fi
           if [ -z "${DATABASE_URL}" ]; then
-            echo "::error::DATABASE_URL repository secret is not set. Refusing to proceed: the CLI's local-SQLite fallback must never be used against production." >&2
+            echo "::error::NEON_DATABASE_URL repository secret is not set. Refusing to proceed: the CLI's local-SQLite fallback must never be used against production." >&2
             exit 1
           fi
           case "${DATABASE_URL}" in
@@ -78,7 +78,7 @@ jobs:
       - name: Run archetype research report (read-only)
         timeout-minutes: 170
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           BALANCE_WINDOW: ${{ github.event.inputs.balance_window }}
         run: tftlab archetype-report --out-dir archetype-report --balance-window "$BALANCE_WINDOW"
 

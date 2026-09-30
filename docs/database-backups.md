@@ -10,10 +10,11 @@ The production database is **read only** during the backup. The workflow does no
 
 ### Required repository secrets
 
-- `DATABASE_URL` — the production Postgres URL. This already exists for Live ingest.
+- `NEON_DATABASE_URL` — the production Neon Postgres URL. Live ingest, read-only production diagnostics, and backups use this secret.
+- `DATABASE_URL` — temporarily retained as the legacy Render Postgres rollback/migration-source URL. It is not the active production destination after the Neon cutover.
 - `DB_BACKUP_PASSPHRASE` — a long random passphrase used only to encrypt/decrypt database backups.
 
-Do not put either value in the repository, issues, logs, or chat. Store the backup passphrase in a password manager. Losing it makes the encrypted backups unusable.
+Do not put any database URL or backup passphrase in the repository, issues, logs, or chat. Store the backup passphrase in a password manager. Losing it makes the encrypted backups unusable.
 
 The workflow refuses to run if the passphrase is shorter than 24 characters.
 
@@ -80,4 +81,4 @@ pg_restore --no-owner --no-acl \
   theorylabs.dump
 ```
 
-For a migration, verify row counts and application health against the target before changing production `DATABASE_URL`.
+For a migration, verify row counts, schema/content fingerprints, and application health against the target before changing which secret production workflows consume. The legacy Render database should remain untouched as a rollback snapshot until Neon has been operating successfully.
