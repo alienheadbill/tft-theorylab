@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Champion Investigation · TFT Theory Lab</title>
+  <meta name="description" content="Pick a champion to carry and see what indexed ranked matches say about building around it." />
+  <meta name="color-scheme" content="dark" />
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body class="champion-body">
+  <a class="skip-link" href="#main-content">Skip to the champion</a>
+
+  <header class="cover cover-compact">
+    <div class="cover-top">
+      <p class="cover-kicker">champion investigation</p>
+      <nav class="cover-nav" aria-label="Sections">
+        <a href="/#discoveries">discoveries</a>
+        <a href="/champions" aria-current="page">champions</a>
+        <a href="/experiments">my experiments</a>
+        <a href="/#method">method</a>
+      </nav>
+    </div>
+    <h1><span class="scribble">Champion Investigation</span></h1>
+    <p class="cover-tagline">&ldquo;I want to carry with this champion. What does the data say?&rdquo;</p>
+
+    <div class="ledger">
+      <label class="ledger-item ledger-window">
+        <span class="ledger-label">balance window</span>
+        <select id="window-filter"><option value="">loading…</option></select>
+      </label>
+      <div class="ledger-item"><span class="ledger-label">matches in window</span><strong id="window-matches">—</strong></div>
+      <div class="ledger-item"><span class="ledger-label">latest game</span><strong id="window-latest">—</strong></div>
+      <div class="ledger-item ledger-source">
+        <span class="ledger-label">source</span>
+        <strong class="source-value"><span id="status-dot" class="status-mark" aria-hidden="true"></span><span id="data-mode">loading…</span></strong>
+      </div>
+    </div>
+
+    <p class="cover-premise">
+      <svg class="hand-arrow" viewBox="0 0 34 14" aria-hidden="true" focusable="false"><path d="M2 8 C 9 5, 18 9, 30 7"/><path d="M24 2.5 L 31 7 L 24.5 12"/></svg>
+      Everything here is observed in indexed ranked matches from one balance window. Nothing is predicted, and patches are never mixed.
+    </p>
+  </header>
+
+  <main id="main-content">
+    <p id="view-status" class="visually-hidden" role="status" aria-live="polite"></p>
+    <section class="page" id="champion-view" aria-label="Champion investigation" hidden></section>
+
+    <section class="page" id="champion-picker" aria-labelledby="picker-title">
+      <header class="page-head">
+        <h2 id="picker-title"><span class="hl">Pick a champion</span></h2>
+        <p class="page-sub">Search by name, or browse by cost. The number under each champion is how many games in this balance window it was built as a carry.</p>
+      </header>
+      <form class="controls picker-controls" id="picker-controls" role="search" aria-label="Find a champion">
+        <label class="field field-grow">
+          <span class="field-label">champion name</span>
+          <input type="search" id="champion-search" autocomplete="off" spellcheck="false" placeholder="e.g. Kha'Zix" />
+        </label>
+        <label class="check-field">
+          <input type="checkbox" id="only-carried" />
+          <span>only champions with carry games</span>
+        </label>
+      </form>
+      <p id="picker-count" class="picker-count" aria-live="polite"></p>
+      <div id="champion-list"><p class="state-note">Loading champions…</p></div>
+    </section>
+  </main>
+
+  <footer class="colophon">
+    TFT Theory Lab &middot; <span id="footer-mode">—</span> &middot; observed indexed-match statistics for one balance window; comp families are not shown because that research is still experimental.
+  </footer>
+  <script src="/static/art.js"></script>
+  <script src="/static/champion.js"></script>
+</body>
+</html>

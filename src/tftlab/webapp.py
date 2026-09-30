@@ -22,6 +22,13 @@ from .analytics import (
     trait_breakpoint_associations,
 )
 from .carry import carry_commitment_sql
+from .champion_investigation import (
+    OBSERVED,
+    champion_directory,
+    champion_investigation,
+    find_champion,
+    window_carry_stats,
+)
 from .demo import generate_demo_matches
 from .experiments import ExperimentNotFound, get_experiment, list_experiments, seed_demo_experiments
 from .game_art import enrich_candidate, experiment_art, field_note_art
@@ -249,6 +256,13 @@ def create_app() -> FastAPI:
     @app.get("/", include_in_schema=False)
     def home() -> FileResponse:
         return FileResponse(WEB_DIR / "index.html")
+
+    @app.get("/champions", include_in_schema=False)
+    @app.get("/champions/{key}", include_in_schema=False)
+    def champions_page(key: str | None = None) -> FileResponse:
+        # One page for the champion picker and each investigation;
+        # champion.js reads the path and calls the read-only API below.
+        return FileResponse(WEB_DIR / "champion.html")
 
     @app.get("/experiments", include_in_schema=False)
     @app.get("/experiments/{key}", include_in_schema=False)
@@ -480,6 +494,42 @@ def create_app() -> FastAPI:
             "character_id": character_id,
             "traits": [asdict(a) for a in associations],
         }
+
+    @app.get("/api/champions")
+    def champions(balance_window: str | None = Query(None)) -> dict[str, object]:
+        """Every current-set champion with its carry-game count in one
+        balance window, so a player can pick one by name."""
+        db, demo = _resolve_database()
+        with db:
+            resolved_window = balance_window or default_balance_window(db)
+            directory = champion_directory(db, resolved_window)
+        return {
+            "demo": demo,
+            "backend": db.dialect,
+            "balance_window": resolved_window,
+            "evidence_type": OBSERVED,
+            "champions": directory,
+        }
+
+    @app.get("/api/champions/{key}")
+    def champion_detail(
+        key: str,
+        balance_window: str | None = Query(None),
+        top_n: int = Query(6, ge=1, le=20, description="Rows kept per evidence list"),
+    ) -> dict[str, object]:
+        """One champion's carry investigation in one balance window. `key`
+        is a name or slug ("khazix", "Kha'Zix") or a Riot id. Unknown
+        champions are 404; a known champion with no carry games in the window
+        is a normal 200 with `carry: null` (the page shows its empty state)."""
+        db, demo = _resolve_database()
+        with db:
+            resolved_window = balance_window or default_balance_window(db)
+            stats = window_carry_stats(db, resolved_window)
+            champion = find_champion(champion_directory(db, resolved_window, stats=stats), key)
+            if champion is None:
+                raise HTTPException(status_code=404, detail="Champion not found")
+            body = champion_investigation(db, champion, resolved_window, stats=stats, top_n=top_n)
+        return {"demo": demo, "backend": db.dialect, **body}
 
     @app.get("/api/discovery")
     def discovery(

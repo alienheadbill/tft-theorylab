@@ -292,6 +292,8 @@ Every carry/discovery endpoint below is balance-window scoped (`?balance_window=
 - `GET /api/carries/{character_id}/traits` -- trait-breakpoint associations
 - `GET /api/carries`, `GET /api/carries/{character_id}` -- unchanged; predate `/api/discovery` and are kept for their own existing tests/consumers
 - `GET /api/experiments`, `GET /api/experiments/{slug-or-id}` -- the read-only theorycraft notebook (see below); not balance-window scoped
+- `GET /api/champions` -- every current-set champion (the art manifest's list) with display name, cost, slug, art and its carry-game count in the window
+- `GET /api/champions/{name-or-id}` -- one champion's carry investigation (`top_n` rows per list); the key is a name or slug (`khazix`, `Kha'Zix`) or a Riot id. Unknown champions are 404; a known champion with no carry games in the window is a 200 with `carry: null`
 
 ## Frontend: Discovery Dashboard
 
@@ -302,6 +304,17 @@ Visually it's a "strategist's notebook": system serif/monospace type (no web fon
 Champion/item/trait art isn't fetched from CommunityDragon here (that would add a live external dependency to every page load). Instead, champions get a taped `figure.portrait` frame and partners/items/traits get a small clipped `.ref-icon` slot, both showing initials for now; both frames already style a child `<img>` (`object-fit: cover`), so real art can drop into the same frames later without a layout change.
 
 Evidence is currently always labeled `OBSERVED` (a real statistical result); `VARIANT` and `THEORYCRAFTED` styles exist in the CSS for later use but are never applied yet, since nothing in the backend synthesizes either kind of result today.
+
+## Frontend: Champion Investigation
+
+`/champions` lets a player pick a champion by name (search, or browse by cost), and `/champions/<name>` answers "I want to carry with this champion: what does our data say?" for one balance window. The page has its own window selector, kept in the URL (`?balance_window=`). It is one data-driven template for every champion; nothing champion-specific is hardcoded. All numbers come from `tftlab.champion_investigation`, a read-only view over the existing carry analytics (`carry_commitment_stats`, `item_package_stats`, `carry_partner_associations`, `trait_breakpoint_associations`); nothing is recalculated in JavaScript.
+
+- **How it does as a carry:** carry games (2+ completed items, at least one a carry item), how often it is built as a carry when played, average placement / Top 4 / first place next to the window's all-carry average, 3★ rate, and hit-vs-miss results.
+- **What to build on it:** the most common full build, then 3-item builds and item pairs. Each row shows how often its carry boards used it, and Top 4 with vs. without it. Rows are ordered by the existing shrinkage-adjusted association, never called best-in-slot.
+- **Who it plays with / Traits on its boards:** the same with-vs-without view, labelled as association, not causation. A trait's "breakpoint N" is Riot's active tier, not a unit count.
+- **How much to trust this:** sample bands (the `research_report` evidence bands: 60 / 30 / 10 carry games), LOW SAMPLE at under 30 carry games (Discovery's threshold), "Limited sample" on rows with fewer than 10 games on either side of the comparison, the balance window with its match count and latest game, and what the page does not show yet.
+
+Everything on the page is **Observed**. Composition families, cores, positioning, augments and leveling plans are not shown: the archetype research is experimental and is never served. Live Match-V1 units carry no display names and Set 18 items use their own ids (`DA_GiantSlayer`), so names and icons are resolved through the committed art manifest, roster and item snapshot (`alias_of`). Discovery cards now use the same display names and link to the champion's investigation.
 
 ## Theorycraft notebook ("My Experiments")
 
