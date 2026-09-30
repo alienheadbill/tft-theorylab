@@ -20,10 +20,6 @@ permissions:
 
 # Serialize with live ingestion and backups so the source database cannot be
 # modified by our collector while pg_dump is taking its snapshot.
-concurrency:
-  group: live-ingest-production
-  cancel-in-progress: false
-
 jobs:
   migrate:
     if: >-
@@ -33,6 +29,9 @@ jobs:
         github.event.comment.user.login == 'alienheadbill' &&
         github.event.comment.body == '/migrate neon'
       )
+    concurrency:
+      group: live-ingest-production
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
