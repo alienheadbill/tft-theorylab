@@ -209,8 +209,15 @@ def test_ingest_ladder_is_idempotent_across_runs(tmp_path: Path) -> None:
     )
 
     with Database(tmp_path / "idempotent.sqlite3") as db:
-        first = ingest_ladder(client, db, player_limit=10, matches_per_player=10)
-        second = ingest_ladder(client, db, player_limit=10, matches_per_player=10)
+        # This test exercises match idempotency, not GitHub Actions run-id
+        # generation. Give the two intentional ingests distinct run ids so
+        # a CI runner's shared GITHUB_RUN_ID cannot make the test collide.
+        first = ingest_ladder(
+            client, db, player_limit=10, matches_per_player=10, run_id="idempotency-run-1"
+        )
+        second = ingest_ladder(
+            client, db, player_limit=10, matches_per_player=10, run_id="idempotency-run-2"
+        )
 
     assert first.matches_inserted == 1
     assert first.duplicates_skipped == 0
