@@ -18,8 +18,10 @@ on:
 permissions:
   contents: read
 
+# Share the live-ingest concurrency group so a dump never overlaps a production
+# write run. A backup/ingest waits for the other; neither is cancelled.
 concurrency:
-  group: production-db-backup
+  group: live-ingest-production
   cancel-in-progress: false
 
 jobs:
