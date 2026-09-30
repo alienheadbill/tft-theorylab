@@ -562,7 +562,11 @@ MAX_ARGS = ["--collection-mode", "maximum", "--start-time", "2026-09-24T07:00:00
 def test_cli_rejects_invalid_mode_combinations(monkeypatch, tmp_path, args, message) -> None:
     result, _ = _cli(monkeypatch, tmp_path, args)
     assert result.exit_code != 0
-    assert message in " ".join(re.sub("[│╭╮╰╯─]", " ", result.output).split())
+    # Typer/Rich may insert ANSI style boundaries inside option names on CI;
+    # formatting is not part of the CLI contract this test is checking.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    plain = " ".join(re.sub("[│╭╮╰╯─]", " ", plain).split())
+    assert message in plain
 
 
 def test_cli_plan_makes_no_network_call(monkeypatch, tmp_path) -> None:
