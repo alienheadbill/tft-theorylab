@@ -3,6 +3,7 @@ services:
     name: tft-theory-lab
     runtime: python
     plan: free
+    region: ohio
     buildCommand: pip install -e ".[postgres]"
     startCommand: uvicorn tftlab.webapp:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
@@ -17,8 +18,8 @@ services:
         value: data/tftlab.sqlite3
       - key: RIOT_API_KEY
         sync: false
-      # Optional: point at a Postgres instance (e.g. a Render Postgres
-      # database's "Internal Connection String") for production storage.
-      # Leave unset to keep using the ephemeral SQLite/demo fallback.
+      # Production uses the Neon Ohio Postgres database. Keep the credential
+      # in Render's secret environment only; never commit it here.
+      # Leave unset only for local/demo-style deployments.
       - key: DATABASE_URL
         sync: false
