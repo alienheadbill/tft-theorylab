@@ -31,14 +31,14 @@ jobs:
       # only -- never echoes DATABASE_URL.
       - name: Validate production configuration
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: |
           if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
             echo "::error::This workflow must be run with 'main' explicitly selected as the branch (got ${GITHUB_REF})." >&2
             exit 1
           fi
           if [ -z "${DATABASE_URL}" ]; then
-            echo "::error::DATABASE_URL repository secret is not set." >&2
+            echo "::error::NEON_DATABASE_URL repository secret is not set." >&2
             exit 1
           fi
           case "${DATABASE_URL}" in
@@ -62,5 +62,5 @@ jobs:
 
       - name: Participants without stored units (read-only)
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: python scripts/diagnostics/participants_without_units.py
