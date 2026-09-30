@@ -1,0 +1,160 @@
+name: Encrypted Postgres backup
+
+# Protect the production dataset independently of the database host.
+# This workflow never runs on push/pull_request and never writes to production.
+#
+# Required repository secrets:
+# - DATABASE_URL: production Postgres connection string (already used by live ingest)
+# - DB_BACKUP_PASSPHRASE: long random passphrase stored separately by the operator
+#
+# The plaintext dump exists only on GitHub's ephemeral runner. The uploaded
+# artifact contains only an AES-256-CBC/PBKDF2 encrypted pg_dump plus checksum.
+on:
+  schedule:
+    # Weekly, off the hour. Scheduled workflows run from the default branch.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Share the live-ingest concurrency group so a dump never overlaps a production
+# write run. A backup/ingest waits for the other; neither is cancelled.
+concurrency:
+  group: live-ingest-production
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DB_BACKUP_PASSPHRASE: ${{ secrets.DB_BACKUP_PASSPHRASE }}
+    steps:
+      - name: Validate backup configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::Backups must run from main (got ${GITHUB_REF})." >&2
+            exit 1
+          fi
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "::error::DATABASE_URL repository secret is not set." >&2
+            exit 1
+          fi
+          case "${DATABASE_URL}" in
+            postgres://*|postgresql://*) ;;
+            *)
+              echo "::error::DATABASE_URL must be a Postgres URL." >&2
+              exit 1
+              ;;
+          esac
+          if [ -z "${DB_BACKUP_PASSPHRASE}" ]; then
+            echo "::error::DB_BACKUP_PASSPHRASE repository secret is not set." >&2
+            exit 1
+          fi
+          if [ "${#DB_BACKUP_PASSPHRASE}" -lt 24 ]; then
+            echo "::error::DB_BACKUP_PASSPHRASE must be at least 24 characters." >&2
+            exit 1
+          fi
+          echo "Backup configuration present. Secrets are not printed."
+
+      - name: Create, encrypt, and verify backup
+        id: backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+
+          STAMP="$(date -u +'%Y%m%dT%H%M%SZ')"
+          DUMP="theorylabs-${STAMP}.dump"
+          ENC="${DUMP}.enc"
+          VERIFY="verify-${STAMP}.dump"
+          CHECKSUM="${ENC}.sha256"
+
+          cleanup() {
+            rm -f "${DUMP}" "${VERIFY}"
+            docker rm -f theorylabs-backup-verify >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          # Use a modern official Postgres client image instead of relying on
+          # the runner's preinstalled client version. Custom-format dumps are
+          # compressed and portable across hosts.
+          docker run --rm \
+            --env DATABASE_URL \
+            postgres:18 \
+            sh -c 'pg_dump --format=custom --compress=9 --no-owner --no-acl "$DATABASE_URL"' \
+            > "${DUMP}"
+
+          test -s "${DUMP}"
+
+          DB_BYTES="$(docker run --rm --env DATABASE_URL postgres:18 \
+            sh -c 'psql "$DATABASE_URL" -Atqc "SELECT pg_database_size(current_database());"')"
+
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 250000 -md sha256 \
+            -pass env:DB_BACKUP_PASSPHRASE \
+            -in "${DUMP}" -out "${ENC}"
+
+          test -s "${ENC}"
+          sha256sum "${ENC}" > "${CHECKSUM}"
+
+          # Verify both encryption and the dump itself before publishing it.
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 -md sha256 \
+            -pass env:DB_BACKUP_PASSPHRASE \
+            -in "${ENC}" -out "${VERIFY}"
+
+          cmp --silent "${DUMP}" "${VERIFY}"
+
+          docker run -d --rm \
+            --name theorylabs-backup-verify \
+            -e POSTGRES_PASSWORD=verify-only \
+            -e POSTGRES_DB=verifydb \
+            -v "$PWD:/backup:ro" \
+            postgres:18 >/dev/null
+
+          for _ in $(seq 1 30); do
+            if docker exec theorylabs-backup-verify pg_isready -U postgres >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec theorylabs-backup-verify pg_isready -U postgres >/dev/null
+
+          docker exec theorylabs-backup-verify \
+            pg_restore --no-owner --no-acl -U postgres -d verifydb "/backup/${VERIFY}"
+
+          DUMP_BYTES="$(stat -c %s "${DUMP}")"
+          ENC_BYTES="$(stat -c %s "${ENC}")"
+
+          echo "artifact_file=${ENC}" >> "${GITHUB_OUTPUT}"
+          echo "checksum_file=${CHECKSUM}" >> "${GITHUB_OUTPUT}"
+          echo "stamp=${STAMP}" >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "### Production database backup"
+            echo
+            echo "- Source database size: ${DB_BYTES} bytes"
+            echo "- Compressed dump size: ${DUMP_BYTES} bytes"
+            echo "- Encrypted artifact size: ${ENC_BYTES} bytes"
+            echo "- Full restore into an ephemeral Postgres 18 database: **passed**"
+            echo "- Backup timestamp: ${STAMP}"
+            echo
+            echo "Only the encrypted file and its checksum are uploaded."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload encrypted backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: theorylabs-postgres-backup-${{ steps.backup.outputs.stamp }}
+          path: |
+            ${{ steps.backup.outputs.artifact_file }}
+            ${{ steps.backup.outputs.checksum_file }}
+          if-no-files-found: error
+          # GitHub Free includes only 500 MB of Actions artifact storage.
+          # Weekly backups are intentionally short-retention; keep a separate
+          # offline/R2 copy for long-term history.
+          retention-days: 8
+          compression-level: 0
