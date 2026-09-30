@@ -370,7 +370,7 @@ function trustSection(inv) {
         <div><dt>Carry board</dt><dd>One player's final board where this champion finished with 2+ completed items, at least one of them a carry item. Boards that missed the 3★ still count, so bad outcomes aren't hidden.</dd></div>
         <div><dt>Boards, not matches</dt><dd>Every match has eight player boards, so a champion can be carried on more boards than there are matches in the window.</dd></div>
         <div><dt>With vs. without</dt><dd>Item, partner and trait rows compare this champion's carry boards that had the thing against its carry boards that didn't. Rows marked ${stamp('low', 'Limited sample')} have fewer than ${SMALL_SPLIT} boards on one side of that comparison.</dd></div>
-        <div><dt>Interpretation</dt><dd>The reading in "How players carry" comes from fixed rules, not a model. The 3★ reading needs at least 30 boards on each side of the 3★ split and a gap a standard two-proportion test (95%) wouldn't attribute to chance; otherwise it says the evidence is too thin or the gap is within chance.</dd></div>
+        <div><dt>Interpretation</dt><dd>The reading in "How players carry" comes from fixed rules, not a model. The 3★ comparison needs at least 30 boards on each side before TheoryLabs interprets it; then it reports the observed Top 4 difference in percentage points. That is an association, not proof that reaching 3★ caused the result.</dd></div>
         <div><dt>Not shown yet</dt><dd>Full comp families and recurring cores (that research is still experimental and unvalidated), positioning, augments, and leveling or rolling plans.</dd></div>
       </dl>
     </section>`;
