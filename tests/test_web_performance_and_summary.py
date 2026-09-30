@@ -190,15 +190,6 @@ def test_association_ties_are_ordered_by_key() -> None:
 # ---------------------------------------------------------------- summary rules
 
 
-def test_top4_gap_test_matches_a_worked_example() -> None:
-    from tftlab.champion_investigation import top4_gap_is_clear
-
-    # 0.674 vs 0.312 on 100 vs 100: z ~ 5.1 -> clear. 0.52 vs 0.50 on 40 vs 40: z ~ 0.18 -> not clear.
-    assert top4_gap_is_clear(0.674, 100, 0.312, 100) is True
-    assert top4_gap_is_clear(0.52, 40, 0.50, 40) is False
-    assert top4_gap_is_clear(0.5, 0, 0.5, 10) is False
-
-
 def _carry(games, hit, miss, hit_top4, miss_top4):
     return {"games": games, "three_star": {"hit_games": hit, "miss_games": miss, "hit_rate": hit / games,
                                            "hit_top4_rate": hit_top4, "miss_top4_rate": miss_top4}}
@@ -218,13 +209,19 @@ def _text(summary) -> str:
     return " ".join(summary["observed"] + summary["interpretation"]).lower()
 
 
-def test_clear_three_star_dependency_is_stated_with_numbers_and_no_strategy() -> None:
+def test_three_star_difference_is_stated_as_observational_signal_with_numbers() -> None:
     from tftlab.champion_investigation import carry_summary
 
     s = carry_summary("Kha'Zix", _carry(300, 150, 150, 0.674, 0.312), [], [], [])
     assert any("reached 3★" in line for line in s["observed"])
-    assert any("dependent on reaching 3★" in line and "31.2%" in line and "67.4%" in line
-               for line in s["interpretation"])
+    assert any(
+        "higher observed Top 4" in line
+        and "67.4%" in line
+        and "31.2%" in line
+        and "+36.2 percentage points" in line
+        and "not proof that 3★ caused" in line
+        for line in s["interpretation"]
+    )
     assert not any(w in _text(s) for w in STRATEGY_WORDS)
 
 
@@ -237,7 +234,9 @@ def test_small_or_one_sided_splits_do_not_produce_a_three_star_claim() -> None:
     tiny = carry_summary("X", _carry(12, 5, 7, 0.8, 0.3), [], [], [])
     assert any("early signal" in line for line in tiny["interpretation"])
     within = carry_summary("X", _carry(200, 100, 100, 0.52, 0.50), [], [], [])
-    assert any("no clear difference" in line for line in within["interpretation"])
+    assert any("higher observed Top 4" in line and "+2.0 percentage points" in line for line in within["interpretation"])
+    equal = carry_summary("X", _carry(200, 100, 100, 0.50, 0.50), [], [], [])
+    assert any("Observed Top 4 was the same" in line for line in equal["interpretation"])
     none = carry_summary("X", _carry(80, 0, 80, None, 0.5), [], [], [])
     assert any("None of the" in line for line in none["observed"]) and not any("3★" in l for l in none["interpretation"])
 
@@ -318,6 +317,17 @@ def test_champion_page_leads_with_how_players_carry_and_keeps_methodology_below(
     assert "How players carry with" in js and "stamp('interpretation', 'Interpretation')" in js
     assert "2+ completed items, at least one of them a carry item" in js  # still explained, in the trust section
     assert "position" not in js.lower().replace("positioning advice", "").replace("positioning, augments", "")
+
+
+def test_champion_picker_keeps_loading_state_during_slow_request() -> None:
+    js = (WEB / "static" / "champion.js").read_text()
+    assert "championsStatus: 'idle'" in js
+    assert "state.championsStatus = 'loading'" in js
+    assert "state.championsStatus === 'idle' || state.championsStatus === 'loading'" in js
+    assert "seq !== state.championsRequestSeq" in js
+    assert js.index("state.championsStatus === 'idle' || state.championsStatus === 'loading'") < js.index(
+        "No champion list is available yet"
+    )
 
 
 def test_discovery_script_never_calls_loading_empty_and_ignores_stale_responses() -> None:
