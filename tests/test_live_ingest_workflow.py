@@ -19,15 +19,23 @@ def test_workflow_file_exists() -> None:
     assert WORKFLOW.is_file()
 
 
-def test_triggers_are_the_schedule_and_manual_dispatch_only() -> None:
-    """This workflow pulls real Riot data into production: never on
-    push/pull_request or any other event -- only its own schedule and a
-    manual dispatch."""
+def test_triggers_are_schedule_manual_and_exact_owner_ops_smoke_only() -> None:
+    """Production ingestion is schedule/manual plus one narrow owner-only
+    Ops Control command; never push/PR/general dispatch or arbitrary comments."""
     text = _text()
     on = text[text.index("\non:\n") : text.index("\npermissions:")]
-    assert re.findall(r"^  ([a-z_]+):", on, flags=re.M) == ["schedule", "workflow_dispatch"]
+    assert re.findall(r"^  ([a-z_]+):", on, flags=re.M) == [
+        "schedule",
+        "workflow_dispatch",
+        "issue_comment",
+    ]
     for trigger in ("\npush:", "\n  push:", "pull_request:", "workflow_run:", "repository_dispatch:"):
         assert trigger not in text, f"unexpected trigger {trigger!r} in live-ingest.yml"
+
+    job = text[text.index("jobs:") : text.index("    concurrency:")]
+    assert "github.event.issue.number == 38" in job
+    assert "github.event.comment.user.login == 'alienheadbill'" in job
+    assert "github.event.comment.body == '/ingest smoke'" in job
 
 
 def test_schedule_is_every_six_hours_off_the_hour() -> None:
@@ -39,35 +47,39 @@ def test_schedule_is_every_six_hours_off_the_hour() -> None:
 
 #: What a scheduled run uses (the proven bounded configuration of production
 #: runs 36286242686 / 36289198154), keyed by the job env var it sets.
-SCHEDULED = {
-    "CHALLENGER_SEEDS": ("challenger_seeds", "15"),
-    "GRANDMASTER_SEEDS": ("grandmaster_seeds", "15"),
-    "MASTER_SEEDS": ("master_seeds", "20"),
-    "DIAMOND_SEEDS": ("diamond_seeds", "25"),
-    "PLATINUM_SEEDS": ("platinum_seeds", "25"),
-    "MATCHES_PER_PLAYER": ("matches_per_player", "10"),
-    "COLLECTION_MODE": ("collection_mode", "bounded"),
-    "MAX_DURATION_MINUTES": ("max_duration_minutes", "60"),
-    "MAX_REQUESTS": ("max_requests", "3000"),
-    "MAX_MATCH_FETCHES": ("max_match_fetches", "2000"),
+RUN_SETTINGS = {
+    # env var: (workflow_dispatch input, scheduled value, exact Ops smoke value)
+    "CHALLENGER_SEEDS": ("challenger_seeds", "15", "3"),
+    "GRANDMASTER_SEEDS": ("grandmaster_seeds", "15", "0"),
+    "MASTER_SEEDS": ("master_seeds", "20", "0"),
+    "DIAMOND_SEEDS": ("diamond_seeds", "25", "0"),
+    "PLATINUM_SEEDS": ("platinum_seeds", "25", "0"),
+    "MATCHES_PER_PLAYER": ("matches_per_player", "10", "3"),
+    "COLLECTION_MODE": ("collection_mode", "bounded", "bounded"),
+    "MAX_DURATION_MINUTES": ("max_duration_minutes", "60", "60"),
+    "MAX_REQUESTS": ("max_requests", "3000", "3000"),
+    "MAX_MATCH_FETCHES": ("max_match_fetches", "2000", "2000"),
 }
 
 
-def test_scheduled_runs_use_fixed_bounded_settings_and_manual_runs_their_inputs() -> None:
-    """Each setting is resolved once at job level: the fixed scheduled value
-    on `schedule`, otherwise the matching dispatch input. A scheduled value
-    must never be 0 or empty -- with `a && b || c`, a falsy `b` would fall
-    through to the (empty) dispatch input."""
+def test_schedule_and_owner_smoke_use_fixed_settings_manual_uses_inputs() -> None:
+    """Each setting is resolved once at job level: fixed values for schedule,
+    a tiny fixed bounded configuration for the guarded issue-comment smoke,
+    and the operator's inputs for workflow_dispatch."""
     text = _text()
     job = text[text.index("jobs:") : text.index("    steps:")]
     assert "      RUN_TRIGGER: ${{ github.event_name }}" in job
-    for var, (input_name, value) in SCHEDULED.items():
-        line = f"      {var}: ${{{{ github.event_name == 'schedule' && '{value}' || inputs.{input_name} }}}}"
+    for var, (input_name, scheduled, smoke) in RUN_SETTINGS.items():
+        line = (
+            f"      {var}: ${{{{ github.event_name == 'schedule' && '{scheduled}' || "
+            f"github.event_name == 'issue_comment' && '{smoke}' || inputs.{input_name} }}}}"
+        )
         assert line in job, var
-        assert value not in ("", "0")
-    assert SCHEDULED["COLLECTION_MODE"][1] == "bounded"
+        assert scheduled != ""
+        assert smoke != ""
+    assert RUN_SETTINGS["COLLECTION_MODE"][1:] == ("bounded", "bounded")
     steps = text[text.index("    steps:") :]
-    assert "${{ inputs." not in steps  # every step reads the resolved job env only
+    assert "${{ inputs." not in steps  # every shell step reads resolved job env only
 
 
 def test_runs_the_four_cli_steps_in_order() -> None:
@@ -121,15 +133,17 @@ def test_inputs_have_conservative_defaults() -> None:
     assert "players:" not in inputs.replace("_seeds:", "").replace("matches_per_player:", "")
 
 
-def test_inputs_reach_shell_only_through_env_vars() -> None:
-    """Never `${{ inputs.x }}` inside a script body (script injection);
-    only as `NAME: ${{ inputs.x }}` environment entries."""
+def test_inputs_reach_shell_only_through_resolved_env_vars() -> None:
+    """Dispatch inputs may appear only in the job's resolver expressions,
+    never directly inside a shell script."""
     for line in _text().splitlines():
-        if "${{ inputs." in line:
+        if "inputs." in line and "${{" in line:
             if line.strip().startswith("timeout-minutes:"):  # job setting, never a shell
                 continue
             assert re.match(
-                r"^\s+[A-Z_]+: \$\{\{ github\.event_name == 'schedule' && '[a-z0-9]+' \|\| inputs\.[a-z_]+ \}\}$",
+                r"^\s+[A-Z_]+: \$\{\{ github\.event_name == 'schedule' && '[a-z0-9]+' "
+                r"\|\| github\.event_name == 'issue_comment' && '[a-z0-9]+' "
+                r"\|\| inputs\.[a-z_]+ \}\}$",
                 line,
             ), line
 
@@ -246,7 +260,8 @@ def test_never_prints_secret_values() -> None:
 def test_secrets_only_referenced_via_expression_not_hardcoded() -> None:
     text = _text()
     assert "${{ secrets.RIOT_API_KEY }}" in text
-    assert "${{ secrets.DATABASE_URL }}" in text
+    assert "${{ secrets.NEON_DATABASE_URL }}" in text
+    assert "${{ secrets.DATABASE_URL }}" not in text
 
 
 def test_production_preflight_runs_before_any_riot_or_database_step() -> None:
