@@ -39,7 +39,7 @@ from .game_art import (
     trait_name,
 )
 from .research_report import WEB_DISCOVERY_MIN_SAMPLES
-from .roster import id_key, load_roster, name_key
+from .roster import INTRINSIC_TRAIT_REASON, id_key, load_roster, name_key
 from .scout import LOW_SAMPLE_COMMITMENT_GAMES
 from .storage import Database
 
@@ -207,17 +207,35 @@ def _trait_count_row(a: Association) -> dict[str, Any]:
     }
 
 
+def intrinsic_trait_rows(character_id: str, champion_name: str) -> list[dict[str, Any]]:
+    """The champion's intrinsic traits (traits no other shop champion has;
+    `Roster.intrinsic_traits`) as champion context: name, cached icon and why
+    they are not ranked as trait-shell evidence."""
+    return [
+        {
+            "trait_id": trait_id,
+            "name": trait_name(trait_id) or trait_id,
+            "art_url": trait_art(trait_id),
+            "reason": INTRINSIC_TRAIT_REASON.format(champion=champion_name),
+        }
+        for trait_id in load_roster().intrinsic_traits(character_id)
+    ]
+
+
 def _trait_rows(profile: TraitProfile) -> list[dict[str, Any]]:
     """One row per active trait (most common first; ties by display name,
     then id), each with its observed unit counts (lowest count first).
     Shares are of the champion's carry boards; one board is counted under
-    every trait it had active."""
+    every trait it had active. For the champion's own singleton-provider
+    traits (`above_baseline_only`), a row covers only boards that reported
+    the trait above the one unit picking the champion guarantees."""
     rows = [
         {
             "trait_id": a.key,
             "name": trait_name(a.key) or a.key,
             "art_url": trait_art(a.key),
             **_comparison(a),
+            "above_baseline_only": a.key in profile.baseline_traits,
             "counts": [_trait_count_row(c) for c in profile.counts.get(a.key, [])],
         }
         for a in profile.active
@@ -272,6 +290,11 @@ def champion_investigation(
         # Active traits on the carry boards, each with Riot's observed unit
         # counts (`num_units`). Denominator: `carry.games`.
         "traits": [],
+        # Fail-closed classification (`Roster.intrinsic_traits`): traits only
+        # this champion has AND no verified item can add. API context only.
+        # Independently, `traits` never ranks the champion's own
+        # singleton-provider traits at their guaranteed one unit.
+        "intrinsic_traits": intrinsic_trait_rows(character_id, champion["name"]),
     }
     if balance_window is None or window is None:
         return body
@@ -430,7 +453,11 @@ def carry_summary(
             f"{_pct(best['top4_without'])} without)."
         )
 
-    # traits: how often each was active, then Riot's observed unit counts
+    # traits: how often each was active, then Riot's observed unit counts.
+    # A row of the champion's own singleton-provider trait counts only boards
+    # above its guaranteed one unit, not boards where it was active, so it is
+    # never restated as an "active trait" here.
+    traits = [t for t in traits if not t.get("above_baseline_only")]
     if traits:
         top = traits[0]
         counts = sorted(top["counts"], key=lambda c: (-c["games"], c["num_units"] or 0))[:2]

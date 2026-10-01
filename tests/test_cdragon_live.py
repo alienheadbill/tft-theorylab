@@ -18,11 +18,11 @@ from tftlab.cdragon import (
     MAP22_BIN_PATH,
     TFT_STRINGTABLE_PATH,
     CommunityDragonClient,
-    SetMetadata,
     champion_role_coverage,
     item_intent_snapshot,
     item_stats_snapshot,
     riot_roles,
+    roster_snapshot,
 )
 
 ROSTER_FIXTURE = Path(__file__).parents[1] / "src" / "tftlab" / "data" / "set_roster.json"
@@ -59,16 +59,6 @@ def test_live_communitydragon_feed_parses_with_sensible_costs(tmp_path) -> None:
         print(f"  {champion.character_id}: {champion.name} (cost {champion.cost})")
 
 
-def roster_snapshot(meta: SetMetadata) -> dict:
-    """The committed-fixture shape of a set's roster (see
-    src/tftlab/data/set_roster.json and tests/test_demo_roster.py)."""
-    return {
-        "set_number": meta.set_number,
-        "champions": {
-            cid: {"name": c.name, "cost": c.cost} for cid, c in sorted(meta.champions.items())
-        },
-        "traits": {tid: t.name for tid, t in sorted(meta.traits.items())},
-    }
 
 
 @requires_live_network
@@ -81,11 +71,42 @@ def test_committed_roster_fixture_matches_live_set(tmp_path) -> None:
         live = roster_snapshot(client.get_set_metadata("latest", use_cache=False))
 
     committed = json.loads(ROSTER_FIXTURE.read_text()) if ROSTER_FIXTURE.exists() else {}
-    committed = {k: committed.get(k) for k in ("set_number", "champions", "traits")}
+    committed = {k: committed.get(k) for k in ("set_number", "champions", "traits", "trait_items", "unresolved_emblems")}
     assert committed == live, (
         "src/tftlab/data/set_roster.json is out of date. Live roster:\n"
         + json.dumps(live, indent=1, ensure_ascii=False)
     )
+
+
+@requires_live_network
+def test_every_live_set_emblem_links_to_a_trait(tmp_path, capsys) -> None:
+    """Every emblem the live feed lists for the current set either links to
+    one of its traits or is recorded in the committed `unresolved_emblems`
+    (which makes `Roster.intrinsic_traits` fail closed). Fails when a new
+    unresolved emblem appears or a recorded one changes. Prints each emblem
+    with its trait(s), and the raw entry of each unresolved one, so the log
+    shows the full inventory."""
+    from tftlab.cdragon import _item_trait_ids, is_set_emblem, parse_set_metadata, unresolved_emblem_ids
+
+    with CommunityDragonClient(cache_dir=tmp_path) as client:
+        raw = client.fetch_raw("latest", use_cache=False)
+    meta = parse_set_metadata(raw, patch="latest")
+    emblems = sorted(i for i, item in meta.items.items() if is_set_emblem(meta, i, item))
+    with capsys.disabled():
+        print(f"\nSET {meta.set_number} EMBLEM INVENTORY: {len(emblems)} emblem-like items")
+        for item_id in emblems:
+            print(f"  {item_id} {meta.items[item_id].name!r} -> {sorted(_item_trait_ids(meta, meta.items[item_id]))}")
+        print(f"UNRESOLVED EMBLEMS: {list(unresolved_emblem_ids(meta))}")
+        unresolved = set(unresolved_emblem_ids(meta))
+        for entry in raw.get("items", []):
+            if entry.get("apiName") in unresolved:
+                print(json.dumps({k: entry.get(k) for k in (
+                    "apiName", "name", "desc", "associatedTraits", "incompatibleTraits", "tags", "effects",
+                    "composition", "unique")}, ensure_ascii=False, default=str))
+    assert emblems, "expected the current set to have emblems"
+    committed = json.loads(ROSTER_FIXTURE.read_text()).get("unresolved_emblems")
+    assert list(unresolved_emblem_ids(meta)) == committed, (
+        "live emblems that link to no current trait differ from set_roster.json `unresolved_emblems`")
 
 
 @requires_live_network

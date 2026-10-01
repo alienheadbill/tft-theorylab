@@ -155,6 +155,110 @@ def parse_set_metadata(
     )
 
 
+def champion_trait_ids(meta: SetMetadata) -> dict[str, tuple[str, ...]]:
+    """Each champion's traits as the set's canonical trait ids, sorted.
+
+    CommunityDragon lists a champion's traits by display name ("Caustic"),
+    while match data and every other static file use trait apiNames
+    (`DA_18_...`). Each listed name must name exactly one of the set's
+    traits; anything else raises instead of guessing."""
+    by_name: dict[str, list[str]] = {}
+    for trait_id, trait in meta.traits.items():
+        by_name.setdefault(trait.name, []).append(trait_id)
+    out: dict[str, tuple[str, ...]] = {}
+    for character_id, champion in meta.champions.items():
+        ids = []
+        for name in champion.traits:
+            matches = by_name.get(name, [])
+            if len(matches) != 1:
+                raise ValueError(f"{character_id}: trait {name!r} matches {len(matches)} set traits")
+            ids.append(matches[0])
+        out[character_id] = tuple(sorted(set(ids)))
+    return out
+
+
+def _item_trait_ids(meta: SetMetadata, item: ItemMeta) -> set[str]:
+    """The set's traits one item names: its `associatedTraits` (apiName or
+    display name) and, for an item named "<trait display name> Emblem", that
+    trait. A display name shared by several traits resolves to none."""
+    by_name: dict[str, list[str]] = {}
+    for trait_id, trait in meta.traits.items():
+        by_name.setdefault(trait.name, []).append(trait_id)
+    refs = set(item.associated_traits)
+    if item.name.endswith(" Emblem"):
+        refs.add(item.name[: -len(" Emblem")])
+    out: set[str] = set()
+    for ref in refs:
+        if ref in meta.traits:
+            out.add(ref)
+        elif len(by_name.get(ref, [])) == 1:
+            out.add(by_name[ref][0])
+    return out
+
+
+def trait_item_ids(meta: SetMetadata) -> dict[str, tuple[str, ...]]:
+    """For each of the set's traits, the items that may add it to a unit,
+    sorted; traits with none are left out. This is the guard behind
+    `Roster.intrinsic_traits` (a trait an item can add is never intrinsic),
+    so it errs towards listing too much:
+
+    - every item whose CommunityDragon `associatedTraits` names the trait
+      (its apiName or display name) -- in Set 18 these are trait augments;
+    - every item named "<trait display name> Emblem" -- CommunityDragon leaves
+      `associatedTraits` empty on Set 18's emblems (`DA_18_EmblemSlayer`
+      "Ravager Emblem"), so the emblem's own name is the link.
+
+    References to other sets' traits are ignored (the item list is shared
+    across sets); an older set's item whose name matches a current trait
+    is kept, which can only make classification more conservative. An
+    emblem this cannot link is reported by `unresolved_emblem_ids`."""
+    out: dict[str, set[str]] = {}
+    for item_id, item in meta.items.items():
+        for trait_id in _item_trait_ids(meta, item):
+            out.setdefault(trait_id, set()).add(item_id)
+    return {trait_id: tuple(sorted(items)) for trait_id, items in sorted(out.items())}
+
+
+def is_set_emblem(meta: SetMetadata, item_id: str, item: ItemMeta) -> bool:
+    """An emblem the current set's boards can hold: an item in a namespace
+    current Match-V1 boards use (`DA_*`, `TFT<n>_*`, shared `TFT_Item_*`)
+    whose apiName or display name says "emblem" (any case). Deliberately
+    broad: anything emblem-like that cannot be linked to a trait makes
+    intrinsic classification fail closed."""
+    if not item_id.startswith(("DA_", f"TFT{meta.set_number}_", "TFT_Item_")):
+        return False
+    return "emblem" in item_id.casefold() or "emblem" in item.name.casefold()
+
+
+def unresolved_emblem_ids(meta: SetMetadata) -> tuple[str, ...]:
+    """Current-set emblems (`is_set_emblem`) that name none of the set's
+    traits, sorted. Should be empty; any entry means an emblem might add a
+    trait `trait_item_ids` does not know about, so `Roster.intrinsic_traits`
+    then classifies nothing as intrinsic."""
+    return tuple(sorted(
+        item_id for item_id, item in meta.items.items()
+        if is_set_emblem(meta, item_id, item) and not _item_trait_ids(meta, item)
+    ))
+
+
+def roster_snapshot(meta: SetMetadata) -> dict[str, Any]:
+    """The committed shape of `data/set_roster.json` (`tftlab.roster`):
+    champions with name, cost and canonical trait ids, trait names,
+    `trait_items` (`trait_item_ids`: which traits an item can add) and
+    `unresolved_emblems` (`unresolved_emblem_ids`: should be empty)."""
+    trait_ids = champion_trait_ids(meta)
+    return {
+        "set_number": meta.set_number,
+        "champions": {
+            cid: {"name": c.name, "cost": c.cost, "traits": list(trait_ids[cid])}
+            for cid, c in sorted(meta.champions.items())
+        },
+        "traits": {tid: t.name for tid, t in sorted(meta.traits.items())},
+        "trait_items": {tid: list(items) for tid, items in trait_item_ids(meta).items()},
+        "unresolved_emblems": list(unresolved_emblem_ids(meta)),
+    }
+
+
 class CommunityDragonClient:
     """Fetches and disk-caches TFT static metadata from CommunityDragon.
 

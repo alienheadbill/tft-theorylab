@@ -5,7 +5,7 @@ import json
 from typing import Sequence
 
 from ..carry import carry_commitment_sql
-from ..items import is_component
+from ..itemization import unit_itemization
 from ..storage import Database
 from .association import Association, compute_associations
 
@@ -19,8 +19,10 @@ CANONICAL_UNIT_TIEBREAK_SQL = "completed_item_count DESC, tier DESC, unit_index 
 
 
 def _completed_items(items_json: str) -> tuple[str, ...]:
-    raw = json.loads(items_json)
-    return tuple(sorted(item for item in raw if item and not is_component(item)))
+    """The unit's equipped completed items, sorted: what fixed-item, pair and
+    package evidence is built from. Items the game generated for the round
+    (Thief's Gloves rolls) are never among them (`tftlab.itemization`)."""
+    return tuple(sorted(unit_itemization(json.loads(items_json)).completed_equipped))
 
 
 def _carry_commitment_item_games(

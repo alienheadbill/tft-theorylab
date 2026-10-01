@@ -47,7 +47,8 @@ def test_generated_demo_matches_only_use_current_set_units() -> None:
         for u in p["units"]
     }
     for character_id, name, cost in seen:
-        assert CHAMPIONS.get(character_id) == {"name": name, "cost": cost}, (character_id, name, cost)
+        entry = CHAMPIONS.get(character_id) or {}
+        assert (entry.get("name"), entry.get("cost")) == (name, cost), (character_id, name, cost)
 
 
 @pytest.mark.parametrize("entry", DEMO_EXPERIMENTS, ids=lambda e: e["title"])

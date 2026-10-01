@@ -1,371 +1,694 @@
 {
- "_about": "Current TFT set roster from CommunityDragon (latest cdragon/tft/en_us.json, parsed by tftlab.cdragon.parse_set_metadata). Shipped with the package as offline game metadata: tftlab.roster uses it to match champion/trait names to Riot ids, and tests/test_demo_roster.py checks demo data against it. tests/test_cdragon_live.py::test_committed_roster_fixture_matches_live_set compares it with the live feed nightly and prints the new roster when a set changes; paste that here to refresh.",
+ "_about": "Current TFT set roster from CommunityDragon (latest cdragon/tft/en_us.json, parsed by tftlab.cdragon.parse_set_metadata). Shipped with the package as offline game metadata: tftlab.roster uses it to match champion/trait names to Riot ids, and tests/test_demo_roster.py checks demo data against it. tests/test_cdragon_live.py::test_committed_roster_fixture_matches_live_set compares it with the live feed nightly and prints the new roster when a set changes; paste that here to refresh. Each champion's `traits` are canonical trait ids (CommunityDragon lists them by display name; tftlab.cdragon.champion_trait_ids resolves each name to exactly one set trait), used by tftlab.roster to classify intrinsic one-champion traits. `trait_items` lists, per trait, the items that may add it (tftlab.cdragon.trait_item_ids: CommunityDragon associatedTraits plus items named \"<trait> Emblem\"); a one-champion trait is intrinsic only when no item can add it. `unresolved_emblems` lists current-set emblems (tftlab.cdragon.is_set_emblem) that link to no trait; it must be empty, otherwise tftlab.roster classifies nothing as intrinsic (fail closed).",
  "_fetched": "2026-09-23 via the cdragon-live GitHub Actions workflow",
+ "_champion_traits_fetched": "2026-09-26 via the cdragon-live GitHub Actions workflow (CommunityDragon latest cdragon/tft/en_us.json champion `traits`, captured from a workflow job log); checked nightly by test_committed_roster_fixture_matches_live_set",
  "set_number": 18,
  "champions": {
   "DA_18_Ahri": {
    "name": "Ahri",
-   "cost": 4
+   "cost": 4,
+   "traits": [
+    "DA_18_Blossom",
+    "DA_18_Spellweaver"
+   ]
   },
   "DA_18_Akali_AD": {
    "name": "Akali",
-   "cost": 1
+   "cost": 1,
+   "traits": [
+    "DA_18_Adaptor",
+    "DA_18_Inferno",
+    "DA_18_Slayer"
+   ]
   },
   "DA_18_Alistar": {
    "name": "Alistar",
-   "cost": 2
+   "cost": 2,
+   "traits": [
+    "DA_18_Brawler",
+    "DA_18_Elderwood"
+   ]
   },
   "DA_18_Alune": {
    "name": "Alune",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_Lunar",
+    "DA_18_Spellweaver",
+    "DA_AluneUniqueTrait18"
+   ]
   },
   "DA_18_Aphelios": {
    "name": "Aphelios",
-   "cost": 4
+   "cost": 4,
+   "traits": [
+    "DA_18_Lunar",
+    "DA_18_Rapidfire"
+   ]
   },
   "DA_18_Ashe": {
    "name": "Ashe",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_Blossom",
+    "DA_18_Hunter"
+   ]
   },
   "DA_18_Azir": {
    "name": "Azir",
-   "cost": 3
+   "cost": 3,
+   "traits": [
+    "DA_18_Blackthorn",
+    "DA_18_Executioner",
+    "DA_18_Summoner"
+   ]
   },
   "DA_18_Caitlyn": {
    "name": "Caitlyn",
-   "cost": 2
+   "cost": 2,
+   "traits": [
+    "DA_18_Coven",
+    "DA_18_Hunter"
+   ]
   },
   "DA_18_Camille": {
    "name": "Camille",
-   "cost": 1
+   "cost": 1,
+   "traits": [
+    "DA_18_Coven",
+    "DA_18_Slayer"
+   ]
   },
   "DA_18_Cassiopeia": {
    "name": "Cassiopeia",
-   "cost": 3
+   "cost": 3,
+   "traits": [
+    "DA_18_Coven",
+    "DA_18_Spellweaver"
+   ]
   },
   "DA_18_Diana": {
    "name": "Diana",
-   "cost": 3
+   "cost": 3,
+   "traits": [
+    "DA_18_Lunar",
+    "DA_18_Slayer",
+    "DA_18_Vanguard"
+   ]
   },
   "DA_18_ElderDragon": {
    "name": "Elder Dragon",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_ApexPredator",
+    "DA_Riftbeast18"
+   ]
   },
   "DA_18_Elise": {
    "name": "Elise",
-   "cost": 2
+   "cost": 2,
+   "traits": [
+    "DA_18_Coven",
+    "DA_18_Vanguard"
+   ]
   },
   "DA_18_Ezreal": {
    "name": "Ezreal",
-   "cost": 4
+   "cost": 4,
+   "traits": [
+    "DA_18_Elderwood",
+    "DA_18_Executioner"
+   ]
   },
   "DA_18_GnarSmall": {
    "name": "Gnar",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_Brawler",
+    "DA_18_Elderwood",
+    "DA_18_Sprykin"
+   ]
   },
   "DA_18_Hecarim": {
    "name": "Hecarim",
-   "cost": 3
+   "cost": 3,
+   "traits": [
+    "DA_18_Elderwood",
+    "DA_18_Vanguard"
+   ]
   },
   "DA_18_Ivern": {
    "name": "Ivern",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_Greenfather"
+   ]
   },
   "DA_18_Kayle": {
    "name": "Kayle",
-   "cost": 2
+   "cost": 2,
+   "traits": [
+    "DA_18_Rapidfire",
+    "DA_18_Solar"
+   ]
   },
   "DA_18_Kennen": {
    "name": "Kennen",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_Executioner",
+    "DA_18_Inferno"
+   ]
   },
   "DA_18_KhaZix": {
    "name": "Kha'Zix",
-   "cost": 3
+   "cost": 3,
+   "traits": [
+    "DA_18_Rival"
+   ]
   },
   "DA_18_Kobuko": {
    "name": "Kobuko",
-   "cost": 1
+   "cost": 1,
+   "traits": [
+    "DA_18_Brawler",
+    "DA_18_Sprykin"
+   ]
   },
   "DA_18_LeBlanc": {
    "name": "LeBlanc",
-   "cost": 2
+   "cost": 2,
+   "traits": [
+    "DA_18_Elderwood",
+    "DA_18_Spellweaver"
+   ]
   },
   "DA_18_Leona": {
    "name": "Leona",
-   "cost": 1
+   "cost": 1,
+   "traits": [
+    "DA_18_Defender",
+    "DA_18_Solar"
+   ]
   },
   "DA_18_Lillia": {
    "name": "Lillia",
-   "cost": 4
+   "cost": 4,
+   "traits": [
+    "DA_18_Defender",
+    "DA_18_Fae"
+   ]
   },
   "DA_18_Lux_Coven": {
    "name": "Lux (Coven)",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_Coven",
+    "DA_18_LuxUniqueTrait"
+   ]
   },
   "DA_18_Lux_Elderwood": {
    "name": "Lux (Elderwood)",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_Elderwood",
+    "DA_18_LuxUniqueTrait"
+   ]
   },
   "DA_18_Lux_Fae": {
    "name": "Lux (Fae)",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_Fae",
+    "DA_18_LuxUniqueTrait"
+   ]
   },
   "DA_18_Lux_Inferno": {
    "name": "Lux (Inferno)",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_Inferno",
+    "DA_18_LuxUniqueTrait"
+   ]
   },
   "DA_18_Lux_Moonbeam": {
    "name": "Lux (Lunar)",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_Lunar",
+    "DA_18_LuxUniqueTrait"
+   ]
   },
   "DA_18_Lux_Primal": {
    "name": "Lux (Primal)",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_LuxUniqueTrait",
+    "DA_Primal18"
+   ]
   },
   "DA_18_Lux_Sunbeam": {
    "name": "Lux (Solar)",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_LuxUniqueTrait",
+    "DA_18_Solar"
+   ]
   },
   "DA_18_Malphite": {
    "name": "Malphite",
-   "cost": 4
+   "cost": 4,
+   "traits": [
+    "DA_18_Battlemage",
+    "DA_18_Blackthorn"
+   ]
   },
   "DA_18_Maokai": {
    "name": "Maokai",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_Maokai_UniqueTrait",
+    "DA_Juggernaut18"
+   ]
   },
   "DA_18_MasterYi_AD": {
    "name": "Master Yi",
-   "cost": 3
+   "cost": 3,
+   "traits": [
+    "DA_18_Adaptor",
+    "DA_18_Blossom"
+   ]
   },
   "DA_18_Morgana": {
    "name": "Morgana",
-   "cost": 4
+   "cost": 4,
+   "traits": [
+    "DA_18_Coven",
+    "DA_18_Invoker"
+   ]
   },
   "DA_18_Ornn": {
    "name": "Ornn",
-   "cost": 1
+   "cost": 1,
+   "traits": [
+    "DA_18_Defender",
+    "DA_18_Elderwood"
+   ]
   },
   "DA_18_Rakan": {
    "name": "Rakan",
-   "cost": 1
+   "cost": 1,
+   "traits": [
+    "DA_18_Fae",
+    "DA_18_Vanguard",
+    "DA_Juggernaut18"
+   ]
   },
   "DA_18_Rammus": {
    "name": "Rammus",
-   "cost": 3
+   "cost": 3,
+   "traits": [
+    "DA_18_Defender",
+    "DA_18_Sprykin"
+   ]
   },
   "DA_18_RekSai": {
    "name": "Rek'Sai",
-   "cost": 1
+   "cost": 1,
+   "traits": [
+    "DA_18_Blackthorn",
+    "DA_18_Brawler"
+   ]
   },
   "DA_18_Rengar": {
    "name": "Rengar",
-   "cost": 3
+   "cost": 3,
+   "traits": [
+    "DA_18_Rival"
+   ]
   },
   "DA_18_Sejuani": {
    "name": "Sejuani",
-   "cost": 2
+   "cost": 2,
+   "traits": [
+    "DA_18_Solar",
+    "DA_Juggernaut18"
+   ]
   },
   "DA_18_Sentry": {
    "name": "Pebbles",
-   "cost": 1
+   "cost": 1,
+   "traits": [
+    "DA_18_Invoker",
+    "DA_Riftbeast18"
+   ]
   },
   "DA_18_Sett": {
    "name": "Sett",
-   "cost": 4
+   "cost": 4,
+   "traits": [
+    "DA_18_Blossom",
+    "DA_18_Brawler"
+   ]
   },
   "DA_18_Shen": {
    "name": "Shen",
-   "cost": 2
+   "cost": 2,
+   "traits": [
+    "DA_18_Defender",
+    "DA_18_Inferno"
+   ]
   },
   "DA_18_Sivir": {
    "name": "Sivir",
-   "cost": 4
+   "cost": 4,
+   "traits": [
+    "DA_18_Hunter",
+    "DA_Primal18"
+   ]
   },
   "DA_18_Soraka": {
    "name": "Soraka",
-   "cost": 4
+   "cost": 4,
+   "traits": [
+    "DA_18_Executioner",
+    "DA_FloraFatalis18"
+   ]
   },
   "DA_18_Teemo": {
    "name": "Teemo",
-   "cost": 2
+   "cost": 2,
+   "traits": [
+    "DA_18_Invoker",
+    "DA_18_Sprykin"
+   ]
   },
   "DA_18_Tristana": {
    "name": "Tristana",
-   "cost": 3
+   "cost": 3,
+   "traits": [
+    "DA_18_Fae",
+    "DA_18_Hunter",
+    "DA_18_Sprykin"
+   ]
   },
   "DA_18_Varus": {
    "name": "Varus",
-   "cost": 1
+   "cost": 1,
+   "traits": [
+    "DA_18_Inferno",
+    "DA_18_Rapidfire"
+   ]
   },
   "DA_18_Veigar": {
    "name": "Veigar",
-   "cost": 1
+   "cost": 1,
+   "traits": [
+    "DA_18_Blackthorn",
+    "DA_18_Spellweaver",
+    "DA_18_Sprykin"
+   ]
   },
   "DA_18_Warwick": {
    "name": "Warwick",
-   "cost": 2
+   "cost": 2,
+   "traits": [
+    "DA_18_Blackthorn",
+    "DA_18_Slayer"
+   ]
   },
   "DA_18_Xayah": {
    "name": "Xayah",
-   "cost": 1
+   "cost": 1,
+   "traits": [
+    "DA_18_Elderwood",
+    "DA_18_Fae",
+    "DA_18_Rapidfire"
+   ]
   },
   "DA_18_Yorick": {
    "name": "Yorick",
-   "cost": 1
+   "cost": 1,
+   "traits": [
+    "DA_18_Blossom",
+    "DA_18_Summoner",
+    "DA_Juggernaut18"
+   ]
   },
   "DA_18_Yunara": {
    "name": "Yunara",
-   "cost": 2
+   "cost": 2,
+   "traits": [
+    "DA_18_Blossom",
+    "DA_18_Executioner"
+   ]
   },
   "DA_18_Zyra": {
    "name": "Zyra",
-   "cost": 4
+   "cost": 4,
+   "traits": [
+    "DA_18_Summoner",
+    "DA_18_ZyraUniqueTrait"
+   ]
   },
   "DA_Amumu18": {
    "name": "Amumu",
-   "cost": 4
+   "cost": 4,
+   "traits": [
+    "DA_18_Inferno",
+    "DA_Juggernaut18"
+   ]
   },
   "DA_Brambleback18": {
    "name": "Brambleback",
-   "cost": 4
+   "cost": 4,
+   "traits": [
+    "DA_18_Slayer",
+    "DA_Riftbeast18"
+   ]
   },
   "DA_Cinderling18": {
    "name": "Cinderling",
-   "cost": 1
+   "cost": 1,
+   "traits": [
+    "DA_18_Hunter",
+    "DA_Riftbeast18"
+   ]
   },
   "DA_CrimsonRaptor18": {
    "name": "Mama Beak",
-   "cost": 3
+   "cost": 3,
+   "traits": [
+    "DA_18_Rapidfire",
+    "DA_18_Summoner",
+    "DA_Riftbeast18"
+   ]
   },
   "DA_Draven18": {
    "name": "Draven",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_DravenUniqueTrait18"
+   ]
   },
   "DA_Fiddlesticks18": {
    "name": "Fiddlesticks",
-   "cost": 3
+   "cost": 3,
+   "traits": [
+    "DA_18_Defender",
+    "DA_18_Spellweaver",
+    "DA_FloraFatalis18"
+   ]
   },
   "DA_Gromp18_AP": {
    "name": "Gromp",
-   "cost": 2
+   "cost": 2,
+   "traits": [
+    "DA_18_Adaptor",
+    "DA_Riftbeast18"
+   ]
   },
   "DA_Karma18": {
    "name": "Karma",
-   "cost": 1
+   "cost": 1,
+   "traits": [
+    "DA_18_Blossom",
+    "DA_18_Spellweaver"
+   ]
   },
   "DA_KogMaw18_AD": {
    "name": "Kog'Maw",
-   "cost": 3
+   "cost": 3,
+   "traits": [
+    "DA_18_Adaptor",
+    "DA_18_Caustic",
+    "DA_18_Invoker"
+   ]
   },
   "DA_Krug18": {
    "name": "Krug",
-   "cost": 3
+   "cost": 3,
+   "traits": [
+    "DA_18_Brawler",
+    "DA_Riftbeast18"
+   ]
   },
   "DA_Lux18_Base": {
    "name": "Lux",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_LuxUniqueTrait"
+   ]
   },
   "DA_Lux18_Blackthorn": {
    "name": "Lux (Blackthorn)",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_Blackthorn",
+    "DA_18_LuxUniqueTrait"
+   ]
   },
   "DA_Lux18_Blossom": {
    "name": "Lux (Blossom)",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_Blossom",
+    "DA_18_LuxUniqueTrait"
+   ]
   },
   "DA_Murkwolf18": {
    "name": "Murkwolf",
-   "cost": 2
+   "cost": 2,
+   "traits": [
+    "DA_18_Slayer",
+    "DA_Riftbeast18"
+   ]
   },
   "DA_Nidalee18_AP": {
    "name": "Nidalee",
-   "cost": 4
+   "cost": 4,
+   "traits": [
+    "DA_18_Adaptor",
+    "DA_Primal18"
+   ]
   },
   "DA_Scuttlecrab18": {
    "name": "Scuttlecrab",
-   "cost": 2
+   "cost": 2,
+   "traits": [
+    "DA_Juggernaut18",
+    "DA_Riftbeast18"
+   ]
   },
   "DA_Sentinel18": {
    "name": "Sentinel",
-   "cost": 4
+   "cost": 4,
+   "traits": [
+    "DA_18_Invoker",
+    "DA_18_Vanguard",
+    "DA_Riftbeast18"
+   ]
   },
   "DA_Taric18": {
    "name": "Taric",
-   "cost": 5
+   "cost": 5,
+   "traits": [
+    "DA_18_Vanguard",
+    "DA_Emerald18"
+   ]
   },
   "DA_Vi18": {
    "name": "Vi",
-   "cost": 3
+   "cost": 3,
+   "traits": [
+    "DA_Juggernaut18",
+    "DA_Primal18"
+   ]
   },
   "TFT5_EmblemArmoryKey": {
    "name": "Tome of Traits",
-   "cost": 8
+   "cost": 8,
+   "traits": []
   },
   "TFT6_MercenaryChest": {
    "name": "Mercenary Chest",
-   "cost": 11
+   "cost": 11,
+   "traits": []
   },
   "TFT9_SLIME_Crab": {
    "name": "Rift Scuttler",
-   "cost": 1
+   "cost": 1,
+   "traits": []
   },
   "TFT_ArmoryKeyCompleted": {
    "name": "Completed Item Anvil",
-   "cost": 8
+   "cost": 8,
+   "traits": []
   },
   "TFT_ArmoryKeyComponent": {
    "name": "Component Anvil",
-   "cost": 8
+   "cost": 8,
+   "traits": []
   },
   "TFT_ArmoryKeyOrnn": {
    "name": "Artifact Item Anvil",
-   "cost": 8
+   "cost": 8,
+   "traits": []
   },
   "TFT_ArmoryKeySupport": {
    "name": "Support item anvil",
-   "cost": 8
+   "cost": 8,
+   "traits": []
   },
   "TFT_BlueGolem": {
    "name": "Golem",
-   "cost": 1
+   "cost": 1,
+   "traits": []
   },
   "TFT_ElderDragon": {
    "name": "Elder Dragon",
-   "cost": 1
+   "cost": 1,
+   "traits": []
   },
   "TFT_Krug": {
    "name": "Krug",
-   "cost": 1
+   "cost": 1,
+   "traits": []
   },
   "TFT_Murkwolf": {
    "name": "Murk Wolf",
-   "cost": 1
+   "cost": 1,
+   "traits": []
   },
   "TFT_MurkwolfMini": {
    "name": "Murkwolf",
-   "cost": 1
+   "cost": 1,
+   "traits": []
   },
   "TFT_Razorbeak": {
    "name": "Razorbeak",
-   "cost": 1
+   "cost": 1,
+   "traits": []
   },
   "TFT_RazorbeakMini": {
    "name": "Razorbeak",
-   "cost": 1
+   "cost": 1,
+   "traits": []
   },
   "TFT_RiftHerald": {
    "name": "Rift Herald",
-   "cost": 1
+   "cost": 1,
+   "traits": []
   },
   "TFT_TrainingDummy": {
    "name": "Training Dummy",
-   "cost": 1
+   "cost": 1,
+   "traits": []
   },
   "TFT_Voidspawn": {
    "name": "Voidspawn",
-   "cost": 1
+   "cost": 1,
+   "traits": []
   }
  },
  "traits": {
@@ -405,5 +728,111 @@
   "DA_Juggernaut18": "Juggernaut",
   "DA_Primal18": "Primal",
   "DA_Riftbeast18": "Riftbeast"
- }
+ },
+ "_trait_items_fetched": "2026-10-01 from the live CommunityDragon feed via a CI run of PR #51 (tftlab.cdragon.trait_item_ids); the same run confirmed champion names, costs and trait membership match this file; checked nightly by test_committed_roster_fixture_matches_live_set",
+ "trait_items": {
+  "DA_18_Blackthorn": [
+   "DA_18_EmblemBlackthorn",
+   "DA_BlackthornTraitAugment"
+  ],
+  "DA_18_Blossom": [
+   "DA_18_BlossomTraitAugment",
+   "DA_18_EmblemBlossom"
+  ],
+  "DA_18_Brawler": [
+   "DA_18_EmblemBrawler",
+   "TFT17_Item_HPTankEmblemItem"
+  ],
+  "DA_18_Coven": [
+   "DA_18_CovenTraitAugment",
+   "DA_18_CovenTraitAugment_LootToAP",
+   "DA_18_EmblemCoven"
+  ],
+  "DA_18_Defender": [
+   "DA_18_EmblemDefender",
+   "TFT16_Item_DefenderEmblemItem"
+  ],
+  "DA_18_Elderwood": [
+   "DA_18_ElderwoodTraitAugment",
+   "DA_18_EmblemElderwood"
+  ],
+  "DA_18_Executioner": [
+   "DA_18_EmblemExecutioner",
+   "TFT14_Item_CutterEmblemItem",
+   "TFT15_Item_DestroyerEmblemItem"
+  ],
+  "DA_18_Fae": [
+   "DA_18_EmblemFae",
+   "DA_18_FaeTraitAugment"
+  ],
+  "DA_18_Hunter": [
+   "DA_18_EmblemHunter"
+  ],
+  "DA_18_Inferno": [
+   "DA_18_EmblemInferno",
+   "DA_18_InfernoTraitAugment"
+  ],
+  "DA_18_Invoker": [
+   "DA_18_EmblemInvoker",
+   "TFT16_Item_InvokerEmblemItem"
+  ],
+  "DA_18_Lunar": [
+   "DA_18_EmblemLunar",
+   "DA_18_LunarTraitAugment",
+   "DA_18_LunarTraitAugmentPlus"
+  ],
+  "DA_18_LuxUniqueTrait": [
+   "DA_18_LuxAugmentII"
+  ],
+  "DA_18_Rapidfire": [
+   "DA_18_EmblemRapidfire",
+   "TFT14_Item_SwiftEmblemItem"
+  ],
+  "DA_18_Rival": [
+   "DA_18_RivalsAugment"
+  ],
+  "DA_18_Slayer": [
+   "DA_18_EmblemSlayer"
+  ],
+  "DA_18_Solar": [
+   "DA_18_SolarTraitAugment"
+  ],
+  "DA_18_Spellweaver": [
+   "DA_18_EmblemSpellweaver"
+  ],
+  "DA_18_Sprykin": [
+   "DA_18_EmblemSprykin",
+   "DA_18_SprykinAugment"
+  ],
+  "DA_18_Vanguard": [
+   "DA_18_EmblemVanguard",
+   "TFT14_Item_GuardianEmblemItem",
+   "TFT17_Item_ShieldTankEmblemItem"
+  ],
+  "DA_FloraFatalis18": [
+   "DA_18_EmblemFloraFatalis",
+   "DA_18_EmblemFloraFatalisAugment",
+   "DA_18_FloraFatalisAugment"
+  ],
+  "DA_Juggernaut18": [
+   "DA_18_EmblemJuggernaut",
+   "TFT15_Item_JuggernautEmblemItem",
+   "TFT16_Item_JuggernautEmblemItem"
+  ],
+  "DA_Primal18": [
+   "DA_18_EmblemPrimal",
+   "DA_18_PrimalAugmentPlus_Nidalee",
+   "DA_18_PrimalAugmentPlus_Sivir",
+   "DA_18_PrimalAugment_Nidalee",
+   "DA_18_PrimalAugment_Sivir"
+  ],
+  "DA_Riftbeast18": [
+   "DA_18_RiftbeastTraitAugment"
+  ]
+ },
+ "unresolved_emblems": [
+  "DA_PhantomEmblem18",
+  "DA_PhantomEmblemUpgrade18"
+ ],
+ "_unresolved_emblems_fetched": "2026-10-01 from the live CommunityDragon feed (cdragon-live workflow_dispatch on PR #51, test_every_live_set_emblem_links_to_a_trait): 23 Set 18 emblem-like items, 21 linked to a trait, the two 'Phantom Emblem' items link to none, so tftlab.roster classifies nothing as intrinsic until they are resolved"
 }

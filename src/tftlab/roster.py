@@ -43,11 +43,68 @@ def id_key(identifier: str | None) -> str:
     return name_key(stripped)
 
 
+#: Explains an intrinsic trait to a player (see `Roster.intrinsic_traits`).
+INTRINSIC_TRAIT_REASON = (
+    "Only {champion} has this trait, so it comes with picking {champion}: "
+    "it describes the champion, not the units built around it."
+)
+
+
 @dataclass(frozen=True)
 class Roster:
     set_number: int
     champions: dict[str, dict]
     traits: dict[str, str]
+    #: Trait id -> items that can add it (emblems/trait items, from
+    #: CommunityDragon `associatedTraits`; see `tftlab.cdragon.trait_item_ids`).
+    #: None when the snapshot has no verified trait-item data.
+    trait_items: dict[str, list[str]] | None = None
+    #: Current-set emblems CommunityDragon lists that `trait_items` could not
+    #: link to a trait (`tftlab.cdragon.unresolved_emblem_ids`). None when the
+    #: snapshot did not check; anything but an empty list means the
+    #: trait-item guard is incomplete.
+    unresolved_emblems: list[str] | None = None
+
+    @property
+    def trait_item_guard_verified(self) -> bool:
+        """True when the snapshot has trait-item data AND checked that every
+        current-set emblem links to a trait."""
+        return self.trait_items is not None and self.unresolved_emblems == []
+
+    def champion_traits(self, character_id: str | None) -> tuple[str, ...]:
+        """The champion's own traits (canonical trait ids), from static data."""
+        return tuple((self.champions.get(character_id or "") or {}).get("traits") or ())
+
+    def trait_champions(self, trait_id: str) -> tuple[str, ...]:
+        """Shop champions (cost 1-5) whose own traits include `trait_id`, sorted."""
+        return tuple(sorted(
+            cid for cid, c in self.champions.items()
+            if 1 <= int(c.get("cost") or 0) <= 5 and trait_id in (c.get("traits") or ())
+        ))
+
+    def singleton_provider_traits(self, character_id: str | None) -> tuple[str, ...]:
+        """The champion's own traits that no other shop champion provides
+        naturally (static trait membership only). Picking this champion
+        guarantees each of them on the board at one unit, so that baseline
+        says nothing about the units built around it (see
+        `tftlab.analytics.traits`). Says nothing about whether an emblem or
+        another mechanic can extend the trait: that is `intrinsic_traits`.
+        Never a name list."""
+        return tuple(t for t in self.champion_traits(character_id) if self.trait_champions(t) == (character_id,))
+
+    def intrinsic_traits(self, character_id: str | None) -> tuple[str, ...]:
+        """Traits that come with picking this champion and cannot be built
+        any other way: its `singleton_provider_traits` that no item can add
+        either -- the snapshot's verified `trait_items` lists no emblem or
+        trait item for them. A stronger claim than "singleton provider": it
+        needs complete item knowledge, so it fails closed: unless the guard is
+        verified (`trait_item_guard_verified`: trait-item data present and no
+        unresolved emblem) nothing is intrinsic. Classification for the API
+        only; trait evidence uses the singleton-provider baseline rule
+        instead, which does not depend on this."""
+        if not self.trait_item_guard_verified:
+            return ()
+        return tuple(t for t in self.singleton_provider_traits(character_id) if not self.trait_items.get(t))
 
     def champion_name(self, character_id: str | None) -> str | None:
         entry = self.champions.get(character_id or "")
@@ -78,4 +135,7 @@ class Roster:
 @lru_cache(maxsize=1)
 def load_roster() -> Roster:
     data = json.loads(ROSTER_PATH.read_text())
-    return Roster(set_number=data["set_number"], champions=data["champions"], traits=data["traits"])
+    return Roster(
+        set_number=data["set_number"], champions=data["champions"], traits=data["traits"],
+        trait_items=data.get("trait_items"), unresolved_emblems=data.get("unresolved_emblems"),
+    )

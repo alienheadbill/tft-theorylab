@@ -55,6 +55,13 @@ Guinsoo's or Adaptive Helm + Titan's is. Boards without Adaptive Helm follow
 the ordinary rule above, UNKNOWN included. Adaptive Helm is recognized by
 Riot's item id (`TFT_Item_AdaptiveHelm`) through the snapshot's alias
 bridge, so every Match-V1 id resolving to it (`DA_AdaptiveHelm`) is covered.
+
+Thief's Gloves (normal or Radiant; see `tftlab.itemization`): the two items
+Match-V1 lists next to the gloves were rolled by the game for that round,
+not chosen, and the gloves themselves say nothing about carry intent. So a
+Thief's Gloves holder is never a carry observation, whatever it rolled. (Lucky
+Gloves, which makes the rolls champion-appropriate, would be an exception,
+but its Match-V1 augment ids are not verified yet; see `tftlab.itemization`.)
 """
 
 from __future__ import annotations
@@ -65,6 +72,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .items import ITEM_INTENT_PATH, is_component
+from .itemization import THIEFS_GLOVES, thiefs_gloves_item_ids, unit_itemization
 
 DAMAGE = "damage"
 TANK = "tank"
@@ -162,7 +170,10 @@ def is_carry_observation(
     item_intents: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> bool:
     """True when a unit holding `item_ids` counts as a carry commitment."""
-    completed = [i for i in item_ids if i and not is_component(i)]
+    itemization = unit_itemization(item_ids)
+    if itemization.special == THIEFS_GLOVES:
+        return False  # rolled items are not chosen; the gloves alone are no carry evidence
+    completed = list(itemization.completed_equipped)
     if len(completed) < commitment_items:
         return False
     adaptive = set(adaptive_helm_item_ids(item_intents))
@@ -207,14 +218,23 @@ def carry_commitment_sql(
     instead eligible only when its json also holds a corroborating id
     (`adaptive_helm_corroborating_item_ids`: DAMAGE or MIXED, never Adaptive
     Helm itself) -- found the same way, as a REPLACE chain that shortens the
-    json."""
+    json.
+
+    A unit whose json holds a quoted Thief's Gloves id
+    (`tftlab.itemization.thiefs_gloves_item_ids`) is never eligible. The
+    stored `completed_item_count` (which counts the gloves' rolls) is left as
+    stored; this exclusion is what keeps it from qualifying."""
     ids = no_carry_evidence_item_ids(item_intents)
     adaptive = adaptive_helm_item_ids(item_intents)
-    base = f"{alias}.completed_item_count >= ?"
-    if not ids and not adaptive:
-        return f"({base})", [commitment_items]
     json_col = f"{alias}.items_json"
+    gloves = sorted(thiefs_gloves_item_ids())
+    base = f"{alias}.completed_item_count >= ?"
     params: list[Any] = [commitment_items]
+    if gloves:
+        base += f" AND NOT ({' OR '.join(_contains(json_col) for _ in gloves)})"
+        params += [json.dumps(i) for i in gloves]
+    if not ids and not adaptive:
+        return f"({base})", params
     ordinary, ordinary_params = f"{alias}.completed_item_count > 0", []
     if ids:
         groups = []
