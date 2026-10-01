@@ -18,11 +18,11 @@ from tftlab.cdragon import (
     MAP22_BIN_PATH,
     TFT_STRINGTABLE_PATH,
     CommunityDragonClient,
-    SetMetadata,
     champion_role_coverage,
     item_intent_snapshot,
     item_stats_snapshot,
     riot_roles,
+    roster_snapshot,
 )
 
 ROSTER_FIXTURE = Path(__file__).parents[1] / "src" / "tftlab" / "data" / "set_roster.json"
@@ -59,16 +59,6 @@ def test_live_communitydragon_feed_parses_with_sensible_costs(tmp_path) -> None:
         print(f"  {champion.character_id}: {champion.name} (cost {champion.cost})")
 
 
-def roster_snapshot(meta: SetMetadata) -> dict:
-    """The committed-fixture shape of a set's roster (see
-    src/tftlab/data/set_roster.json and tests/test_demo_roster.py)."""
-    return {
-        "set_number": meta.set_number,
-        "champions": {
-            cid: {"name": c.name, "cost": c.cost} for cid, c in sorted(meta.champions.items())
-        },
-        "traits": {tid: t.name for tid, t in sorted(meta.traits.items())},
-    }
 
 
 @requires_live_network

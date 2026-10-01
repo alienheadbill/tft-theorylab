@@ -155,6 +155,42 @@ def parse_set_metadata(
     )
 
 
+def champion_trait_ids(meta: SetMetadata) -> dict[str, tuple[str, ...]]:
+    """Each champion's traits as the set's canonical trait ids, sorted.
+
+    CommunityDragon lists a champion's traits by display name ("Caustic"),
+    while match data and every other static file use trait apiNames
+    (`DA_18_...`). Each listed name must name exactly one of the set's
+    traits; anything else raises instead of guessing."""
+    by_name: dict[str, list[str]] = {}
+    for trait_id, trait in meta.traits.items():
+        by_name.setdefault(trait.name, []).append(trait_id)
+    out: dict[str, tuple[str, ...]] = {}
+    for character_id, champion in meta.champions.items():
+        ids = []
+        for name in champion.traits:
+            matches = by_name.get(name, [])
+            if len(matches) != 1:
+                raise ValueError(f"{character_id}: trait {name!r} matches {len(matches)} set traits")
+            ids.append(matches[0])
+        out[character_id] = tuple(sorted(set(ids)))
+    return out
+
+
+def roster_snapshot(meta: SetMetadata) -> dict[str, Any]:
+    """The committed shape of `data/set_roster.json` (`tftlab.roster`):
+    champions with name, cost and canonical trait ids, and trait names."""
+    trait_ids = champion_trait_ids(meta)
+    return {
+        "set_number": meta.set_number,
+        "champions": {
+            cid: {"name": c.name, "cost": c.cost, "traits": list(trait_ids[cid])}
+            for cid, c in sorted(meta.champions.items())
+        },
+        "traits": {tid: t.name for tid, t in sorted(meta.traits.items())},
+    }
+
+
 class CommunityDragonClient:
     """Fetches and disk-caches TFT static metadata from CommunityDragon.
 

@@ -32,6 +32,7 @@ from tftlab.carry import (
     no_carry_evidence_item_ids,
 )
 from tftlab.items import ITEM_INTENT_PATH, ITEM_STATS_PATH, is_component
+from tftlab.itemization import thiefs_gloves_item_ids
 from tftlab.storage import Database
 from tftlab.webapp import carry_item_sets
 
@@ -44,6 +45,10 @@ ADAPTIVE, IONIC, CLAW, LW = "DA_AdaptiveHelm", "DA_IonicSpark", "DA_DragonsClaw"
 RAVAGER_EMBLEM = "DA_18_EmblemSlayer"  # "Ravager Emblem": no Riot counterpart in the recommendation namespace
 # Known special items outside Riot's role-recommendation domain (their own map22 ItemTags differ).
 TALISMAN, THIEFS = "DA_Item_Artifact_TalismanOfAscension", "DA_ThiefsGloves"
+# Riot-shaped Thief's Gloves units: the gloves plus that round's two rolls.
+TG_ROLLED_AD = [THIEFS, "DA_Bloodthirster", CLAW]
+TG_ROLLED_AP = [THIEFS, "DA_JeweledGauntlet", "DA_KrakensFury"]
+TG_RADIANT = ["DA_ThiefsGlovesRadiant", "DA_BloodthirsterRadiant", "DA_GuinsoosRagebladeRadiant"]
 TAC_CAPE, TAC_CROWN, TAC_SHIELD = "DA_TacticiansCape", "DA_TacticiansCrown", "DA_TacticiansShield"
 ELISE = "DA_18_Elise"
 
@@ -203,7 +208,11 @@ def test_components_and_unknown_ids() -> None:
         ([WARMOG, "DA_NotInTheSnapshot"], True),
         ([TALISMAN, WARMOG], True),  # artifact: outside the domain => UNKNOWN => conservative
         ([TAC_CROWN, WARMOG], True), ([TAC_CAPE, WARMOG], True), ([TAC_SHIELD, GARGOYLE], True),
-        ([THIEFS, WARMOG], True), ([THIEFS, STEADFAST], True),  # not excluded for lacking a recommendation
+        # Thief's Gloves: the rolls were not chosen and the gloves are no carry evidence,
+        # even when the rolls are offensive (see tftlab.itemization).
+        ([THIEFS, WARMOG], False), ([THIEFS, STEADFAST], False),
+        (TG_ROLLED_AD, False), (TG_ROLLED_AP, False), (TG_RADIANT, False),
+        (["TFT_Item_ThiefsGloves", T_GUINSOO, T_TITAN], False),
         ([WARMOG, "DA_Component_ChainVest"], False),  # 1 completed item
         ([GUINSOO, "DA_Component_RecurveBow"], False),  # components never count
         ([WARMOG, GARGOYLE, "DA_Component_ChainVest"], False),
@@ -363,6 +372,7 @@ PACKAGES = [
     [RAVAGER_EMBLEM, GUINSOO], [RAVAGER_EMBLEM, WARMOG], [WARMOG, "DA_NotInTheSnapshot"], [GARGOYLE, GUINSOO],
     [WARMOG, "DA_Component_ChainVest", "DA_Component_NegatronCloak"], [], [T_WARMOG, T_GARGOYLE], [T_TITAN, T_STERAK],
     [STEADFAST, CROWNGUARD, VISAGE], [IONIC, WARMOG], [TALISMAN, WARMOG], [TAC_CROWN, GARGOYLE], [THIEFS, VISAGE],
+    TG_ROLLED_AD, TG_ROLLED_AP, TG_RADIANT, ["TFT_Item_ThiefsGloves", T_GUINSOO, T_TITAN],
 ]
 
 
@@ -373,8 +383,9 @@ def _sql_matches_python(db: Database) -> None:
     eligible = {r[0] for r in db.query_all(f"SELECT u.character_id FROM units u WHERE {sql}", params)}
     expected = {f"TFT99_P{i}" for i, items in enumerate(PACKAGES) if is_carry_observation(items)}
     assert eligible == expected
+    # P17-P21 hold Thief's Gloves (rolls included): never carry observations in either path.
     assert expected == {"TFT99_P4", "TFT99_P5", "TFT99_P6", "TFT99_P7", "TFT99_P8", "TFT99_P12", "TFT99_P14",
-                        "TFT99_P15", "TFT99_P16", "TFT99_P17"}
+                        "TFT99_P15", "TFT99_P16"}
 
 
 def test_sql_rule_matches_python_rule_on_sqlite(tmp_path: Path) -> None:
@@ -414,6 +425,7 @@ def test_every_no_evidence_id_is_counted_in_sql() -> None:
     expected = Counter({json.dumps(i): 2 for i in ids})  # no-evidence ids: counted (chain used twice)
     expected.update(json.dumps(i) for i in adaptive)  # Adaptive Helm: presence check
     expected.update(json.dumps(i) for i in corroborating)  # corroborating ids: presence check
+    expected.update(json.dumps(i) for i in thiefs_gloves_item_ids())  # Thief's Gloves: excluded on presence
     assert quoted == expected
     assert all(load_item_intent()[i]["intent"] not in CARRY_EVIDENCE for i in ids)
     assert max(len(m) for m in re.findall(r"(?:REPLACE\()+", sql)) <= len("REPLACE(") * 17  # bounded nesting

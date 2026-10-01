@@ -10,6 +10,16 @@ reports. `tier_current` is only used for the active condition below; it is an
 ordinal ("which tier"), not a unit count, and it is never translated into a
 threshold: the canonical unit thresholds per tier are not in any verified
 static metadata this repository holds.
+
+Intrinsic traits. A trait that only the carry itself provides (a one-champion
+trait, from the roster's static trait membership: `Roster.intrinsic_traits`)
+is present because that champion was picked, not because of the units built
+around it. It is left out of every carry's trait evidence here -- trait/count
+associations (Discovery, the traits API) and the trait profile (Champion
+Investigation) -- and reported separately as champion context. Only the
+carry's OWN intrinsic traits are dropped: another champion's one-champion
+trait on the board means that champion was added, which is shell evidence.
+Stored trait rows are never changed.
 """
 
 from __future__ import annotations
@@ -19,6 +29,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from ..carry import carry_commitment_sql
+from ..roster import load_roster
 from ..storage import Database
 from .association import Association, compute_associations
 
@@ -55,7 +66,8 @@ def _trait_boards_for(
     """Each carry's commitment boards in ONE query, as `(placement, {trait:
     num_units})` over the board's active traits. A board is keyed by
     (match, participant), so duplicate unit rows for the carry never count
-    it twice, and the traits primary key allows one row per trait per board."""
+    it twice, and the traits primary key allows one row per trait per board.
+    Each carry's own intrinsic traits are left out (see the module docstring)."""
     if not character_ids:
         return {}
     eligible_sql, eligible_params = carry_commitment_sql("c", commitment_items)
@@ -78,13 +90,15 @@ def _trait_boards_for(
         """,
         (*character_ids, *eligible_params, balance_window),
     )
+    roster = load_roster()
+    intrinsic = {str(cid): frozenset(roster.intrinsic_traits(str(cid))) for cid in character_ids}
     placements: dict[str, dict[tuple[str, int], int]] = defaultdict(dict)
     traits: dict[str, dict[tuple[str, int], BoardTraits]] = defaultdict(lambda: defaultdict(dict))
     for carry_id, match_id, participant_index, placement, trait_name, num_units in rows:
         carry_id = str(carry_id)
         board = (match_id, participant_index)
         placements[carry_id][board] = int(placement)
-        if trait_name and num_units is not None:
+        if trait_name and num_units is not None and str(trait_name) not in intrinsic.get(carry_id, ()):
             traits[carry_id][board][str(trait_name)] = int(num_units)
     return {
         carry_id: [(p, dict(traits[carry_id].get(board, {}))) for board, p in boards.items()]
@@ -175,11 +189,15 @@ class TraitProfile:
 
     `active` is ordered by boards (most common first), then trait name. Every
     row carries its with/without comparison as secondary evidence; nothing is
-    ordered by it here."""
+    ordered by it here.
+
+    `intrinsic` lists the champion's intrinsic trait ids (static data), which
+    `active`/`counts` never contain."""
 
     carry_boards: int
     active: list[Association]
     counts: dict[str, list[Association]]
+    intrinsic: tuple[str, ...] = ()
 
 
 def trait_profile(
@@ -202,6 +220,7 @@ def trait_profile(
     for a in per_count:
         counts[split_trait_count_key(a.key)[0]].append(a)
     return TraitProfile(
+        intrinsic=load_roster().intrinsic_traits(character_id),
         carry_boards=len(boards),
         active=sorted(active, key=lambda a: (-a.games, a.key)),
         counts={

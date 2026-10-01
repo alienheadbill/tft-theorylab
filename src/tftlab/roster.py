@@ -43,11 +43,39 @@ def id_key(identifier: str | None) -> str:
     return name_key(stripped)
 
 
+#: Explains an intrinsic trait to a player (see `Roster.intrinsic_traits`).
+INTRINSIC_TRAIT_REASON = (
+    "Only {champion} has this trait, so it comes with picking {champion}: "
+    "it describes the champion, not the units built around it."
+)
+
+
 @dataclass(frozen=True)
 class Roster:
     set_number: int
     champions: dict[str, dict]
     traits: dict[str, str]
+
+    def champion_traits(self, character_id: str | None) -> tuple[str, ...]:
+        """The champion's own traits (canonical trait ids), from static data."""
+        return tuple((self.champions.get(character_id or "") or {}).get("traits") or ())
+
+    def trait_champions(self, trait_id: str) -> tuple[str, ...]:
+        """Shop champions (cost 1-5) whose own traits include `trait_id`, sorted."""
+        return tuple(sorted(
+            cid for cid, c in self.champions.items()
+            if 1 <= int(c.get("cost") or 0) <= 5 and trait_id in (c.get("traits") or ())
+        ))
+
+    def intrinsic_traits(self, character_id: str | None) -> tuple[str, ...]:
+        """Traits that come with picking this champion and no other: the
+        champion's own traits that no other shop champion has (a one-champion
+        trait such as a unique trait). Their presence on this champion's boards
+        is champion identity, not evidence of a trait shell built around it.
+        Derived from the roster's static trait membership; never a name list."""
+        return tuple(
+            t for t in self.champion_traits(character_id) if self.trait_champions(t) == (character_id,)
+        )
 
     def champion_name(self, character_id: str | None) -> str | None:
         entry = self.champions.get(character_id or "")
