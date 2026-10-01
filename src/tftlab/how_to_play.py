@@ -9,11 +9,12 @@ picks a few of them for a quick read. The rules are fixed and documented
 below; the deeper tabs keep every row.
 
 Support rule. A row is "supported" when it has at least `SUPPORT_MIN_BOARDS`
-carry boards (Discovery's existing minimum sample) and is not observed doing
-worse: with enough boards on BOTH sides, a lower Top 4 with it than without
-it and a negative adjusted difference excludes it. Supported rows keep the
-existing analytics ranking (the shrinkage-adjusted with-vs-without
-association score) unless a section says otherwise.
+carry boards (Discovery's existing minimum sample). Nothing else is
+filtered: a small with-vs-without gap on a near-universal item is noise,
+and hiding such an item (e.g. one on 84% of boards) would mislead. Supported
+rows keep the existing analytics ranking (the shrinkage-adjusted
+with-vs-without association score), so rows observed doing worse sort
+last; the ITEMS tab shows every comparison.
 
 Component direction is DERIVED, not observed. Match-V1 lists a unit's final
 items only, never which components a player held or when, so this reads the
@@ -50,18 +51,8 @@ COMPONENT_DIRECTION_BASIS = (
 
 
 def is_supported(row: dict[str, Any]) -> bool:
-    """See the module docstring. `row` is a Champion Investigation evidence
-    row (`_comparison` fields)."""
-    if row["games"] < SUPPORT_MIN_BOARDS:
-        return False
-    without = row.get("top4_without")
-    observed_worse = (
-        row["games_without"] >= SUPPORT_MIN_BOARDS
-        and without is not None
-        and row["top4_with"] < without
-        and (row["adjusted_top4_difference"] or 0.0) < 0
-    )
-    return not observed_worse
+    """Enough carry boards to show (see the module docstring)."""
+    return row["games"] >= SUPPORT_MIN_BOARDS
 
 
 def _normal(row: dict[str, Any]) -> bool:
@@ -191,6 +182,11 @@ def trait_directions(trait_rows: Sequence[dict[str, Any]], limit: int = CONCISE_
     return out[:limit]
 
 
+def by_frequency(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rows most-boards first (stable, so ties keep the existing ranking)."""
+    return sorted(rows, key=lambda r: -r["games"])
+
+
 def _names(rows: Sequence[dict[str, Any]], key: str = "name") -> str:
     names = [r[key] for r in rows]
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
@@ -204,7 +200,8 @@ def evidence_summary(
     only: no mechanic, causal or strategy claim."""
     parts = []
     if items:
-        parts.append(f"supported items include {_names([r['items'][0] for r in items[:2]])}")
+        common = by_frequency(items)[:2]
+        parts.append(f"the most used supported items are {_names([r['items'][0] for r in common])}")
     if mates:
         parts.append(f"frequent teammates include {_names(mates[:2])}")
     if traits:
@@ -229,8 +226,11 @@ def how_to_play(
     trait_rows: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
     """The concise view: every list is already-ranked evidence, filtered by
-    the support rule and shortened. Empty lists are honest empty states."""
-    items = supported_items(item_rows)
+    the support rule and shortened. Empty lists are honest empty states.
+    Which items are supported (and feed the component direction) follows
+    the existing ranking; they are listed most-boards first for reading."""
+    selected = supported_items(item_rows)
+    items = by_frequency(selected)
     pairs = [r for r in pair_rows if _normal(r) and is_supported(r)][:CONCISE_PAIRS]
     builds = [r for r in build_rows if _normal(r) and is_supported(r)][:CONCISE_BUILDS]
     mates = teammates(partner_rows)
@@ -238,7 +238,7 @@ def how_to_play(
     return {
         "evidence": "observed",
         "support_min_boards": SUPPORT_MIN_BOARDS,
-        "component_direction": component_direction(items),
+        "component_direction": component_direction(selected),
         "items": items,
         "pairs": pairs,
         "builds": builds,

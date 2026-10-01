@@ -119,13 +119,15 @@ def row(item_ids: list[str], games: int, *, without: int = 20, top4_with: float 
     }
 
 
-def test_support_rule_needs_boards_and_excludes_only_rows_observed_worse() -> None:
+def test_support_rule_is_the_sample_floor_and_keeps_the_existing_ranking() -> None:
     assert htp.is_supported(row([GUINSOO], 10))
     assert not htp.is_supported(row([GUINSOO], 9))  # too few boards
-    worse = row([GUINSOO], 30, without=30, top4_with=0.4, top4_without=0.55, adjusted=-0.08)
-    assert not htp.is_supported(worse)
-    # On almost every board: too few boards without it to call it worse.
-    assert htp.is_supported(row([GUINSOO], 95, without=5, top4_with=0.5, top4_without=0.6, adjusted=-0.01))
+    # A near-universal item with a small negative gap is still shown (noise must
+    # not hide a core item); ranking, not a filter, puts it after better rows.
+    core = row([DCAP], 152, without=28, top4_with=0.51, top4_without=0.54, adjusted=-0.02)
+    assert htp.is_supported(core)
+    ranked = [row([IE], 83, adjusted=0.03), core]
+    assert [r["items"][0]["id"] for r in htp.supported_items(ranked)] == [IE, DCAP]
 
 
 def test_component_direction_comes_only_from_verified_recipes_and_says_so() -> None:
@@ -333,3 +335,10 @@ def test_page_has_accessible_tabs_and_no_intrinsic_block() -> None:
         assert f"'{tab}'" in js, tab
     assert "Comps" not in js and "intrinsic" not in js.lower()
     assert "derived from recipes" in js.lower() or "recipe direction" in js.lower()
+
+
+def test_normal_items_fall_back_to_an_exact_display_name_icon_but_special_items_never_borrow() -> None:
+    sword = item_ref(SWORD)  # no snapshot alias; one cached item is named exactly "B.F. Sword"
+    assert sword["kind"] == "component" and sword["art_url"] and "TFT_Item_BFSword" in sword["art_url"]
+    assert item_ref("DA_Item_Artifact_TalismanOfAscension")["art_url"] is None
+    assert item_ref(GUINSOO + "Radiant")["art_url"] is None
