@@ -92,7 +92,7 @@ ANALYTICS_SOURCES: tuple[Path, ...] = (
     _PACKAGE / "analytics" / "traits.py",
     _PACKAGE / "carry.py",
     _PACKAGE / "items.py",
-    # Equipped vs generated items (Thief's Gloves) and intrinsic traits.
+    # Equipped vs generated items (Thief's Gloves) and the singleton-provider trait baseline (roster).
     _PACKAGE / "itemization.py",
     _PACKAGE / "roster.py",
     _PACKAGE / "data" / "item_intent.json",

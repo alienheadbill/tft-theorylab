@@ -82,23 +82,29 @@ class Roster:
             if 1 <= int(c.get("cost") or 0) <= 5 and trait_id in (c.get("traits") or ())
         ))
 
+    def singleton_provider_traits(self, character_id: str | None) -> tuple[str, ...]:
+        """The champion's own traits that no other shop champion provides
+        naturally (static trait membership only). Picking this champion
+        guarantees each of them on the board at one unit, so that baseline
+        says nothing about the units built around it (see
+        `tftlab.analytics.traits`). Says nothing about whether an emblem or
+        another mechanic can extend the trait: that is `intrinsic_traits`.
+        Never a name list."""
+        return tuple(t for t in self.champion_traits(character_id) if self.trait_champions(t) == (character_id,))
+
     def intrinsic_traits(self, character_id: str | None) -> tuple[str, ...]:
         """Traits that come with picking this champion and cannot be built
-        any other way: the champion's own traits that (1) no other shop
-        champion has and (2) no item can add -- the snapshot's verified
-        `trait_items` lists no emblem or trait item for them. Their presence on
-        this champion's boards is champion identity, not evidence of a trait
-        shell built around it. A one-champion trait an emblem can extend stays
-        buildable. Fails closed: unless the guard is verified
-        (`trait_item_guard_verified`: trait-item data present and no
-        unresolved emblem) nothing is intrinsic. Derived from static data
-        only; never a name list."""
+        any other way: its `singleton_provider_traits` that no item can add
+        either -- the snapshot's verified `trait_items` lists no emblem or
+        trait item for them. A stronger claim than "singleton provider": it
+        needs complete item knowledge, so it fails closed: unless the guard is
+        verified (`trait_item_guard_verified`: trait-item data present and no
+        unresolved emblem) nothing is intrinsic. Classification for the API
+        only; trait evidence uses the singleton-provider baseline rule
+        instead, which does not depend on this."""
         if not self.trait_item_guard_verified:
             return ()
-        return tuple(
-            t for t in self.champion_traits(character_id)
-            if self.trait_champions(t) == (character_id,) and not self.trait_items.get(t)
-        )
+        return tuple(t for t in self.singleton_provider_traits(character_id) if not self.trait_items.get(t))
 
     def champion_name(self, character_id: str | None) -> str | None:
         entry = self.champions.get(character_id or "")

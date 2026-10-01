@@ -387,44 +387,135 @@ def verified_roster(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(investigation_module, "load_roster", lambda: VERIFIED_ROSTER)
 
 
-def test_with_the_committed_fail_closed_roster_caustic_stays_trait_evidence(db: Database) -> None:
-    champion = {"character_id": KOGMAW, "name": "Kog'Maw", "slug": "kogmaw", "cost": 4, "art_url": None}
-    body = champion_investigation(db, champion, WINDOW)
-    assert body["intrinsic_traits"] == []
-    assert CAUSTIC in [t["trait_id"] for t in body["traits"]]
-    kog = {a.key.split(":")[0] for a in trait_count_associations(db, KOGMAW, WINDOW, min_games=1)}
-    assert CAUSTIC in kog
-    assert trait_profile(db, KOGMAW, WINDOW).intrinsic == ()
+KOG = {"character_id": KOGMAW, "name": "Kog'Maw", "slug": "kogmaw", "cost": 4, "art_url": None}
 
 
-def test_carry_intrinsic_trait_is_context_not_ranked_shell_evidence(db: Database, verified_roster) -> None:
-    champion = {"character_id": KOGMAW, "name": "Kog'Maw", "slug": "kogmaw", "cost": 4, "art_url": None}
-    body = champion_investigation(db, champion, WINDOW)
-    ranked = [t["trait_id"] for t in body["traits"]]
-    assert CAUSTIC not in ranked
-    assert {ADAPTOR, INVOKER} <= set(ranked)  # Kog'Maw's own multi-unit traits are kept
-    assert BOUNTY in ranked  # another champion's one-champion trait means Draven was added: shell evidence
+def _keys(db: Database, character_id: str) -> set[str]:
+    return {a.key for a in trait_count_associations(db, character_id, WINDOW, min_games=1)}
+
+
+def test_singleton_provider_is_static_membership_independent_of_the_emblem_guard() -> None:
+    """"Only shop champion that naturally has the trait" needs trait
+    membership only; "intrinsic" (nothing can add it) also needs complete
+    emblem knowledge and fails closed. The first holds whatever the second
+    says."""
+    rosters = [
+        Roster(set_number=99, traits=SYNTHETIC_TRAITS, champions=SYNTHETIC_CHAMPIONS,
+               trait_items={"T_Emblemable": ["DA_99_EmblemEmblemable"]}, unresolved_emblems=[]),
+        Roster(set_number=99, traits=SYNTHETIC_TRAITS, champions=SYNTHETIC_CHAMPIONS),  # no item data
+        Roster(set_number=99, traits=SYNTHETIC_TRAITS, champions=SYNTHETIC_CHAMPIONS,
+               trait_items={}, unresolved_emblems=["DA_99_EmblemMystery"]),  # unresolved emblem
+    ]
+    for roster in rosters:
+        assert roster.singleton_provider_traits("C_A") == ("T_Solo",)  # X_Summon is not a shop champion
+        assert roster.singleton_provider_traits("C_D") == ("T_Emblemable",)  # even though an emblem adds it
+        assert roster.singleton_provider_traits("C_B") == () and roster.singleton_provider_traits("C_C") == ()
+    assert rosters[0].intrinsic_traits("C_A") == ("T_Solo",) and rosters[0].intrinsic_traits("C_D") == ()
+    assert all(r.intrinsic_traits(c) == () for r in rosters[1:] for c in SYNTHETIC_CHAMPIONS)
+    # The committed Set 18 roster: Caustic is Kog'Maw's singleton-provider
+    # trait while intrinsic classification stays fail-closed (Phantom Emblems).
+    assert ROSTER.singleton_provider_traits(KOGMAW) == (CAUSTIC,) and ROSTER.intrinsic_traits(KOGMAW) == ()
+    assert ROSTER.singleton_provider_traits(ALUNE) == (ATTUNED,)
+    assert ROSTER.singleton_provider_traits(DRAVEN) == (BOUNTY,)
+    assert len({t for c in ROSTER.champions for t in ROSTER.singleton_provider_traits(c)}) == 9
+
+
+def test_guaranteed_baseline_is_only_the_carrys_own_singleton_trait_at_one_unit() -> None:
+    from tftlab.analytics.traits import GUARANTEED_BASELINE_UNITS, is_guaranteed_baseline
+
+    assert GUARANTEED_BASELINE_UNITS == 1
+    own = frozenset({"T_Solo"})
+    assert is_guaranteed_baseline("T_Solo", 1, own)
+    assert not is_guaranteed_baseline("T_Solo", 2, own) and not is_guaranteed_baseline("T_Solo", 3, own)
+    assert not is_guaranteed_baseline("T_Pair", 1, own)  # not the carry's singleton-provider trait
+
+
+def test_own_singleton_trait_baseline_is_not_ranked_while_intrinsic_stays_fail_closed(db: Database) -> None:
+    """Committed roster (Phantom Emblems unresolved, so nothing is intrinsic):
+    Kog'Maw's Caustic and Alune's Attuned at their guaranteed one unit are
+    still never trait evidence -- no generic active row, no ":1" count -- in
+    Champion Investigation, Discovery / the traits API, or the profile."""
+    assert not ROSTER.trait_item_guard_verified and ROSTER.intrinsic_traits(KOGMAW) == ()
+    body = champion_investigation(db, KOG, WINDOW)
+    assert body["intrinsic_traits"] == []  # the fail-closed classification is unchanged
+    ranked = {t["trait_id"] for t in body["traits"]}
+    assert CAUSTIC not in ranked and {ADAPTOR, INVOKER} <= ranked
+    assert not any(t["above_baseline_only"] for t in body["traits"])
+    assert "Caustic" not in json.dumps(body["summary"])
+
+    profile = trait_profile(db, KOGMAW, WINDOW)
+    assert profile.baseline_traits == (CAUSTIC,) and profile.intrinsic == ()
+    assert CAUSTIC not in profile.counts and all(a.key != CAUSTIC for a in profile.active)
+
+    assert not {k for k in _keys(db, KOGMAW) if k.startswith(f"{CAUSTIC}:")}
+    alune = _keys(db, ALUNE)
+    assert not {k for k in alune if k.startswith(f"{ATTUNED}:")} and f"{SPELLWEAVER}:2" in alune
+    # Stored trait rows are untouched.
+    assert db.query_one("SELECT COUNT(*) FROM traits WHERE trait_name = ?", (CAUSTIC,))[0] == 11
+
+
+def test_own_singleton_trait_above_its_baseline_stays_count_evidence(db: Database) -> None:
+    """Caustic reported at 2 units on two Kog'Maw carry boards: picking
+    Kog'Maw does not explain the second unit (an emblem or another mechanic
+    might), so that count stays evidence; the 1-unit boards still do not."""
+    for i in range(2):
+        db.ingest_match(_board(f"KOG_EXT_{i}", KOGMAW, [GUINSOO, IE], 2, [(CAUSTIC, 2), (ADAPTOR, 3), (INVOKER, 2)]))
+    db.commit()
+
+    keys = _keys(db, KOGMAW)
+    assert f"{CAUSTIC}:2" in keys and f"{CAUSTIC}:1" not in keys
+
+    profile = trait_profile(db, KOGMAW, WINDOW)
+    assert profile.carry_boards == 8
+    assert [a.key for a in profile.counts[CAUSTIC]] == [f"{CAUSTIC}:2"] and profile.counts[CAUSTIC][0].games == 2
+    (caustic,) = [a for a in profile.active if a.key == CAUSTIC]
+    assert caustic.games == 2  # the boards above the baseline, not all 8 carry boards
+
+    rows = {t["trait_id"]: t for t in champion_investigation(db, KOG, WINDOW)["traits"]}
+    assert rows[CAUSTIC]["above_baseline_only"] and [c["num_units"] for c in rows[CAUSTIC]["counts"]] == [2]
+    assert not rows[ADAPTOR]["above_baseline_only"]
+    summary = json.dumps(champion_investigation(db, KOG, WINDOW)["summary"])
+    assert "Caustic" not in summary  # never restated as an "active trait" share
+
+
+def test_multi_unit_traits_and_other_champions_singleton_traits_are_unchanged(
+    db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Everything except the carry's own singleton-provider baseline matches
+    the rule switched off (a roster where Caustic has no natural provider):
+    Kog'Maw's multi-unit traits, and Draven's Bounty Seeker at 1 unit on the
+    boards Draven was added to."""
+    import tftlab.analytics.traits as traits_module
+
+    with_rule = {a.key: a for a in trait_count_associations(db, KOGMAW, WINDOW, min_games=1)}
+    without = dataclasses.replace(ROSTER, champions={
+        cid: ({**c, "traits": [t for t in c["traits"] if t != CAUSTIC]} if cid == KOGMAW else c)
+        for cid, c in ROSTER.champions.items()})
+    assert without.singleton_provider_traits(KOGMAW) == ()
+    monkeypatch.setattr(traits_module, "load_roster", lambda: without)
+    no_rule = {a.key: a for a in trait_count_associations(db, KOGMAW, WINDOW, min_games=1)}
+
+    assert set(no_rule) - set(with_rule) == {f"{CAUSTIC}:1"}
+    for key in (f"{ADAPTOR}:3", f"{INVOKER}:2", f"{BOUNTY}:1"):
+        assert with_rule[key] == no_rule[key]
+    assert with_rule[f"{BOUNTY}:1"].games == 3  # Draven added on 3 of Kog'Maw's 6 carry boards
+
+
+def test_verified_intrinsic_classification_does_not_change_trait_evidence(db: Database, verified_roster) -> None:
+    """Were the emblem guard verified, Caustic would be classified intrinsic
+    in the API -- and trait evidence would be exactly the same, because
+    evidence uses the singleton-provider baseline rule, not this
+    classification."""
+    body = champion_investigation(db, KOG, WINDOW)
     (caustic,) = body["intrinsic_traits"]
     assert caustic["trait_id"] == CAUSTIC and caustic["name"] == "Caustic"
     assert caustic["art_url"].startswith("/static/game/traits/") and "Kog'Maw" in caustic["reason"]
-    assert "Caustic" not in json.dumps(body["summary"])  # never summarised as a trait to build around
     reason = caustic["reason"].lower()
     for claim in ("top 4", "win", "better", "stronger", "cause", "because of", "placement"):
         assert claim not in reason  # identity, not a performance claim
-
-    profile = trait_profile(db, KOGMAW, WINDOW)
-    assert profile.intrinsic == (CAUSTIC,) and CAUSTIC not in profile.counts
-    assert all(a.key != CAUSTIC for a in profile.active)
-
-
-def test_discovery_trait_evidence_uses_the_same_rule(db: Database, verified_roster) -> None:
-    alune = {a.key.split(":")[0] for a in trait_count_associations(db, ALUNE, WINDOW, min_games=1)}
-    assert ATTUNED not in alune and SPELLWEAVER in alune
-    kog = {a.key.split(":")[0] for a in trait_count_associations(db, KOGMAW, WINDOW, min_games=1)}
-    assert CAUSTIC not in kog and {ADAPTOR, INVOKER, BOUNTY} <= kog
-    # Stored trait rows are untouched.
-    stored = db.query_one("SELECT COUNT(*) FROM traits WHERE trait_name = ?", (CAUSTIC,))[0]
-    assert stored == 11
+    ranked = [t["trait_id"] for t in body["traits"]]
+    assert CAUSTIC not in ranked and {ADAPTOR, INVOKER, BOUNTY} <= set(ranked)
+    assert trait_profile(db, KOGMAW, WINDOW).intrinsic == (CAUSTIC,)
 
 
 def test_intrinsic_traits_stay_out_of_the_champion_page() -> None:
@@ -452,11 +543,16 @@ def test_semantic_sources_are_in_the_prepared_analytics_digest(tmp_path: Path) -
     data = json.loads(roster_copy.read_text())
     data["champions"][KOGMAW]["traits"].remove(CAUSTIC)
     roster_copy.write_text(json.dumps(data))
-    assert prepared_discovery.analytics_version(copies) != before  # trait membership change -> new version
+    after_membership = prepared_discovery.analytics_version(copies)
+    assert after_membership != before  # trait membership change -> new version
+    rule_copy = tmp_path / "traits.py"
+    rule_copy.write_text(rule_copy.read_text().replace("GUARANTEED_BASELINE_UNITS = 1", "GUARANTEED_BASELINE_UNITS = 2"))
+    assert "GUARANTEED_BASELINE_UNITS = 2" in rule_copy.read_text()
+    assert prepared_discovery.analytics_version(copies) != after_membership  # trait-rule change -> new version
 
 
 def test_old_prepared_runs_go_stale_and_re_preparation_uses_the_corrected_semantics(
-    db: Database, monkeypatch: pytest.MonkeyPatch, verified_roster
+    db: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from tftlab.prepared_discovery import lookup_prepared, prepare_window, read_prepared_candidate
 
@@ -472,6 +568,7 @@ def test_old_prepared_runs_go_stale_and_re_preparation_uses_the_corrected_semant
     assert result.status == "published" and lookup.status == "current"
     kog = read_prepared_candidate(db, lookup.run, KOGMAW, top_n=20)
     assert kog["commitment_games"] == 6
-    assert all(a["key"].split(":")[0] != CAUSTIC for a in kog["best_trait_breakpoints"])
+    assert all(a["key"].split(":")[0] != CAUSTIC for a in kog["best_trait_breakpoints"])  # committed roster: baseline rule
+    assert any(a["key"].split(":")[0] == BOUNTY for a in kog["best_trait_breakpoints"])
     for a in kog["best_item_packages"]:
         assert not set(a["key"].split("+")) & {BT, CLAW, JG, KRAKEN, TG, TG_RADIANT}

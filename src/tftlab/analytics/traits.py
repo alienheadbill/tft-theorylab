@@ -11,15 +11,26 @@ ordinal ("which tier"), not a unit count, and it is never translated into a
 threshold: the canonical unit thresholds per tier are not in any verified
 static metadata this repository holds.
 
-Intrinsic traits. A trait that only the carry itself provides (a one-champion
-trait no verified emblem or trait item can add, from the roster's static data:
-`Roster.intrinsic_traits`) is present because that champion was picked, not because of the units built
-around it. It is left out of every carry's trait evidence here -- trait/count
-associations (Discovery, the traits API) and the trait profile (Champion
-Investigation) -- and kept only as API classification (`intrinsic_traits`). Only the
-carry's OWN intrinsic traits are dropped: another champion's one-champion
-trait on the board means that champion was added, which is shell evidence.
-Stored trait rows are never changed.
+Guaranteed baseline of a singleton-provider trait. When the carry is the
+only shop champion that naturally has a trait
+(`Roster.singleton_provider_traits`, from static trait membership), picking
+the carry guarantees that trait on the board at one unit. That baseline is
+not evidence about the units built around the carry, so on each of the
+carry's boards its own singleton-provider traits at `num_units` <=
+`GUARANTEED_BASELINE_UNITS` are left out of its trait evidence everywhere --
+trait/count associations (Discovery, the traits API) and the trait profile
+(Champion Investigation): no generic "active" association, no "<trait>:1"
+count. A count ABOVE the baseline stays in as count-level evidence: the
+trait may be extendable (an emblem, Phantom Emblem or another mechanic;
+nothing verified rules it out), so a board that reported it at 2+ units
+shows something was built. Only the carry's OWN singleton-provider traits
+are affected: another champion's one-champion trait on the board means that
+champion was added, which is shell evidence. Stored trait rows are never
+changed.
+
+This rule does not use `Roster.intrinsic_traits` (singleton provider AND no
+item can add it), which needs complete emblem knowledge and fails closed;
+see `tftlab.roster`.
 """
 
 from __future__ import annotations
@@ -39,6 +50,17 @@ ACTIVE_TRAIT_SQL = "t.tier_current >= 1"
 
 #: One board's active traits: trait name -> Riot's `num_units`.
 BoardTraits = dict[str, int]
+
+#: Unit count of a carry's own singleton-provider trait that picking the
+#: carry guarantees by itself (see the module docstring).
+GUARANTEED_BASELINE_UNITS = 1
+
+
+def is_guaranteed_baseline(trait_name: str, num_units: int, baseline_traits: frozenset[str] | set[str]) -> bool:
+    """True when this active-trait row is only the carry's guaranteed
+    baseline: one of its own singleton-provider traits at no more than
+    `GUARANTEED_BASELINE_UNITS` units."""
+    return trait_name in baseline_traits and num_units <= GUARANTEED_BASELINE_UNITS
 
 
 def _trait_count_key(trait_name: str, num_units: int) -> str:
@@ -67,7 +89,9 @@ def _trait_boards_for(
     num_units})` over the board's active traits. A board is keyed by
     (match, participant), so duplicate unit rows for the carry never count
     it twice, and the traits primary key allows one row per trait per board.
-    Each carry's own intrinsic traits are left out (see the module docstring)."""
+    Each carry's own singleton-provider traits are left out at their
+    guaranteed one-unit baseline and kept above it (see the module
+    docstring)."""
     if not character_ids:
         return {}
     eligible_sql, eligible_params = carry_commitment_sql("c", commitment_items)
@@ -91,14 +115,16 @@ def _trait_boards_for(
         (*character_ids, *eligible_params, balance_window),
     )
     roster = load_roster()
-    intrinsic = {str(cid): frozenset(roster.intrinsic_traits(str(cid))) for cid in character_ids}
+    baseline = {str(cid): frozenset(roster.singleton_provider_traits(str(cid))) for cid in character_ids}
     placements: dict[str, dict[tuple[str, int], int]] = defaultdict(dict)
     traits: dict[str, dict[tuple[str, int], BoardTraits]] = defaultdict(lambda: defaultdict(dict))
     for carry_id, match_id, participant_index, placement, trait_name, num_units in rows:
         carry_id = str(carry_id)
         board = (match_id, participant_index)
         placements[carry_id][board] = int(placement)
-        if trait_name and num_units is not None and str(trait_name) not in intrinsic.get(carry_id, ()):
+        if trait_name and num_units is not None and not is_guaranteed_baseline(
+            str(trait_name), int(num_units), baseline.get(carry_id, frozenset())
+        ):
             traits[carry_id][board][str(trait_name)] = int(num_units)
     return {
         carry_id: [(p, dict(traits[carry_id].get(board, {}))) for board, p in boards.items()]
@@ -191,13 +217,17 @@ class TraitProfile:
     row carries its with/without comparison as secondary evidence; nothing is
     ordered by it here.
 
-    `intrinsic` lists the champion's intrinsic trait ids (static data), which
-    `active`/`counts` never contain."""
+    `baseline_traits` lists the carry's own singleton-provider traits: their
+    guaranteed one-unit presence is never in `active`/`counts`; for these
+    traits `active` and `counts` only cover boards that reported them ABOVE
+    that baseline (2+ units). `intrinsic` is the fail-closed
+    `Roster.intrinsic_traits` classification (API context only)."""
 
     carry_boards: int
     active: list[Association]
     counts: dict[str, list[Association]]
     intrinsic: tuple[str, ...] = ()
+    baseline_traits: tuple[str, ...] = ()
 
 
 def trait_profile(
@@ -219,8 +249,10 @@ def trait_profile(
     counts: dict[str, list[Association]] = defaultdict(list)
     for a in per_count:
         counts[split_trait_count_key(a.key)[0]].append(a)
+    roster = load_roster()
     return TraitProfile(
-        intrinsic=load_roster().intrinsic_traits(character_id),
+        intrinsic=roster.intrinsic_traits(character_id),
+        baseline_traits=roster.singleton_provider_traits(character_id),
         carry_boards=len(boards),
         active=sorted(active, key=lambda a: (-a.games, a.key)),
         counts={
