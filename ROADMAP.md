@@ -213,6 +213,22 @@ Riot access currently uses a **development key that must be regenerated regularl
   - **Theorycrafted:** inferred, not observed.
 - Never present predicted performance as observed performance.
 
+### Track 9: Reference / game knowledge (FUTURE)
+
+- **Goal:** give players one searchable, patch/set-aware place to look up the game knowledge they otherwise leave TheoryLabs to find elsewhere.
+- **Product shape:** a top-level **Reference** tab, separate from Champion Investigation and composition analytics.
+- **Candidate sections:**
+  - **Shop odds:** level-by-level champion shop probabilities and related verified shop rules.
+  - **Augments:** searchable augment database with names, descriptions, tiers/categories and icons where verified.
+  - **Traits:** trait descriptions, canonical thresholds/breakpoints, icons and special mechanics from verified static metadata.
+  - **Loot / orbs / encounters / Wisps:** current-set tables only when the underlying source and patch coverage are verified.
+  - **Game timeline:** stage/round structure, PvE/carousel timing and other stable round-flow reference information.
+  - **Patch schedule / current version context:** current patch, upcoming patch timing where officially published, and TheoryLabs balance-window context.
+  - **Mechanics:** searchable set-specific rules and special systems that help explain champion/trait/item behavior.
+- **UX direction:** icon-heavy, searchable, mobile-friendly, and cross-linked from Champion Investigation / composition pages so a player can inspect a mechanic without losing context.
+- **Source rule:** prefer Riot and CommunityDragon. Community-maintained references may fill verified gaps, but every section must document source/provenance, version coverage and refresh needs before implementation. Do not copy third-party data, assets, code or rankings merely because a competitor exposes them.
+- **Sequencing:** this track should not block the current Champion Intelligence cleanup/redesign. Build it incrementally once the source for each subsection is verified, reusing the same canonical static metadata wherever possible instead of creating a second parallel game-data system.
+
 ## Near-term priorities
 
 **Completed:** validation run #6; Champion Investigation first vertical slice; scheduled ingestion operationally observed; Render Ohio → Neon Ohio production cutover with verified encrypted backup/rollback; PR #36 performance/loading/source-faithfulness refinement merged and deployed; GitHub-hosted SQLite/Postgres baseline restored and a permanent CI gate added; PR #48 prepared Discovery deployed and production-verified, reducing the previously ~9.30s warm Discovery path to roughly 0.44–0.50s in the verification run.
@@ -225,7 +241,8 @@ Riot access currently uses a **development key that must be regenerated regularl
 4. **Repair the CommunityDragon live smoke** by resolving the duplicate-component namespace/test assumption without discarding legitimate source data (Track 6).
 5. **In parallel, instrument unchanged S2** to quantify recursive lock-in and order dependence; do not change Condition 1 before measurement (Track 2).
 6. Keep set-transition readiness in new work and move toward Riot production access as the product matures (Tracks 6/7).
-7. After cores and trustworthy family evidence are ready, connect Champion Investigation to composition boards/families and practical alternatives—the bridge into TheoryLabs' long-term composition discovery/theorycrafting differentiator (Track 8).
+7. Build the **Reference / game knowledge** tab incrementally after the current Champion Investigation cleanup/redesign, starting only with subsections whose sources and refresh requirements are verified (Track 9).
+8. After cores and trustworthy family evidence are ready, connect Champion Investigation to composition boards/families and practical alternatives—the bridge into TheoryLabs' long-term composition discovery/theorycrafting differentiator (Track 8).
 
 **Continuous collection, Champion Investigation/performance work, static-data monitoring and S2 research are parallel workstreams.** This list is not a sequence in which all research must finish before product work proceeds.
 
