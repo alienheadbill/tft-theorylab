@@ -137,6 +137,47 @@ CREATE TABLE IF NOT EXISTS ingest_runs (
 );
 """
 
+# Prepared Discovery analytics (see `tftlab.prepared_discovery`). A run is
+# one complete, published snapshot of every carry's Discovery candidate in
+# one balance window, keyed by `analytics_version` (the code/data that
+# computed it) and `source_fingerprint` (the match population it was
+# computed from). A run and all of its candidate rows are inserted in ONE
+# transaction, so readers either see a whole published run or nothing;
+# `failed` rows are audit only and never read as results. Derived data only:
+# raw match tables are never modified, and the read-only web application
+# treats these tables as optional (they are not in REQUIRED_READ_SCHEMA).
+PREPARED_DISCOVERY_TABLES_SQL = """
+CREATE TABLE IF NOT EXISTS discovery_prepared_runs (
+    run_id TEXT PRIMARY KEY,
+    balance_window TEXT NOT NULL,
+    analytics_version TEXT NOT NULL,
+    source_fingerprint TEXT NOT NULL,
+    source_matches INTEGER NOT NULL,
+    source_latest_game_datetime BIGINT,
+    window_carries INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    started_at BIGINT NOT NULL,
+    published_at BIGINT,
+    failure TEXT
+);
+
+CREATE TABLE IF NOT EXISTS discovery_prepared_candidates (
+    run_id TEXT NOT NULL,
+    character_id TEXT NOT NULL,
+    cost INTEGER NOT NULL,
+    commitment_games INTEGER NOT NULL,
+    population_rank INTEGER NOT NULL,
+    opportunity_score DOUBLE PRECISION NOT NULL,
+    candidate_json TEXT NOT NULL,
+    PRIMARY KEY (run_id, character_id)
+);
+"""
+
+PREPARED_DISCOVERY_INDEXES_SQL = """
+CREATE INDEX IF NOT EXISTS idx_discovery_prepared_runs_lookup
+    ON discovery_prepared_runs(balance_window, analytics_version, status, published_at);
+"""
+
 # One row per applied data migration that must run exactly once per database
 # (keyed by what it depends on). Only initializing connections read/write it.
 SCHEMA_MIGRATIONS_SQL = """
@@ -315,10 +356,12 @@ class Database:
         self._execute_script(SAMPLING_TABLES_SQL)
         self._execute_script(INGEST_RUNS_SQL)
         self._execute_script(SCHEMA_MIGRATIONS_SQL)
+        self._execute_script(PREPARED_DISCOVERY_TABLES_SQL)
         self._run_migrations()
         self._execute_script(INDEXES_SQL)
         self._execute_script(EXPERIMENT_INDEXES_SQL)
         self._execute_script(SAMPLING_INDEXES_SQL)
+        self._execute_script(PREPARED_DISCOVERY_INDEXES_SQL)
 
     def _execute_script(self, sql: str) -> None:
         if self.dialect == "sqlite":

@@ -315,6 +315,30 @@ def _build_candidate(
     )
 
 
+def population_candidates(
+    db: Database,
+    balance_window: str,
+    population: Sequence[CarryStat],
+    *,
+    top_n: int,
+) -> list[DiscoveryCandidate]:
+    """Every carry in `population` as a `DiscoveryCandidate`, in population
+    order (not sorted), built exactly as `discover_candidates` builds each
+    one: the same baseline (the whole population), the same batched
+    evidence and the same Opportunity Score. Used to prepare Discovery
+    offline (`tftlab.prepared_discovery`); a candidate never depends on
+    which other carries are built alongside it."""
+    population_baseline = _baseline_from(population)
+    evidence = _evidence_for(db, population, balance_window)
+    return [
+        _build_candidate(
+            stat, balance_window, evidence[stat.character_id],
+            population_baseline_top4=population_baseline, top_n=top_n,
+        )
+        for stat in population
+    ]
+
+
 def discover_candidates(
     db: Database,
     *,

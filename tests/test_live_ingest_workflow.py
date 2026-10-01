@@ -89,6 +89,17 @@ def test_runs_the_four_cli_steps_in_order() -> None:
     assert positions == sorted(positions), "CLI steps must run in the documented order"
 
 
+def test_prepares_discovery_after_the_ingest_is_validated() -> None:
+    """The website's prepared Discovery is refreshed right after new matches
+    are stored and validated, with the production database secret only."""
+    text = _text()
+    step = text[text.index("- name: Prepare Discovery analytics") : text.index("- name: Summarize collection")]
+    assert text.index("tftlab discovery-smoke") < text.index("tftlab prepare-discovery")
+    assert "run: tftlab prepare-discovery" in step and "--force" not in step
+    assert "DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}" in step
+    assert "RIOT_API_KEY" not in step and "id: prepare" in step
+
+
 COHORT_INPUTS = ("challenger_seeds", "grandmaster_seeds", "master_seeds", "diamond_seeds", "platinum_seeds")
 
 
@@ -473,7 +484,8 @@ def test_summary_reports_run_level_collection_metrics(tmp_path: Path) -> None:
                        "seed_ledger_rows": 100, "discovery_rows": 586},
         "riot": {"requests": 605, "by_status": {"200": 605}, "rate_limited": 0, "elapsed_s": 933.7},
     }
-    result = _run_summary(tmp_path, telemetry, VALIDATE_OUTCOME="success", SMOKE_OUTCOME="success")
+    result = _run_summary(tmp_path, telemetry, VALIDATE_OUTCOME="success", SMOKE_OUTCOME="success",
+                          PREPARE_OUTCOME="success")
     assert result.returncode == 0, result.stderr
     out = result.stdout
     assert "Trigger: `schedule`; mode: `bounded`" in out
@@ -483,7 +495,7 @@ def test_summary_reports_run_level_collection_metrics(tmp_path: Path) -> None:
                 "| Seed ledger rows finalized | 100 |", "| Riot requests (total) | 605 |",
                 "| Riot 429s | 0 |", "| Ingest elapsed (s) | 933.7 |"):
         assert row in out, row
-    assert "Validate ingested data: `success`; discovery smoke: `success`" in out
+    assert "Validate ingested data: `success`; discovery smoke: `success`; prepared Discovery: `success`" in out
 
 
 def test_summary_of_a_failed_ingest_shows_the_outcome_without_collection_rows(tmp_path: Path) -> None:
