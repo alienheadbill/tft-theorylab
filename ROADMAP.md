@@ -2,8 +2,8 @@
 
 This is the project's direction document. It exists so development stays aligned with the mission instead of drifting toward whichever experiment or feature is newest.
 
-- **Checkpoint:** `main` at `162e98c` (after PR #35; Champion Investigation first vertical slice), 2026-09-30.
-- **Active review:** PR #36 is open and unmerged. Its performance/UI refinements are **ACCEPTED/CURRENT**, not IMPLEMENTED, until they land on `main`, deploy, and survive production review.
+- **Checkpoint:** `main` at `b5fd307` (after PR #46; Ohio/Neon cutover, PR #36 Champion Investigation refinement, restored CI baseline and permanent CI gate), 2026-09-30.
+- **Active review:** no open pull requests at this checkpoint.
 - **Scope:** direction and priorities only. How things work lives in the [README](README.md) and the code. When this file and the repository disagree about what is implemented, the repository wins; fix this file.
 
 ## Mission
@@ -122,6 +122,13 @@ Riot access currently uses a **development key that must be regenerated regularl
   - **IMPLEMENTED:** source-faithful trait intelligence. Trait evidence is grouped by the observed unit count Riot Match-V1 reports (`num_units`, "Solar · 4 units"), plus a separate active-trait share. A trait counts as active when `tier_current` is 1 or more.
     - `tier_current` is an ordinal. It is never substituted for a player-facing breakpoint or unit count.
     - Canonical threshold names ("the 4-unit tier") need verified static trait metadata, which is not stored yet, so none are inferred.
+  - **ACCEPTED/CURRENT:** turn Champion Investigation's top guidance into a practical **"How to play {champion}"** layer rather than a prose recap of statistics. It should answer, from supported evidence:
+    - what completed items and item combinations make the champion worth considering;
+    - what item **components** are useful starting directions, derived transparently from the recipes of supported completed-item lines (not falsely presented as observed opening components, because Match-V1 has no component-acquisition timeline);
+    - which champions/recurring cores and trait counts are most useful around the carry;
+    - what star target appears important when the sample supports that comparison;
+    - augments and positioning only when a verified source actually supports those claims.
+    Use champion/item/trait art heavily so the section is scannable. Keep the practical recommendation distinct from the deeper observed evidence below it.
   - **FUTURE:** recurring cores, composition families/variants and practical alternatives.
 - **Rules:**
   - Use Riot/source data directly when it already answers the question; derived systems must justify what additional question they answer.
@@ -131,7 +138,7 @@ Riot access currently uses a **development key that must be regenerated regularl
 
 ### Track 4: Website/product
 
-- **Product loop (ACCEPTED/CURRENT):** keep the Champion Investigation vertical slice as the main player-facing refinement loop. Use real production use to identify which evidence is confusing, slow or not actionable; fix those foundations before piling on new features.
+- **Product loop (ACCEPTED/CURRENT):** keep the Champion Investigation vertical slice as the main player-facing refinement loop. Real production use has now shown that the page is visually clear but its top "How players carry with {champion}" prose is not actionable enough. The next refinement is a practical "How to play {champion}" guidance layer backed by the same source-faithful evidence, with inline item/champion/trait art.
 - **It should eventually present:**
   - star-level and carry evidence;
   - itemization;
@@ -155,8 +162,8 @@ Riot access currently uses a **development key that must be regenerated regularl
 - **Goal:** website requests should read inexpensive or prepared analytics rather than recomputing expensive research-style aggregates during navigation.
 - **Production evidence:** before PR #36, user-observed live timings were roughly 1:41 for the initial Discovery page, ~0:50 for Working Notes, ~0:25 for the Champions directory and ~0:45–0:50 for a Champion Investigation. These are player-observed end-to-end timings, not controlled backend benchmarks, but they establish a real product bottleneck.
 - **Current optimization (IMPLEMENTED; PR #36):** the picker uses a light champion-count query, champion detail narrows aggregation to the selected champion, Discovery supports server-side exact-cost filtering, evidence queries are batched, and the repeated window-wide Discovery population has a freshness-checked in-process cache. The change is merged and deployed; local synthetic benchmarks improved substantially, but production navigation still needs cold/warm measurement.
-- **Next acceptance step:** after deployment, measure both cold and warm production navigation. Separate host wake/startup time from request-time analytics.
-- **Escalation rule:** if normal warm navigation remains materially slow, move repeated analytics off the request path into prepared/precomputed results rather than layering on more request-time caches or UI features.
+- **Production measurement (IMPLEMENTED):** a post-PR #36 warm production measurement from a GitHub-hosted runner to Render Ohio → Neon Ohio found approximate backend critical paths of **0.18s Working Notes**, **0.79s Champions**, **1.47s Kha'Zix Investigation**, and **9.30s initial Discovery**. These include runner-to-Render network time and are not browser-render timings, but they clearly isolate Discovery as the remaining request-time outlier.
+- **Next (ACCEPTED/CURRENT):** move Discovery's repeated analytics off the request path into prepared/precomputed, balance-window/version-keyed results rather than stacking more request-time caches. Preserve the current APIs and evidence semantics while measuring the resulting cold/warm production behavior.
 - **Target architecture (FUTURE):** Riot/raw data → normalization → offline/versioned prepared analytics → read APIs → website. Preserve provenance, balance-window/patch keys and freshness when precomputing.
 
 ### Track 6: Patch/set lifecycle
@@ -202,13 +209,13 @@ Riot access currently uses a **development key that must be regenerated regularl
 
 ## Near-term priorities
 
-**Completed:** validation run #6; Champion Investigation first vertical slice; scheduled ingestion operationally observed; Render Ohio → Neon Ohio production cutover with verified encrypted backup/rollback; PR #36 performance/loading/source-faithfulness refinement merged and deployed.
+**Completed:** validation run #6; Champion Investigation first vertical slice; scheduled ingestion operationally observed; Render Ohio → Neon Ohio production cutover with verified encrypted backup/rollback; PR #36 performance/loading/source-faithfulness refinement merged and deployed; GitHub-hosted SQLite/Postgres baseline restored and a permanent CI gate added; warm production timing isolated Discovery as the remaining major request-time bottleneck.
 
 **Next:**
 
-1. **Restore a green, repeatable CI baseline**: current GitHub-hosted full-suite runs expose stale workflow assertions from the Neon/issue-comment cutover, one test that accidentally reuses the same GitHub Actions run id, and ANSI-styled Typer output that the assertions do not normalize. Fix the tests/environment assumptions without weakening production guardrails or changing product behavior.
-2. **Measure the deployed product**: repeat cold and warm timings for Discovery, Working Notes, Champions and Champion Investigation. If warm navigation is still materially slow, prioritize prepared/precomputed analytics before adding major UI surface (Track 5).
-3. **Strengthen Champion Intelligence from source data upward**: audit star/item/partner/trait presentation for source fidelity, then develop recurring core evidence that bridges a carry to a real playable shell (Track 3).
+1. **Precompute the repeated Discovery analytics** that still take roughly nine seconds warm, keeping balance-window/version provenance and current evidence semantics intact (Track 5).
+2. **Make Champion Investigation practically useful:** replace the top statistical recap with a source-faithful "How to play {champion}" layer covering item/component direction, supported item combinations, partners/cores, trait shells and star target, with item/champion/trait icons. Do not invent observed opening components, augment timing or positioning that the source does not provide (Tracks 3/4).
+3. **Develop recurring core evidence** that bridges a carry from single-partner associations to a real playable shell and can later support both Champion Investigation and composition discovery (Track 3).
 4. **Monitor scheduled live ingestion** across multiple runs: inspect yield, duplicate rate, collection lag, Riot errors/429s and storage growth; keep maximum mode manual until the deep-ladder 401 is understood (Track 1).
 5. **Repair the CommunityDragon live smoke** by resolving the duplicate-component namespace/test assumption without discarding legitimate source data (Track 6).
 6. **In parallel, instrument unchanged S2** to quantify recursive lock-in and order dependence; do not change Condition 1 before measurement (Track 2).
