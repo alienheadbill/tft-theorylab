@@ -59,6 +59,17 @@ class Roster:
     #: CommunityDragon `associatedTraits`; see `tftlab.cdragon.trait_item_ids`).
     #: None when the snapshot has no verified trait-item data.
     trait_items: dict[str, list[str]] | None = None
+    #: Current-set emblems CommunityDragon lists that `trait_items` could not
+    #: link to a trait (`tftlab.cdragon.unresolved_emblem_ids`). None when the
+    #: snapshot did not check; anything but an empty list means the
+    #: trait-item guard is incomplete.
+    unresolved_emblems: list[str] | None = None
+
+    @property
+    def trait_item_guard_verified(self) -> bool:
+        """True when the snapshot has trait-item data AND checked that every
+        current-set emblem links to a trait."""
+        return self.trait_items is not None and self.unresolved_emblems == []
 
     def champion_traits(self, character_id: str | None) -> tuple[str, ...]:
         """The champion's own traits (canonical trait ids), from static data."""
@@ -78,9 +89,11 @@ class Roster:
         `trait_items` lists no emblem or trait item for them. Their presence on
         this champion's boards is champion identity, not evidence of a trait
         shell built around it. A one-champion trait an emblem can extend stays
-        buildable. Conservative: without verified trait-item data nothing is
-        intrinsic. Derived from static data only; never a name list."""
-        if self.trait_items is None:
+        buildable. Fails closed: unless the guard is verified
+        (`trait_item_guard_verified`: trait-item data present and no
+        unresolved emblem) nothing is intrinsic. Derived from static data
+        only; never a name list."""
+        if not self.trait_item_guard_verified:
             return ()
         return tuple(
             t for t in self.champion_traits(character_id)
@@ -118,5 +131,5 @@ def load_roster() -> Roster:
     data = json.loads(ROSTER_PATH.read_text())
     return Roster(
         set_number=data["set_number"], champions=data["champions"], traits=data["traits"],
-        trait_items=data.get("trait_items"),
+        trait_items=data.get("trait_items"), unresolved_emblems=data.get("unresolved_emblems"),
     )

@@ -218,7 +218,8 @@ SYNTHETIC_TRAITS = {"T_Solo": "Solo", "T_Pair": "Pair", "T_Rare": "Rare", "T_Emb
 
 def test_intrinsic_traits_come_from_static_membership_not_names() -> None:
     roster = Roster(set_number=99, traits=SYNTHETIC_TRAITS, champions=SYNTHETIC_CHAMPIONS,
-                    trait_items={"T_Emblemable": ["X_EmblemEmblemable"], "T_Pair": ["X_EmblemPair"]})
+                    trait_items={"T_Emblemable": ["DA_99_EmblemEmblemable"], "T_Pair": ["DA_99_EmblemPair"]},
+                    unresolved_emblems=[])
     assert roster.intrinsic_traits("C_A") == ("T_Solo",)
     assert roster.intrinsic_traits("C_B") == () and roster.intrinsic_traits("C_C") == ()
     assert roster.trait_champions("T_Rare") == ("C_B", "C_C")
@@ -228,41 +229,110 @@ def test_a_one_champion_trait_an_item_can_add_is_not_intrinsic() -> None:
     """Emblem / trait-item guard: T_Emblemable has a single shop champion (C_D)
     but an item can add it to other units, so it stays buildable."""
     guarded = Roster(set_number=99, traits=SYNTHETIC_TRAITS, champions=SYNTHETIC_CHAMPIONS,
-                     trait_items={"T_Emblemable": ["X_EmblemEmblemable"]})
+                     trait_items={"T_Emblemable": ["DA_99_EmblemEmblemable"]}, unresolved_emblems=[])
     assert guarded.trait_champions("T_Emblemable") == ("C_D",)
     assert guarded.intrinsic_traits("C_D") == ()
     assert guarded.intrinsic_traits("C_A") == ("T_Solo",)
     # Without verified trait-item data nothing is intrinsic (conservative).
     unverified = Roster(set_number=99, traits=SYNTHETIC_TRAITS, champions=SYNTHETIC_CHAMPIONS)
     assert all(unverified.intrinsic_traits(c) == () for c in SYNTHETIC_CHAMPIONS)
+    # Nor when the snapshot never checked for unresolved emblems.
+    unchecked = Roster(set_number=99, traits=SYNTHETIC_TRAITS, champions=SYNTHETIC_CHAMPIONS,
+                       trait_items={"T_Emblemable": ["DA_99_EmblemEmblemable"]})
+    assert not unchecked.trait_item_guard_verified
+    assert all(unchecked.intrinsic_traits(c) == () for c in SYNTHETIC_CHAMPIONS)
 
 
-def test_trait_item_guard_reads_associated_traits_and_emblem_names() -> None:
-    from tftlab.cdragon import ChampionMeta, ItemMeta, SetMetadata, TraitMeta, roster_snapshot, trait_item_ids
+def _synthetic_meta(**items):
+    from tftlab.cdragon import ChampionMeta, ItemMeta, SetMetadata, TraitMeta
 
-    def item(item_id, name, associated=()):
-        return ItemMeta(item_id=item_id, name=name, icon_url=None, composition=(), associated_traits=tuple(associated))
-
-    meta = SetMetadata(
+    return SetMetadata(
         patch="latest", set_number=99,
         champions={cid: ChampionMeta(character_id=cid, name=c["name"], cost=c["cost"], icon_url=None,
                                      traits=tuple(SYNTHETIC_TRAITS[t] for t in c["traits"]), role=None)
                    for cid, c in SYNTHETIC_CHAMPIONS.items()},
         traits={tid: TraitMeta(trait_id=tid, name=name, icon_url=None) for tid, name in SYNTHETIC_TRAITS.items()},
-        items={
-            "X_EmblemEmblemable": item("X_EmblemEmblemable", "Emblemable Emblem"),  # emblem: no associatedTraits
-            "X_PairAugment": item("X_PairAugment", "Pair Power", ["T_Pair"]),  # by apiName
-            "X_RareAugment": item("X_RareAugment", "Rare Power", ["Rare"]),  # by display name
-            "X_OldSetEmblem": item("X_OldSetEmblem", "Bygone Emblem", ["Set1_Bygone"]),  # another set: ignored
-            "X_Sword": item("X_Sword", "Sword"),
-        },
+        items={item_id: ItemMeta(item_id=item_id, name=name, icon_url=None, composition=(),
+                                 associated_traits=tuple(associated))
+               for item_id, (name, *associated) in items.items()},
     )
-    assert trait_item_ids(meta) == {
-        "T_Emblemable": ("X_EmblemEmblemable",), "T_Pair": ("X_PairAugment",), "T_Rare": ("X_RareAugment",)}
+
+
+def _snapshot_roster(meta) -> Roster:
+    from tftlab.cdragon import roster_snapshot
+
     snapshot = roster_snapshot(meta)
-    roster = Roster(set_number=99, champions=snapshot["champions"], traits=snapshot["traits"],
-                    trait_items=snapshot["trait_items"])
+    return Roster(set_number=99, champions=snapshot["champions"], traits=snapshot["traits"],
+                  trait_items=snapshot["trait_items"], unresolved_emblems=snapshot["unresolved_emblems"])
+
+
+GUARD_ITEMS = {
+    "DA_99_EmblemEmblemable": ("Emblemable Emblem",),  # emblem: no associatedTraits, linked by name
+    "DA_99_PairAugment": ("Pair Power", "T_Pair"),  # by associatedTraits apiName
+    "DA_99_RareAugment": ("Rare Power", "Rare"),  # by associatedTraits display name
+    "TFT5_Item_BygoneEmblemItem": ("Bygone Emblem", "Set5_Bygone"),  # another set's emblem: ignored
+    "DA_99_Sword": ("Sword",),
+}
+
+
+def test_trait_item_guard_reads_associated_traits_and_emblem_names() -> None:
+    from tftlab.cdragon import trait_item_ids, unresolved_emblem_ids
+
+    meta = _synthetic_meta(**GUARD_ITEMS)
+    assert trait_item_ids(meta) == {
+        "T_Emblemable": ("DA_99_EmblemEmblemable",), "T_Pair": ("DA_99_PairAugment",),
+        "T_Rare": ("DA_99_RareAugment",)}
+    assert unresolved_emblem_ids(meta) == ()
+    roster = _snapshot_roster(meta)
+    assert roster.trait_item_guard_verified
     assert roster.intrinsic_traits("C_A") == ("T_Solo",) and roster.intrinsic_traits("C_D") == ()
+
+
+@pytest.mark.parametrize("emblem", [
+    # a current-set emblem whose name matches no trait display name
+    {"DA_99_EmblemSoloist": ("Soloist Emblem",)},
+    # "emblem" only in the apiName, a name that is not "<trait> Emblem"
+    {"DA_99_EmblemMystery": ("Mystery Crest",)},
+    # "emblem" only in the display name, any case, in the shared namespace
+    {"TFT_Item_SoloSigil": ("Solo EMBLEM of Fate",)},
+    # current set's own TFT<n>_ namespace
+    {"TFT99_Item_UnknownEmblemItem": ("Unknown Emblem",)},
+])
+def test_an_unresolved_emblem_makes_intrinsic_classification_fail_closed(emblem) -> None:
+    """An emblem the guard cannot link to a trait might add a one-champion
+    trait (here T_Solo), so nothing may be classified intrinsic until it is
+    resolved. The unresolved id is recorded in the snapshot."""
+    from tftlab.cdragon import roster_snapshot, unresolved_emblem_ids
+
+    meta = _synthetic_meta(**GUARD_ITEMS, **emblem)
+    assert unresolved_emblem_ids(meta) == tuple(emblem)
+    assert roster_snapshot(meta)["unresolved_emblems"] == list(emblem)
+    roster = _snapshot_roster(meta)
+    assert not roster.trait_item_guard_verified
+    assert all(roster.intrinsic_traits(c) == () for c in SYNTHETIC_CHAMPIONS)
+    # Linking the same emblem to its trait restores classification.
+    (item_id, (name, *_)), = emblem.items()
+    resolved = _synthetic_meta(**GUARD_ITEMS, **{item_id: (name, "T_Solo")})
+    assert unresolved_emblem_ids(resolved) == ()
+    assert _snapshot_roster(resolved).intrinsic_traits("C_A") == ()  # T_Solo is now emblem-able
+
+
+def test_every_committed_set_emblem_is_linked_to_a_trait() -> None:
+    """Offline cross-check of the committed snapshots: the roster recorded no
+    unresolved emblem, and every emblem id Match-V1 boards can store
+    (`item_stats.json`, the board-id namespace) is listed in `trait_items`."""
+    from tftlab.cdragon import ItemMeta, SetMetadata, TraitMeta, is_set_emblem
+    from tftlab.items import ITEM_STATS_PATH
+
+    assert ROSTER.unresolved_emblems == [] and ROSTER.trait_item_guard_verified
+    stats = json.loads(ITEM_STATS_PATH.read_text())["items"]
+    meta = SetMetadata(patch="committed", set_number=ROSTER.set_number, champions={},
+                       items={k: ItemMeta(item_id=k, name=v["name"], icon_url=None) for k, v in stats.items()},
+                       traits={t: TraitMeta(trait_id=t, name=n, icon_url=None) for t, n in ROSTER.traits.items()})
+    emblems = {k for k, v in meta.items.items() if is_set_emblem(meta, k, v)}
+    linked = {i for items in ROSTER.trait_items.values() for i in items}
+    assert len(emblems) >= 20
+    assert emblems <= linked, sorted(emblems - linked)
 
 
 def test_current_set_intrinsic_traits_have_no_trait_item_path() -> None:

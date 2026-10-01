@@ -71,11 +71,28 @@ def test_committed_roster_fixture_matches_live_set(tmp_path) -> None:
         live = roster_snapshot(client.get_set_metadata("latest", use_cache=False))
 
     committed = json.loads(ROSTER_FIXTURE.read_text()) if ROSTER_FIXTURE.exists() else {}
-    committed = {k: committed.get(k) for k in ("set_number", "champions", "traits", "trait_items")}
+    committed = {k: committed.get(k) for k in ("set_number", "champions", "traits", "trait_items", "unresolved_emblems")}
     assert committed == live, (
         "src/tftlab/data/set_roster.json is out of date. Live roster:\n"
         + json.dumps(live, indent=1, ensure_ascii=False)
     )
+
+
+@requires_live_network
+def test_every_live_set_emblem_links_to_a_trait(tmp_path) -> None:
+    """Every emblem the live feed lists for the current set must link to one
+    of its traits; otherwise `Roster.intrinsic_traits` fails closed. Prints
+    each emblem with its trait(s) so the log shows the full inventory."""
+    from tftlab.cdragon import _item_trait_ids, is_set_emblem, unresolved_emblem_ids
+
+    with CommunityDragonClient(cache_dir=tmp_path) as client:
+        meta = client.get_set_metadata("latest", use_cache=False)
+    emblems = sorted(i for i, item in meta.items.items() if is_set_emblem(meta, i, item))
+    print(f"Set {meta.set_number}: {len(emblems)} emblem-like items")
+    for item_id in emblems:
+        print(f"  {item_id} {meta.items[item_id].name!r} -> {sorted(_item_trait_ids(meta, meta.items[item_id]))}")
+    assert emblems, "expected the current set to have emblems"
+    assert unresolved_emblem_ids(meta) == (), "emblems that link to no current trait (classification fails closed)"
 
 
 @requires_live_network

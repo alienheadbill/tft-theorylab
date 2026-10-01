@@ -1,5 +1,5 @@
 {
- "_about": "Current TFT set roster from CommunityDragon (latest cdragon/tft/en_us.json, parsed by tftlab.cdragon.parse_set_metadata). Shipped with the package as offline game metadata: tftlab.roster uses it to match champion/trait names to Riot ids, and tests/test_demo_roster.py checks demo data against it. tests/test_cdragon_live.py::test_committed_roster_fixture_matches_live_set compares it with the live feed nightly and prints the new roster when a set changes; paste that here to refresh. Each champion's `traits` are canonical trait ids (CommunityDragon lists them by display name; tftlab.cdragon.champion_trait_ids resolves each name to exactly one set trait), used by tftlab.roster to classify intrinsic one-champion traits. `trait_items` lists, per trait, the items that may add it (tftlab.cdragon.trait_item_ids: CommunityDragon associatedTraits plus items named \"<trait> Emblem\"); a one-champion trait is intrinsic only when no item can add it.",
+ "_about": "Current TFT set roster from CommunityDragon (latest cdragon/tft/en_us.json, parsed by tftlab.cdragon.parse_set_metadata). Shipped with the package as offline game metadata: tftlab.roster uses it to match champion/trait names to Riot ids, and tests/test_demo_roster.py checks demo data against it. tests/test_cdragon_live.py::test_committed_roster_fixture_matches_live_set compares it with the live feed nightly and prints the new roster when a set changes; paste that here to refresh. Each champion's `traits` are canonical trait ids (CommunityDragon lists them by display name; tftlab.cdragon.champion_trait_ids resolves each name to exactly one set trait), used by tftlab.roster to classify intrinsic one-champion traits. `trait_items` lists, per trait, the items that may add it (tftlab.cdragon.trait_item_ids: CommunityDragon associatedTraits plus items named \"<trait> Emblem\"); a one-champion trait is intrinsic only when no item can add it. `unresolved_emblems` lists current-set emblems (tftlab.cdragon.is_set_emblem) that link to no trait; it must be empty, otherwise tftlab.roster classifies nothing as intrinsic (fail closed).",
  "_fetched": "2026-09-23 via the cdragon-live GitHub Actions workflow",
  "_champion_traits_fetched": "2026-09-26 via the cdragon-live GitHub Actions workflow (CommunityDragon latest cdragon/tft/en_us.json champion `traits`, captured from a workflow job log); checked nightly by test_committed_roster_fixture_matches_live_set",
  "set_number": 18,
@@ -829,5 +829,6 @@
   "DA_Riftbeast18": [
    "DA_18_RiftbeastTraitAugment"
   ]
- }
+ },
+ "unresolved_emblems": []
 }
