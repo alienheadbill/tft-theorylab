@@ -363,20 +363,6 @@ function traitCountRow(c) {
     </li>`;
 }
 
-// Traits only this champion has: champion mechanics, shown as context and
-// never ranked with the trait shell (the API keeps them out of `traits`).
-function intrinsicTraits(inv) {
-  const rows = inv.intrinsic_traits || [];
-  if (!rows.length) return '';
-  const item = t =>
-    `<li class="intrinsic-row">${refIcon(t.name, t.art_url, { kind: 'trait' })}<span><b>${esc(t.name)}</b> <span class="aside">${esc(t.reason)}</span></span></li>`;
-  return `
-    <div class="intrinsic-traits">
-      <p class="callout-label">Champion mechanics, not a trait shell</p>
-      <ul class="intrinsic-list">${rows.map(item).join('')}</ul>
-    </div>`;
-}
-
 function traitSection(inv, name) {
   const total = inv.carry.games;
   const render = t => `
@@ -392,7 +378,6 @@ function traitSection(inv, name) {
     <section class="inv-section" aria-labelledby="sec-traits">
       <h3 id="sec-traits">Traits around ${esc(name)} ${stamp('observed', 'Observed')}</h3>
       <p class="inv-help">The traits most often active on ${esc(name)} carry boards, most common first. Under each, the unit counts Riot reported for that trait on those final boards ("4 units"), with how many carry boards had that count and how they placed; "other" is top 4 on the rest of its carry boards. Every share is out of the same ${plural(total, 'carry board')}, and one board counts under each trait it had active, so shares don't add up to 100%. These are associations: forcing a trait won't necessarily produce the same result.</p>
-      ${intrinsicTraits(inv)}
       ${inv.traits.length ? `<ol class="ev-list trait-list">${inv.traits.map(render).join('')}</ol>` : '<p class="none-note">No active traits recorded on these carry boards yet.</p>'}
     </section>`;
 }

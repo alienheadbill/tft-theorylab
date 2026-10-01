@@ -741,10 +741,6 @@ input[type="search"]::placeholder { color: var(--graphite); opacity: 0.8; }
 .count-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
 .count-units { min-width: 62px; font-weight: 700; color: var(--text); }
 .count-other { opacity: 0.8; }
-.intrinsic-traits { margin: 4px 0 14px; padding: 10px 14px; border-left: 3px solid var(--rule); max-width: 760px; }
-.intrinsic-list { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 6px; }
-.intrinsic-row { display: flex; align-items: center; gap: 10px; font-size: 15px; }
-.intrinsic-row .aside { font-size: 13.5px; }
 .count-limited { color: var(--pencil); font-size: 11px; white-space: nowrap; border-bottom: 1px dotted currentColor; cursor: help; }
 
 .callout { margin: 4px 0 6px; padding: 12px 16px; border: 1px solid var(--rule); background: var(--paper-warm); background-image: var(--grain); border-radius: 3px 7px 4px 8px; max-width: 760px; }

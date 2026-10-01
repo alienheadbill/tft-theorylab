@@ -177,9 +177,41 @@ def champion_trait_ids(meta: SetMetadata) -> dict[str, tuple[str, ...]]:
     return out
 
 
+def trait_item_ids(meta: SetMetadata) -> dict[str, tuple[str, ...]]:
+    """For each of the set's traits, the items that may add it to a unit,
+    sorted; traits with none are left out. This is the guard behind
+    `Roster.intrinsic_traits` (a trait an item can add is never intrinsic),
+    so it errs towards listing too much:
+
+    - every item whose CommunityDragon `associatedTraits` names the trait
+      (its apiName or display name) -- in Set 18 these are trait augments;
+    - every item named "<trait display name> Emblem" -- CommunityDragon leaves
+      `associatedTraits` empty on Set 18's emblems (`DA_18_EmblemSlayer`
+      "Ravager Emblem"), so the emblem's own name is the link.
+
+    References to other sets' traits are ignored (the item list is shared
+    across sets); an older set's item whose name matches a current trait
+    is kept, which can only make classification more conservative."""
+    by_name: dict[str, list[str]] = {}
+    for trait_id, trait in meta.traits.items():
+        by_name.setdefault(trait.name, []).append(trait_id)
+    out: dict[str, set[str]] = {}
+    for item_id, item in meta.items.items():
+        refs = set(item.associated_traits)
+        if item.name.endswith(" Emblem"):
+            refs.add(item.name[: -len(" Emblem")])
+        for ref in refs:
+            if ref in meta.traits:
+                out.setdefault(ref, set()).add(item_id)
+            elif len(by_name.get(ref, [])) == 1:
+                out.setdefault(by_name[ref][0], set()).add(item_id)
+    return {trait_id: tuple(sorted(items)) for trait_id, items in sorted(out.items())}
+
+
 def roster_snapshot(meta: SetMetadata) -> dict[str, Any]:
     """The committed shape of `data/set_roster.json` (`tftlab.roster`):
-    champions with name, cost and canonical trait ids, and trait names."""
+    champions with name, cost and canonical trait ids, trait names, and
+    `trait_items` (`trait_item_ids`: which traits an item can add)."""
     trait_ids = champion_trait_ids(meta)
     return {
         "set_number": meta.set_number,
@@ -188,6 +220,7 @@ def roster_snapshot(meta: SetMetadata) -> dict[str, Any]:
             for cid, c in sorted(meta.champions.items())
         },
         "traits": {tid: t.name for tid, t in sorted(meta.traits.items())},
+        "trait_items": {tid: list(items) for tid, items in trait_item_ids(meta).items()},
     }
 
 

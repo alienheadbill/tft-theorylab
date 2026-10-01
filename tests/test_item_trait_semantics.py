@@ -206,16 +206,77 @@ def test_rolled_items_never_reach_item_evidence_or_flexibility(db: Database, tmp
 # ---------------------------------------------------------------- intrinsic traits
 
 
+SYNTHETIC_CHAMPIONS = {
+    "C_A": {"name": "A", "cost": 1, "traits": ["T_Solo", "T_Pair"]},
+    "C_B": {"name": "B", "cost": 4, "traits": ["T_Pair", "T_Rare"]},
+    "C_C": {"name": "C", "cost": 5, "traits": ["T_Rare"]},
+    "C_D": {"name": "D", "cost": 2, "traits": ["T_Emblemable", "T_Pair"]},
+    "X_Summon": {"name": "Summon", "cost": 0, "traits": ["T_Solo"]},  # not a shop champion
+}
+SYNTHETIC_TRAITS = {"T_Solo": "Solo", "T_Pair": "Pair", "T_Rare": "Rare", "T_Emblemable": "Emblemable"}
+
+
 def test_intrinsic_traits_come_from_static_membership_not_names() -> None:
-    roster = Roster(set_number=99, traits={"T_Solo": "Solo", "T_Pair": "Pair", "T_Rare": "Rare"}, champions={
-        "C_A": {"name": "A", "cost": 1, "traits": ["T_Solo", "T_Pair"]},
-        "C_B": {"name": "B", "cost": 4, "traits": ["T_Pair", "T_Rare"]},
-        "C_C": {"name": "C", "cost": 5, "traits": ["T_Rare"]},
-        "X_Summon": {"name": "Summon", "cost": 0, "traits": ["T_Solo"]},  # not a shop champion
-    })
+    roster = Roster(set_number=99, traits=SYNTHETIC_TRAITS, champions=SYNTHETIC_CHAMPIONS,
+                    trait_items={"T_Emblemable": ["X_EmblemEmblemable"], "T_Pair": ["X_EmblemPair"]})
     assert roster.intrinsic_traits("C_A") == ("T_Solo",)
     assert roster.intrinsic_traits("C_B") == () and roster.intrinsic_traits("C_C") == ()
     assert roster.trait_champions("T_Rare") == ("C_B", "C_C")
+
+
+def test_a_one_champion_trait_an_item_can_add_is_not_intrinsic() -> None:
+    """Emblem / trait-item guard: T_Emblemable has a single shop champion (C_D)
+    but an item can add it to other units, so it stays buildable."""
+    guarded = Roster(set_number=99, traits=SYNTHETIC_TRAITS, champions=SYNTHETIC_CHAMPIONS,
+                     trait_items={"T_Emblemable": ["X_EmblemEmblemable"]})
+    assert guarded.trait_champions("T_Emblemable") == ("C_D",)
+    assert guarded.intrinsic_traits("C_D") == ()
+    assert guarded.intrinsic_traits("C_A") == ("T_Solo",)
+    # Without verified trait-item data nothing is intrinsic (conservative).
+    unverified = Roster(set_number=99, traits=SYNTHETIC_TRAITS, champions=SYNTHETIC_CHAMPIONS)
+    assert all(unverified.intrinsic_traits(c) == () for c in SYNTHETIC_CHAMPIONS)
+
+
+def test_trait_item_guard_reads_associated_traits_and_emblem_names() -> None:
+    from tftlab.cdragon import ChampionMeta, ItemMeta, SetMetadata, TraitMeta, roster_snapshot, trait_item_ids
+
+    def item(item_id, name, associated=()):
+        return ItemMeta(item_id=item_id, name=name, icon_url=None, composition=(), associated_traits=tuple(associated))
+
+    meta = SetMetadata(
+        patch="latest", set_number=99,
+        champions={cid: ChampionMeta(character_id=cid, name=c["name"], cost=c["cost"], icon_url=None,
+                                     traits=tuple(SYNTHETIC_TRAITS[t] for t in c["traits"]), role=None)
+                   for cid, c in SYNTHETIC_CHAMPIONS.items()},
+        traits={tid: TraitMeta(trait_id=tid, name=name, icon_url=None) for tid, name in SYNTHETIC_TRAITS.items()},
+        items={
+            "X_EmblemEmblemable": item("X_EmblemEmblemable", "Emblemable Emblem"),  # emblem: no associatedTraits
+            "X_PairAugment": item("X_PairAugment", "Pair Power", ["T_Pair"]),  # by apiName
+            "X_RareAugment": item("X_RareAugment", "Rare Power", ["Rare"]),  # by display name
+            "X_OldSetEmblem": item("X_OldSetEmblem", "Bygone Emblem", ["Set1_Bygone"]),  # another set: ignored
+            "X_Sword": item("X_Sword", "Sword"),
+        },
+    )
+    assert trait_item_ids(meta) == {
+        "T_Emblemable": ("X_EmblemEmblemable",), "T_Pair": ("X_PairAugment",), "T_Rare": ("X_RareAugment",)}
+    snapshot = roster_snapshot(meta)
+    roster = Roster(set_number=99, champions=snapshot["champions"], traits=snapshot["traits"],
+                    trait_items=snapshot["trait_items"])
+    assert roster.intrinsic_traits("C_A") == ("T_Solo",) and roster.intrinsic_traits("C_D") == ()
+
+
+def test_current_set_intrinsic_traits_have_no_trait_item_path() -> None:
+    """Static guard on the committed snapshot: Set 18's intrinsic traits have
+    no emblem or trait item, while emblem-able traits (e.g. Ravager) are
+    recorded and therefore never intrinsic."""
+    assert ROSTER.trait_items is not None
+    intrinsic = {t for c in ROSTER.champions for t in ROSTER.intrinsic_traits(c)}
+    assert len(intrinsic) == 9
+    assert not intrinsic & set(ROSTER.trait_items)
+    ravager, = ROSTER.trait_ids("Ravager")
+    assert "DA_18_EmblemSlayer" in ROSTER.trait_items[ravager]
+    for trait, items in ROSTER.trait_items.items():
+        assert trait in ROSTER.traits and items
 
 
 def test_current_set_examples_kogmaw_caustic_and_alune_attuned() -> None:
@@ -257,6 +318,14 @@ def test_discovery_trait_evidence_uses_the_same_rule(db: Database) -> None:
     # Stored trait rows are untouched.
     stored = db.query_one("SELECT COUNT(*) FROM traits WHERE trait_name = ?", (CAUSTIC,))[0]
     assert stored == 11
+
+
+def test_intrinsic_traits_stay_out_of_the_champion_page() -> None:
+    """Classification stays in the API; the player-facing page does not show
+    an intrinsic-trait block (product decision on PR #51)."""
+    web = Path(__file__).parents[1] / "src" / "tftlab" / "web"
+    for name in ("static/champion.js", "static/app.css", "champion.html"):
+        assert "intrinsic" not in (web / name).read_text().lower(), name
 
 
 # ---------------------------------------------------------------- prepared Discovery

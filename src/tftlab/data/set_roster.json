@@ -1,5 +1,5 @@
 {
- "_about": "Current TFT set roster from CommunityDragon (latest cdragon/tft/en_us.json, parsed by tftlab.cdragon.parse_set_metadata). Shipped with the package as offline game metadata: tftlab.roster uses it to match champion/trait names to Riot ids, and tests/test_demo_roster.py checks demo data against it. tests/test_cdragon_live.py::test_committed_roster_fixture_matches_live_set compares it with the live feed nightly and prints the new roster when a set changes; paste that here to refresh. Each champion's `traits` are canonical trait ids (CommunityDragon lists them by display name; tftlab.cdragon.champion_trait_ids resolves each name to exactly one set trait), used by tftlab.roster to classify intrinsic one-champion traits.",
+ "_about": "Current TFT set roster from CommunityDragon (latest cdragon/tft/en_us.json, parsed by tftlab.cdragon.parse_set_metadata). Shipped with the package as offline game metadata: tftlab.roster uses it to match champion/trait names to Riot ids, and tests/test_demo_roster.py checks demo data against it. tests/test_cdragon_live.py::test_committed_roster_fixture_matches_live_set compares it with the live feed nightly and prints the new roster when a set changes; paste that here to refresh. Each champion's `traits` are canonical trait ids (CommunityDragon lists them by display name; tftlab.cdragon.champion_trait_ids resolves each name to exactly one set trait), used by tftlab.roster to classify intrinsic one-champion traits. `trait_items` lists, per trait, the items that may add it (tftlab.cdragon.trait_item_ids: CommunityDragon associatedTraits plus items named \"<trait> Emblem\"); a one-champion trait is intrinsic only when no item can add it.",
  "_fetched": "2026-09-23 via the cdragon-live GitHub Actions workflow",
  "_champion_traits_fetched": "2026-09-26 via the cdragon-live GitHub Actions workflow (CommunityDragon latest cdragon/tft/en_us.json champion `traits`, captured from a workflow job log); checked nightly by test_committed_roster_fixture_matches_live_set",
  "set_number": 18,
@@ -728,5 +728,106 @@
   "DA_Juggernaut18": "Juggernaut",
   "DA_Primal18": "Primal",
   "DA_Riftbeast18": "Riftbeast"
+ },
+ "_trait_items_fetched": "2026-10-01 from the live CommunityDragon feed via a CI run of PR #51 (tftlab.cdragon.trait_item_ids); the same run confirmed champion names, costs and trait membership match this file; checked nightly by test_committed_roster_fixture_matches_live_set",
+ "trait_items": {
+  "DA_18_Blackthorn": [
+   "DA_18_EmblemBlackthorn",
+   "DA_BlackthornTraitAugment"
+  ],
+  "DA_18_Blossom": [
+   "DA_18_BlossomTraitAugment",
+   "DA_18_EmblemBlossom"
+  ],
+  "DA_18_Brawler": [
+   "DA_18_EmblemBrawler",
+   "TFT17_Item_HPTankEmblemItem"
+  ],
+  "DA_18_Coven": [
+   "DA_18_CovenTraitAugment",
+   "DA_18_CovenTraitAugment_LootToAP",
+   "DA_18_EmblemCoven"
+  ],
+  "DA_18_Defender": [
+   "DA_18_EmblemDefender",
+   "TFT16_Item_DefenderEmblemItem"
+  ],
+  "DA_18_Elderwood": [
+   "DA_18_ElderwoodTraitAugment",
+   "DA_18_EmblemElderwood"
+  ],
+  "DA_18_Executioner": [
+   "DA_18_EmblemExecutioner",
+   "TFT14_Item_CutterEmblemItem",
+   "TFT15_Item_DestroyerEmblemItem"
+  ],
+  "DA_18_Fae": [
+   "DA_18_EmblemFae",
+   "DA_18_FaeTraitAugment"
+  ],
+  "DA_18_Hunter": [
+   "DA_18_EmblemHunter"
+  ],
+  "DA_18_Inferno": [
+   "DA_18_EmblemInferno",
+   "DA_18_InfernoTraitAugment"
+  ],
+  "DA_18_Invoker": [
+   "DA_18_EmblemInvoker",
+   "TFT16_Item_InvokerEmblemItem"
+  ],
+  "DA_18_Lunar": [
+   "DA_18_EmblemLunar",
+   "DA_18_LunarTraitAugment",
+   "DA_18_LunarTraitAugmentPlus"
+  ],
+  "DA_18_LuxUniqueTrait": [
+   "DA_18_LuxAugmentII"
+  ],
+  "DA_18_Rapidfire": [
+   "DA_18_EmblemRapidfire",
+   "TFT14_Item_SwiftEmblemItem"
+  ],
+  "DA_18_Rival": [
+   "DA_18_RivalsAugment"
+  ],
+  "DA_18_Slayer": [
+   "DA_18_EmblemSlayer"
+  ],
+  "DA_18_Solar": [
+   "DA_18_SolarTraitAugment"
+  ],
+  "DA_18_Spellweaver": [
+   "DA_18_EmblemSpellweaver"
+  ],
+  "DA_18_Sprykin": [
+   "DA_18_EmblemSprykin",
+   "DA_18_SprykinAugment"
+  ],
+  "DA_18_Vanguard": [
+   "DA_18_EmblemVanguard",
+   "TFT14_Item_GuardianEmblemItem",
+   "TFT17_Item_ShieldTankEmblemItem"
+  ],
+  "DA_FloraFatalis18": [
+   "DA_18_EmblemFloraFatalis",
+   "DA_18_EmblemFloraFatalisAugment",
+   "DA_18_FloraFatalisAugment"
+  ],
+  "DA_Juggernaut18": [
+   "DA_18_EmblemJuggernaut",
+   "TFT15_Item_JuggernautEmblemItem",
+   "TFT16_Item_JuggernautEmblemItem"
+  ],
+  "DA_Primal18": [
+   "DA_18_EmblemPrimal",
+   "DA_18_PrimalAugmentPlus_Nidalee",
+   "DA_18_PrimalAugmentPlus_Sivir",
+   "DA_18_PrimalAugment_Nidalee",
+   "DA_18_PrimalAugment_Sivir"
+  ],
+  "DA_Riftbeast18": [
+   "DA_18_RiftbeastTraitAugment"
+  ]
  }
 }

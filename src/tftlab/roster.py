@@ -55,6 +55,10 @@ class Roster:
     set_number: int
     champions: dict[str, dict]
     traits: dict[str, str]
+    #: Trait id -> items that can add it (emblems/trait items, from
+    #: CommunityDragon `associatedTraits`; see `tftlab.cdragon.trait_item_ids`).
+    #: None when the snapshot has no verified trait-item data.
+    trait_items: dict[str, list[str]] | None = None
 
     def champion_traits(self, character_id: str | None) -> tuple[str, ...]:
         """The champion's own traits (canonical trait ids), from static data."""
@@ -68,13 +72,19 @@ class Roster:
         ))
 
     def intrinsic_traits(self, character_id: str | None) -> tuple[str, ...]:
-        """Traits that come with picking this champion and no other: the
-        champion's own traits that no other shop champion has (a one-champion
-        trait such as a unique trait). Their presence on this champion's boards
-        is champion identity, not evidence of a trait shell built around it.
-        Derived from the roster's static trait membership; never a name list."""
+        """Traits that come with picking this champion and cannot be built
+        any other way: the champion's own traits that (1) no other shop
+        champion has and (2) no item can add -- the snapshot's verified
+        `trait_items` lists no emblem or trait item for them. Their presence on
+        this champion's boards is champion identity, not evidence of a trait
+        shell built around it. A one-champion trait an emblem can extend stays
+        buildable. Conservative: without verified trait-item data nothing is
+        intrinsic. Derived from static data only; never a name list."""
+        if self.trait_items is None:
+            return ()
         return tuple(
-            t for t in self.champion_traits(character_id) if self.trait_champions(t) == (character_id,)
+            t for t in self.champion_traits(character_id)
+            if self.trait_champions(t) == (character_id,) and not self.trait_items.get(t)
         )
 
     def champion_name(self, character_id: str | None) -> str | None:
@@ -106,4 +116,7 @@ class Roster:
 @lru_cache(maxsize=1)
 def load_roster() -> Roster:
     data = json.loads(ROSTER_PATH.read_text())
-    return Roster(set_number=data["set_number"], champions=data["champions"], traits=data["traits"])
+    return Roster(
+        set_number=data["set_number"], champions=data["champions"], traits=data["traits"],
+        trait_items=data.get("trait_items"),
+    )

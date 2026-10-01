@@ -12,11 +12,11 @@ threshold: the canonical unit thresholds per tier are not in any verified
 static metadata this repository holds.
 
 Intrinsic traits. A trait that only the carry itself provides (a one-champion
-trait, from the roster's static trait membership: `Roster.intrinsic_traits`)
-is present because that champion was picked, not because of the units built
+trait no verified emblem or trait item can add, from the roster's static data:
+`Roster.intrinsic_traits`) is present because that champion was picked, not because of the units built
 around it. It is left out of every carry's trait evidence here -- trait/count
 associations (Discovery, the traits API) and the trait profile (Champion
-Investigation) -- and reported separately as champion context. Only the
+Investigation) -- and kept only as API classification (`intrinsic_traits`). Only the
 carry's OWN intrinsic traits are dropped: another champion's one-champion
 trait on the board means that champion was added, which is shell evidence.
 Stored trait rows are never changed.

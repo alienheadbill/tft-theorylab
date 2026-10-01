@@ -71,7 +71,7 @@ def test_committed_roster_fixture_matches_live_set(tmp_path) -> None:
         live = roster_snapshot(client.get_set_metadata("latest", use_cache=False))
 
     committed = json.loads(ROSTER_FIXTURE.read_text()) if ROSTER_FIXTURE.exists() else {}
-    committed = {k: committed.get(k) for k in ("set_number", "champions", "traits")}
+    committed = {k: committed.get(k) for k in ("set_number", "champions", "traits", "trait_items")}
     assert committed == live, (
         "src/tftlab/data/set_roster.json is out of date. Live roster:\n"
         + json.dumps(live, indent=1, ensure_ascii=False)
