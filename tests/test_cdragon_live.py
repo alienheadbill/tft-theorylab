@@ -225,6 +225,26 @@ def test_committed_item_stats_match_live_set(tmp_path) -> None:
     )
 
 
+@requires_live_network
+def test_committed_item_recipes_match_live_set(tmp_path, capsys) -> None:
+    """The recipe part of the item snapshot on its own: every item's
+    CommunityDragon `composition` (Champion Investigation's recipe direction
+    reads it offline). Prints the live recipes of every snapshot item that
+    has one, as one compact JSON line, so a change or a missing recipe is
+    visible in the log; fails when the committed recipes differ."""
+    with CommunityDragonClient(cache_dir=tmp_path) as client:
+        live = item_stats_snapshot(client.get_set_metadata("latest", use_cache=False))["items"]
+    recipes = {item_id: entry["composition"] for item_id, entry in live.items() if entry["composition"]}
+    with capsys.disabled():
+        print(f"\nLIVE ITEM RECIPES ({len(recipes)} of {len(live)} snapshot items):")
+        print("ITEM_RECIPES_JSON " + json.dumps(recipes, sort_keys=True, separators=(",", ":")))
+    committed_items = (json.loads(ITEM_STATS_FIXTURE.read_text()) if ITEM_STATS_FIXTURE.exists() else {}).get("items") or {}
+    committed = {item_id: entry.get("composition") for item_id, entry in committed_items.items() if entry.get("composition")}
+    missing = sorted(i for i in committed_items if "composition" not in committed_items[i])
+    assert not missing, f"item_stats.json entries without a `composition` field: {missing[:10]}"
+    assert committed == recipes, "item_stats.json recipes differ from the live feed (see ITEM_RECIPES_JSON above)"
+
+
 def da_namespace_inventory(raw: dict) -> dict:
     """Every `DA_*` item in the bundle-wide items list (the namespace Set 18
     Match-V1 boards store), with readable stats and any `TFT_Item_*` entry

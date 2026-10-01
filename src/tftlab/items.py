@@ -57,5 +57,28 @@ def is_component(item_id: str) -> bool:
     return item_id in component_ids()
 
 
+@lru_cache(maxsize=1)
+def _item_compositions() -> dict[str, tuple[str, ...]]:
+    """Every snapshot item's CommunityDragon `composition`, as served."""
+    try:
+        items = json.loads(ITEM_STATS_PATH.read_text()).get("items") or {}
+    except FileNotFoundError:
+        items = {}
+    return {item_id: tuple(meta.get("composition") or ()) for item_id, meta in items.items() if "composition" in meta}
+
+
+def item_recipe(item_id: str) -> tuple[str, str] | None:
+    """The item's verified two-component recipe from the committed snapshot
+    (`composition`, ids exactly as CommunityDragon serves them), or None:
+    an item missing from the snapshot, one without a recipe (components,
+    uncraftable items), or a "recipe" that is not exactly two recognized
+    components (e.g. a legacy entry listing itself). Never inferred from
+    names or aliases."""
+    composition = _item_compositions().get(item_id) or ()
+    if len(composition) != 2 or not all(is_component(c) for c in composition):
+        return None
+    return composition[0], composition[1]
+
+
 def completed_item_count(item_ids: list[str] | tuple[str, ...]) -> int:
     return sum(1 for item_id in item_ids if item_id and not is_component(item_id))

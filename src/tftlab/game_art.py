@@ -166,15 +166,21 @@ def readable_item_id(item_id: str) -> str:
 def item_ref(item_id: str) -> dict[str, Any]:
     """One item for the web: id, display name (metadata first, else readable
     id text with `name_source` "id"), class and cached icon. Artifact and
-    Radiant items never borrow the icon of the item they resemble."""
+    Radiant items never borrow the icon of the item they resemble. A normal
+    item the id lookup misses (e.g. a set's `DA_Component_BFSword`, which
+    has no snapshot alias) gets the icon of the one cached item with exactly
+    its metadata display name, if there is exactly one."""
     name = item_name(item_id)
     kind = item_kind(item_id)
+    art = item_art(item_id)
+    if art is None and name and kind in ("component", *NORMAL_ITEM_KINDS):
+        art = _url("items", _unique_by_name("items", name))
     return {
         "id": item_id,
         "name": name or readable_item_id(item_id),
         "name_source": "metadata" if name else "id",
         "kind": kind,
-        "art_url": item_art(item_id),
+        "art_url": art,
     }
 
 

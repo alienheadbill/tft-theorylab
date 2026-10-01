@@ -58,6 +58,7 @@ const state = {
   championsStatus: 'idle',
   championsRequestSeq: 0,
   currentId: null,
+  tab: null,
 };
 
 function stamp(kind, label) {
@@ -225,7 +226,7 @@ function summarySection(inv, name) {
   const list = lines => `<ul class="summary-list">${lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul>`;
   return `
     <section class="inv-section summary" aria-labelledby="sec-summary">
-      <h3 id="sec-summary">How players carry with ${esc(name)}</h3>
+      <h3 id="sec-summary">What the carry boards show for ${esc(name)}</h3>
       <div class="summary-grid">
         <div class="summary-block">
           <p class="summary-head">${stamp('observed', 'Observed')} <span>what the carry boards show</span></p>
@@ -314,8 +315,35 @@ function evidenceList(rows, render, emptyText) {
   return rows.length ? `<ol class="ev-list">${rows.map(render).join('')}</ol>` : `<p class="none-note">${esc(emptyText)}</p>`;
 }
 
+// Recipe direction: DERIVED from the CommunityDragon recipes of the common
+// completed items, never observed components (Match-V1 has no component
+// history). Each component lists the items whose recipe uses it.
+function recipeDirectionDetail(direction, minBoards) {
+  if (direction.status !== 'available') {
+    return `<p class="none-note">Not enough completed-item evidence yet: no item on ${plural(minBoards, 'carry board')} or more with a verified recipe.</p>`;
+  }
+  const rows = direction.components
+    .map(
+      c => `
+      <li class="ev-row">
+        ${refIcon(c.component.name, c.component.art_url, { kind: 'item' })}
+        <span class="row-name">${esc(c.component.name)}</span>
+        <span class="row-meta">
+          <span>in ${c.recipes} of ${direction.recipes_considered} recipes read${c.copies > c.recipes ? ` · ${c.copies} copies` : ''}</span>
+          <span class="recipe-uses">for ${c.items.map(i => `${refIcon(i.name, i.art_url, { kind: 'item' })} ${esc(i.name)}`).join(' · ')}</span>
+        </span>
+      </li>`,
+    )
+    .join('');
+  const skipped = direction.items_without_recipe.length
+    ? `<p class="inv-help">${plural(direction.items_without_recipe.length, 'item')} without a verified two-component recipe ${direction.items_without_recipe.length === 1 ? 'is' : 'are'} not counted.</p>`
+    : '';
+  return `<ol class="ev-list">${rows}</ol>${skipped}`;
+}
+
 function itemSection(inv, name) {
   const items = inv.items;
+  const h = inv.how_to_play;
   const normal = items.most_common_normal_build;
   const overall = items.most_common_build;
   const callout = (label, row) =>
@@ -326,14 +354,21 @@ function itemSection(inv, name) {
       ? callout('Most common full build overall (includes an Artifact, Radiant or unrecognized item)', overall)
       : '');
   return `
+    <section class="inv-section" aria-labelledby="sec-recipes">
+      <h3 id="sec-recipes">Recipe direction ${stamp('interpretation', 'Derived from recipes')}</h3>
+      <p class="inv-help">${esc(h.component_direction.basis)} Items read: the six most common normal items on ${plural(h.support_min_boards, 'carry board')} or more, the same ones How to play shows.</p>
+      ${recipeDirectionDetail(h.component_direction, h.support_min_boards)}
+    </section>
     <section class="inv-section" aria-labelledby="sec-items">
-      <h3 id="sec-items">What to build on it ${stamp('observed', 'Observed')}</h3>
-      <p class="inv-help">Completed items on the carry itself. Each row shows how often its carry boards used the build, and how those boards finished compared with its carry boards that didn't. Best first: rows are ordered by that difference, adjusted so a handful of lucky boards can't top the list. A green top-4 number means those boards did better than the ones without it; red means worse. These are packages observed together, not a guaranteed best-in-slot. Artifact and Radiant items aren't normal crafts, so they are labelled and never lead the normal-build summary.</p>
-      ${commonLine}
-      <h4>Full builds (exact 3 items)</h4>
-      ${evidenceList(items.builds, r => itemRow(r, name), 'No full 3-item build shows up on at least 2 carry boards yet.')}
+      <h3 id="sec-items">Completed items ${stamp('observed', 'Observed')}</h3>
+      <p class="inv-help">Completed items on the carry itself. Each row shows how often its carry boards used it, and how those boards finished compared with its carry boards that didn't. Best first: rows are ordered by that difference, adjusted so a handful of lucky boards can't top the list. A green top-4 number means those boards did better than the ones without it; red means worse. Artifact and Radiant items aren't normal crafts, so they are labelled and never lead the normal-build summary.</p>
+      <h4>Individual items</h4>
+      ${evidenceList(items.individual || [], r => itemRow(r, name), 'No completed-item evidence for this champion yet.')}
       <h4>Item pairs</h4>
       ${evidenceList(items.pairs, r => itemRow(r, name), 'No item pair shows up on at least 2 carry boards yet.')}
+      <h4>Full builds (exact 3 items)</h4>
+      ${commonLine}
+      ${evidenceList(items.builds, r => itemRow(r, name), 'No full 3-item build shows up on at least 2 carry boards yet.')}
     </section>`;
 }
 
@@ -393,10 +428,166 @@ function trustSection(inv) {
         <div><dt>Carry board</dt><dd>One player's final board where this champion finished with 2+ completed items, at least one of them a carry item. Boards that missed the 3★ still count, so bad outcomes aren't hidden.</dd></div>
         <div><dt>Boards, not matches</dt><dd>Every match has eight player boards, so a champion can be carried on more boards than there are matches in the window.</dd></div>
         <div><dt>With vs. without</dt><dd>Item, partner and trait rows compare this champion's carry boards that had the thing against its carry boards that didn't. Rows marked ${stamp('low', 'Limited sample')} have fewer than ${SMALL_SPLIT} boards on one side of that comparison.</dd></div>
-        <div><dt>Interpretation</dt><dd>The reading in "How players carry" comes from fixed rules, not a model. The 3★ comparison needs at least 30 boards on each side before TheoryLabs interprets it; then it reports the observed Top 4 difference in percentage points. That is an association, not proof that reaching 3★ caused the result.</dd></div>
+        <div><dt>How to play</dt><dd>A short selection from the same observed rows, chosen by sample size and frequency, not by results: items, pairs and builds on at least 10 carry boards (most used first), teammates by how often they shared the board, trait directions by the unit count Riot reported most often. A one-champion trait at its single unit (e.g. a teammate's own trait) is not a trait direction; it stays in the Traits tab. Nothing is predicted.</dd></div>
+        <div><dt>Recipe direction</dt><dd>Derived, not observed: the components in the CommunityDragon recipes of the completed items How to play shows. Riot match data lists final items only, so TheoryLabs can't see which components a player held or opened with.</dd></div>
+        <div><dt>Interpretation</dt><dd>The interpretation above comes from fixed rules, not a model. The 3★ comparison needs at least 30 boards on each side before TheoryLabs interprets it; then it reports the observed Top 4 difference in percentage points. That is an association, not proof that reaching 3★ caused the result.</dd></div>
         <div><dt>Not shown yet</dt><dd>Full comp families and recurring cores (that research is still experimental and unvalidated), positioning, augments, and leveling or rolling plans.</dd></div>
       </dl>
     </section>`;
+}
+
+// ------------------------------------------------------------------ how to play
+
+// A larger art tile with its name written next to it (the art is decorative).
+const tile = (name, url, { kind = 'item', cost = null, sub = '' } = {}) =>
+  `<span class="htp-tile">${refIcon(name, url, { kind, cost })}<span class="htp-tile-text"><span class="htp-tile-name">${esc(name)}</span>${sub ? `<span class="htp-tile-sub">${sub}</span>` : ''}</span></span>`;
+const share = row => `${fmtPctShort(row.share_of_carry_games)} · ${plural(row.games, 'board')}`;
+const itemIcons = row =>
+  `<span class="ref-stack">${row.items.map(i => refIcon(i.name, i.art_url, { kind: 'item' })).join('')}</span>`;
+const itemLine = row =>
+  `<li class="htp-line">${itemIcons(row)}<span class="htp-line-name">${row.items.map(i => esc(i.name)).join(' + ')}</span><span class="htp-num">${share(row)}</span></li>`;
+const htpEmpty = text => `<p class="none-note">${esc(text)}</p>`;
+
+function starCard(signal) {
+  const side = (label, rate, n) =>
+    `<div class="htp-star-side"><span class="htp-star-label">${label}</span><span class="htp-star-num">${fmtPctShort(rate)}</span><span class="htp-num">top 4 · ${plural(n, 'board')}</span></div>`;
+  let body;
+  if (signal.status === 'no_hits') body = htpEmpty('No carry board reached 3★ in this sample, so there is nothing to compare.');
+  else if (signal.status === 'all_hits') body = htpEmpty('Every carry board reached 3★, so there is nothing to compare.');
+  else {
+    body = `<div class="htp-star">${side('3★', signal.hit_top4_rate, signal.hit_games)}${side('below 3★', signal.miss_top4_rate, signal.miss_games)}</div>`;
+    if (signal.status === 'limited') {
+      body += `<p class="htp-note">${stamp('low', 'Limited sample')} Too few boards on one side (under ${signal.min_boards}) to compare 3★ vs below.</p>`;
+    }
+  }
+  return `
+    <section class="htp-card" aria-labelledby="htp-star">
+      <h4 id="htp-star">Star signal</h4>
+      ${body}
+      <p class="htp-foot">Observed Top 4 by final star level. A difference here is an association, not proof that 3★ is required.</p>
+    </section>`;
+}
+
+function componentCard(direction, minBoards) {
+  const body =
+    direction.status === 'available'
+      ? `<ul class="htp-tiles" aria-label="Useful components">${direction.components
+          .map(c => `<li>${tile(c.component.name, c.component.art_url, { sub: `in ${c.recipes} of ${direction.recipes_considered} recipes` })}</li>`)
+          .join('')}</ul>`
+      : htpEmpty('Not enough completed-item evidence yet.');
+  return `
+    <section class="htp-card" aria-labelledby="htp-components">
+      <h4 id="htp-components">Recipe direction</h4>
+      <p class="htp-sub">Components in the recipes of the items below</p>
+      ${body}
+      <p class="htp-foot">${stamp('interpretation', 'Derived from recipes')} Not what players opened with: match data lists final items only.</p>
+    </section>`;
+}
+
+function howToPlaySection(inv) {
+  const h = inv.how_to_play;
+  const c = inv.champion;
+  const min = h.support_min_boards;
+  const items = h.items.length
+    ? `<ul class="htp-tiles" aria-label="Common items">${h.items.map(r => `<li>${tile(r.items[0].name, r.items[0].art_url, { sub: share(r) })}</li>`).join('')}</ul>`
+    : htpEmpty('Not enough completed-item evidence yet.');
+  const lines = (rows, empty) => (rows.length ? `<ul class="htp-lines">${rows.map(itemLine).join('')}</ul>` : htpEmpty(empty));
+  const mates = h.teammates.length
+    ? `<ul class="htp-tiles" aria-label="Frequent teammates">${h.teammates
+        .map(m => `<li><a class="htp-link" href="${esc(championHref(m.slug))}">${tile(m.name, m.art_url, { kind: 'partner', cost: m.cost, sub: share(m) })}</a></li>`)
+        .join('')}</ul>`
+    : htpEmpty('No teammate evidence yet.');
+  const traits = h.trait_directions.length
+    ? `<ul class="htp-tiles" aria-label="Trait directions">${h.trait_directions
+        .map(t => `<li>${tile(t.name, t.art_url, { kind: 'trait', sub: `<b>${plural(t.num_units, 'unit')}</b> · ${fmtPctShort(t.count_share)} of boards` })}</li>`)
+        .join('')}</ul>`
+    : htpEmpty('No useful buildable trait direction in this sample.');
+  return `
+    <section class="inv-section htp" aria-labelledby="sec-htp">
+      <h3 id="sec-htp">When to consider ${esc(c.name)}</h3>
+      <div class="htp-grid">
+        ${componentCard(h.component_direction, min)}
+        ${starCard(h.star_signal)}
+      </div>
+      <h3 class="htp-heading" id="htp-items">Item direction</h3>
+      <p class="htp-sub">Each on ${min}+ carry boards, most used first. How they placed is in the Items tab.</p>
+      <div class="htp-grid htp-grid-3">
+        <section class="htp-card" aria-labelledby="htp-common-items"><h4 id="htp-common-items">Common items</h4>${items}</section>
+        <section class="htp-card" aria-labelledby="htp-pairs"><h4 id="htp-pairs">Common observed pairs</h4>${lines(h.pairs, `No item pair on ${min}+ carry boards yet.`)}</section>
+        <section class="htp-card" aria-labelledby="htp-builds"><h4 id="htp-builds">Common full builds</h4>${lines(h.builds, `No full build on ${min}+ carry boards yet.`)}</section>
+      </div>
+      <h3 class="htp-heading" id="htp-around">Build around</h3>
+      <div class="htp-grid">
+        <section class="htp-card" aria-labelledby="htp-mates"><h4 id="htp-mates">Teammates</h4>${mates}</section>
+        <section class="htp-card" aria-labelledby="htp-traits"><h4 id="htp-traits">Trait direction</h4>${traits}<p class="htp-foot">Unit counts Riot reported on the final boards, not official trait thresholds.</p></section>
+      </div>
+      <section class="htp-why" aria-labelledby="htp-why">
+        <h4 id="htp-why">Why: evidence summary ${stamp('observed', 'Observed')}</h4>
+        <p>${h.summary ? esc(h.summary) : 'Not enough evidence for a summary yet.'}</p>
+        <p class="htp-foot">Shown: rows on ${plural(min, 'carry board')} or more, most boards first; teammates by how often they shared the board. Detailed with-vs-without results are in the other tabs. ${inv.carry.sample.low_sample ? stamp('low', inv.carry.sample.label) : ''}</p>
+        <button type="button" class="htp-more" data-tab="evidence">View detailed evidence →</button>
+      </section>
+    </section>`;
+}
+
+// ------------------------------------------------------------------ tabs
+
+// One tab list for the whole investigation; panels are rendered once and
+// shown/hidden, so switching never fetches or navigates. The tab is kept
+// in the URL hash (#items) so a view can be linked and survives a reload.
+const TABS = [
+  ['play', 'How to play'],
+  ['items', 'Items'],
+  ['teammates', 'Teammates'],
+  ['traits', 'Traits'],
+  ['evidence', 'Evidence'],
+];
+const tabFromHash = () => {
+  const id = window.location.hash.replace(/^#/, '');
+  return TABS.some(([t]) => t === id) ? id : null;
+};
+
+function tabList(active) {
+  return `
+    <div class="inv-tabs" role="tablist" aria-label="Champion views">
+      ${TABS.map(
+        ([id, label]) =>
+          `<button type="button" role="tab" id="tab-${id}" aria-controls="panel-${id}" aria-selected="${id === active}" tabindex="${id === active ? 0 : -1}" data-tab="${id}">${label}</button>`,
+      ).join('')}
+    </div>`;
+}
+
+const panel = (id, active, html) =>
+  `<div class="inv-panel" role="tabpanel" id="panel-${id}" aria-labelledby="tab-${id}" tabindex="0"${id === active ? '' : ' hidden'}>${html}</div>`;
+
+function selectTab(id, { focus = false, updateHash = true } = {}) {
+  const list = viewEl.querySelector('.inv-tabs');
+  if (!list || !TABS.some(([t]) => t === id)) return;
+  state.tab = id;
+  for (const btn of list.querySelectorAll('[role="tab"]')) {
+    const on = btn.dataset.tab === id;
+    btn.setAttribute('aria-selected', String(on));
+    btn.tabIndex = on ? 0 : -1;
+    if (on && focus) btn.focus();
+    if (on) btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+  for (const p of viewEl.querySelectorAll('.inv-panel')) p.hidden = p.id !== `panel-${id}`;
+  if (updateHash) {
+    const url = new URL(window.location.href);
+    url.hash = id === 'play' ? '' : id;
+    window.history.replaceState(null, '', url);
+  }
+}
+
+function onTabKey(e) {
+  const tab = e.target.closest('[role="tab"]');
+  if (!tab) return;
+  const ids = TABS.map(([t]) => t);
+  const i = ids.indexOf(tab.dataset.tab);
+  const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: ids.length - 1 }[e.key];
+  if (next === undefined) return;
+  e.preventDefault();
+  selectTab(ids[(next + ids.length) % ids.length], { focus: true });
 }
 
 function headerBlock(inv) {
@@ -408,7 +599,7 @@ function headerBlock(inv) {
       <div class="inv-title">
         <p class="notes-kicker">carry investigation · <a href="${esc(allChampionsHref())}" class="back-link">all champions</a></p>
         <h2 id="champion-name" tabindex="-1">${esc(c.name)}</h2>
-        <p class="inv-meta"><span class="cost-marker">${c.cost}-cost</span> balance window <b>${esc(inv.balance_window ?? '—')}</b></p>
+        <p class="inv-meta"><span class="cost-marker">${c.cost}-cost</span> balance window <b>${esc(inv.balance_window ?? '—')}</b>${inv.carry ? ` <span>${plural(inv.carry.games, 'carry board')}</span>` : ''}</p>
         <p class="inv-stamps">${stamp('observed', 'Observed')}${sample}</p>
       </div>
     </header>`;
@@ -435,18 +626,20 @@ function renderInvestigation(inv) {
     );
     return;
   }
+  const active = state.tab || tabFromHash() || 'play';
   showView(`
     <article class="investigation">
       ${headerBlock(inv)}
-      ${summarySection(inv, c.name)}
-      ${carrySection(inv)}
-      ${itemSection(inv, c.name)}
-      ${partnerSection(inv, c.name)}
-      ${traitSection(inv, c.name)}
-      ${trustSection(inv)}
+      ${tabList(active)}
+      ${panel('play', active, howToPlaySection(inv))}
+      ${panel('items', active, itemSection(inv, c.name))}
+      ${panel('teammates', active, partnerSection(inv, c.name))}
+      ${panel('traits', active, traitSection(inv, c.name))}
+      ${panel('evidence', active, summarySection(inv, c.name) + carrySection(inv) + trustSection(inv))}
     </article>`,
     `${c.name} carry investigation loaded.`,
   );
+  state.tab = active;
 }
 
 async function loadInvestigation({ focus = true } = {}) {
@@ -498,7 +691,18 @@ function bind() {
     loadInvestigation({ focus: false });
     loadChampions();
   });
+  viewEl.addEventListener('keydown', onTabKey);
+  window.addEventListener('hashchange', () => {
+    const id = tabFromHash() || 'play';
+    if (id !== state.tab) selectTab(id, { updateHash: false });
+  });
   document.addEventListener('click', e => {
+    const tabBtn = e.target.closest('[data-tab]');
+    if (tabBtn && viewEl.contains(tabBtn)) {
+      const toPanel = !tabBtn.matches('[role="tab"]');
+      selectTab(tabBtn.dataset.tab, { focus: toPanel });
+      if (toPanel) viewEl.querySelector('.inv-tabs')?.scrollIntoView({ block: 'start' });
+    }
     if (e.target.closest('[data-action="retry-view"]')) loadInvestigation();
     if (e.target.closest('[data-action="retry-picker"]')) loadChampions();
   });

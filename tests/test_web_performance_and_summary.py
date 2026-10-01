@@ -310,11 +310,18 @@ def test_player_facing_counts_say_carry_boards() -> None:
     assert "min. carry boards" in (WEB / "index.html").read_text()
 
 
-def test_champion_page_leads_with_how_players_carry_and_keeps_methodology_below() -> None:
+def test_champion_page_leads_with_how_to_play_and_keeps_the_evidence_in_its_own_tab() -> None:
+    """The "How to play" redesign: the concise view is the default tab, the
+    detail tabs follow, and the dense statistics (observed summary, results,
+    methodology) keep their order inside the Evidence tab."""
     js = (WEB / "static" / "champion.js").read_text()
-    order = [js.index(f"${{{fn}(") for fn in ("summarySection", "carrySection", "itemSection", "trustSection")]
+    panels = [js.index(f"panel('{tab}', active, ") for tab in ("play", "items", "teammates", "traits", "evidence")]
+    assert panels == sorted(panels)
+    evidence = js[panels[-1]:]
+    order = [evidence.index(f"{fn}(") for fn in ("summarySection", "carrySection", "trustSection")]
     assert order == sorted(order)
-    assert "How players carry with" in js and "stamp('interpretation', 'Interpretation')" in js
+    assert "state.tab || tabFromHash() || 'play'" in js  # How to play is the default
+    assert "stamp('interpretation', 'Interpretation')" in js
     assert "2+ completed items, at least one of them a carry item" in js  # still explained, in the trust section
     assert "position" not in js.lower().replace("positioning advice", "").replace("positioning, augments", "")
 
