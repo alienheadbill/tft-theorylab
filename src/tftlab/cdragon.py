@@ -346,7 +346,11 @@ def item_stats_snapshot(meta: SetMetadata) -> dict[str, Any]:
     signature (e.g. a Corrupted copy with the same stats). The display name,
     not the id, is the bridge -- `DA_RedBuff` ("Red Buff") is
     `TFT_Item_RapidFireCannon`, while `TFT_Item_RedBuff` is "Sunfire Cape".
-    Otherwise the item keeps only its own metadata (often none: unknown)."""
+    Otherwise the item keeps only its own metadata (often none: unknown).
+
+    Every entry also keeps its own CommunityDragon recipe, `composition`:
+    the component apiNames exactly as served (empty for components and
+    uncraftable items). It is never borrowed from an alias."""
     n = meta.set_number
     tft = {i: m for i, m in meta.items.items() if i.startswith(("TFT_Item_", f"TFT{n}_Item_"))}
     by_name: dict[str, list[str]] = {}
@@ -362,7 +366,10 @@ def item_stats_snapshot(meta: SetMetadata) -> dict[str, Any]:
         return bool(item.composition) or item_id.startswith(("DA_Component_", f"DA_{n}_Emblem", "DA_Item_"))
 
     items: dict[str, dict[str, Any]] = {
-        item_id: {"name": item.name, "stat_effects": list(item.stat_effects), "tags": list(item.tags)}
+        item_id: {
+            "name": item.name, "stat_effects": list(item.stat_effects), "tags": list(item.tags),
+            "composition": list(item.composition),
+        }
         for item_id, item in tft.items()
     }
     for item_id, item in meta.items.items():
@@ -382,6 +389,7 @@ def item_stats_snapshot(meta: SetMetadata) -> dict[str, Any]:
             "own_stat_effects": list(item.stat_effects),
             "own_tags": list(item.tags),
             "alias_of": alias,
+            "composition": list(item.composition),
         }
     return {"set_number": n, "items": dict(sorted(items.items()))}
 
