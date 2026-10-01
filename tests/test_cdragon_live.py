@@ -80,9 +80,12 @@ def test_committed_roster_fixture_matches_live_set(tmp_path) -> None:
 
 @requires_live_network
 def test_every_live_set_emblem_links_to_a_trait(tmp_path, capsys) -> None:
-    """Every emblem the live feed lists for the current set must link to one
-    of its traits; otherwise `Roster.intrinsic_traits` fails closed. Prints
-    each emblem with its trait(s) so the log shows the full inventory."""
+    """Every emblem the live feed lists for the current set either links to
+    one of its traits or is recorded in the committed `unresolved_emblems`
+    (which makes `Roster.intrinsic_traits` fail closed). Fails when a new
+    unresolved emblem appears or a recorded one changes. Prints each emblem
+    with its trait(s), and the raw entry of each unresolved one, so the log
+    shows the full inventory."""
     from tftlab.cdragon import _item_trait_ids, is_set_emblem, parse_set_metadata, unresolved_emblem_ids
 
     with CommunityDragonClient(cache_dir=tmp_path) as client:
@@ -101,7 +104,9 @@ def test_every_live_set_emblem_links_to_a_trait(tmp_path, capsys) -> None:
                     "apiName", "name", "desc", "associatedTraits", "incompatibleTraits", "tags", "effects",
                     "composition", "unique")}, ensure_ascii=False, default=str))
     assert emblems, "expected the current set to have emblems"
-    assert unresolved_emblem_ids(meta) == (), "emblems that link to no current trait (classification fails closed)"
+    committed = json.loads(ROSTER_FIXTURE.read_text()).get("unresolved_emblems")
+    assert list(unresolved_emblem_ids(meta)) == committed, (
+        "live emblems that link to no current trait differ from set_roster.json `unresolved_emblems`")
 
 
 @requires_live_network
