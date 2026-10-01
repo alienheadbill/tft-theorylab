@@ -38,6 +38,7 @@ from .game_art import (
     trait_art,
     trait_name,
 )
+from .how_to_play import how_to_play
 from .research_report import WEB_DISCOVERY_MIN_SAMPLES
 from .roster import INTRINSIC_TRAIT_REASON, id_key, load_roster, name_key
 from .scout import LOW_SAMPLE_COMMITMENT_GAMES
@@ -285,7 +286,14 @@ def champion_investigation(
         "appearances": 0,
         "window_average": None,
         "summary": None,
-        "items": {"most_common_build": None, "most_common_normal_build": None, "builds": [], "pairs": []},
+        # The concise player-facing layer (`tftlab.how_to_play`), built from
+        # the same evidence rows as the sections below; None without carry boards.
+        "how_to_play": None,
+        "items": {
+            "most_common_build": None, "most_common_normal_build": None, "builds": [], "pairs": [],
+            # Individual completed items (existing `item_package_stats` rows).
+            "individual": [],
+        },
         "partners": [],
         # Active traits on the carry boards, each with Riot's observed unit
         # counts (`num_units`). Denominator: `carry.games`.
@@ -339,13 +347,20 @@ def champion_investigation(
         body["items"]["most_common_build"] = max(rows, key=frequency)
         normal = [r for r in rows if r["normal_build"]]
         body["items"]["most_common_normal_build"] = max(normal, key=frequency) if normal else None
+    pairs = [_item_row(a) for a in item_stats["pairs"]]
+    singles = [_item_row(a) for a in item_stats["items"]]
     body["items"]["builds"] = rows[:top_n]
-    body["items"]["pairs"] = [_item_row(a) for a in item_stats["pairs"][:top_n]]
+    body["items"]["pairs"] = pairs[:top_n]
+    body["items"]["individual"] = singles[:top_n]
     partners = [_partner_row(a) for a in carry_partner_associations(db, character_id, balance_window)]
     traits = _trait_rows(trait_profile(db, character_id, balance_window))
     body["partners"] = partners[:top_n]
     body["traits"] = traits[:trait_top_n]
     body["summary"] = carry_summary(champion["name"], body["carry"], rows, partners, traits)
+    body["how_to_play"] = how_to_play(
+        champion["name"], body["carry"],
+        item_rows=singles, pair_rows=pairs, build_rows=rows, partner_rows=partners, trait_rows=traits,
+    )
     return body
 
 
