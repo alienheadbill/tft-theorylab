@@ -330,6 +330,19 @@ jobs:
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: tftlab discovery-smoke
 
+      # Publish the prepared Discovery analytics the website reads, now that
+      # this run's matches are stored and validated (tftlab.prepared_discovery).
+      # Each balance window is published in one transaction and windows that
+      # are already current are skipped. A failure keeps the previous
+      # published run; until a current run exists the website computes
+      # Discovery live and says so -- it never serves stale results. No Riot
+      # access.
+      - name: Prepare Discovery analytics
+        id: prepare
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: tftlab prepare-discovery
+
       # One short table per run on the run's summary page, so a scheduled
       # run can be judged at a glance (the full report stays in the ingest
       # step's log and the ingest-telemetry artifact). Reads only the
@@ -340,6 +353,7 @@ jobs:
         env:
           VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
         run: |
           python3 - <<'PY' >> "${GITHUB_STEP_SUMMARY}" || true
           import json, os
@@ -375,5 +389,6 @@ jobs:
               ):
                   print(f"| {label} | {'n/a' if value is None else value} |")
           print(f"\n- Validate ingested data: `{env.get('VALIDATE_OUTCOME') or 'not run'}`; "
-                f"discovery smoke: `{env.get('SMOKE_OUTCOME') or 'not run'}`")
+                f"discovery smoke: `{env.get('SMOKE_OUTCOME') or 'not run'}`; "
+                f"prepared Discovery: `{env.get('PREPARE_OUTCOME') or 'not run'}`")
           PY

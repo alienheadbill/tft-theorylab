@@ -33,6 +33,7 @@ from .champion_investigation import (
 from .demo import generate_demo_matches
 from .experiments import ExperimentNotFound, get_experiment, list_experiments, seed_demo_experiments
 from .game_art import enrich_candidate, experiment_art, field_note_art
+from .prepared_discovery import PreparedLookup, lookup_prepared, read_prepared_candidate, read_prepared_candidates
 from .storage import Database
 from .scout import comp_fingerprint
 from .sources import scout_checklist
@@ -143,7 +144,12 @@ def _resolve_database() -> tuple[Database, bool]:
 
 # ---------------------------------------------------------------- Discovery population cache
 #
-# Every Discovery request needs the window-wide carry population (the
+# Discovery is normally served from prepared runs (`tftlab.prepared_discovery`,
+# published by `tftlab prepare-discovery` after each ingest): a request only
+# checks the run is current for its window and reads/filters rows. The cache
+# below backs the LIVE fallback used when no current prepared run exists.
+#
+# Every live Discovery request needs the window-wide carry population (the
 # Opportunity Score baseline and the superset candidates are filtered from).
 # It is one expensive aggregate (seconds on a patch-sized window) and is
 # byte-for-byte the same for every cost / min-games filter and every working
@@ -592,15 +598,29 @@ def create_app() -> FastAPI:
         db, demo = _resolve_database()
         with db:
             resolved_window = balance_window or default_balance_window(db)
-            population = cached_discovery_population(db, resolved_window) if resolved_window else []
-            candidates = discover_candidates(
-                db,
-                balance_window=resolved_window,
-                costs=selected,
-                min_samples=min_samples,
-                top_n=top_n,
-                population=population,
-            )[:limit]
+            prepared = lookup_prepared(db, resolved_window) if resolved_window else PreparedLookup("missing")
+            if prepared.status == "current" and prepared.run is not None:
+                # Steady state: no aggregation, just the run's matching rows.
+                window_carries = prepared.run.window_carries
+                candidates = read_prepared_candidates(
+                    db, prepared.run, costs=selected, min_samples=min_samples, top_n=top_n, limit=limit
+                )
+            else:
+                # No current prepared run (never prepared, or new matches /
+                # new analytics code since): compute live, never serve stale.
+                population = cached_discovery_population(db, resolved_window) if resolved_window else []
+                window_carries = len(population)
+                candidates = [
+                    asdict(c)
+                    for c in discover_candidates(
+                        db,
+                        balance_window=resolved_window,
+                        costs=selected,
+                        min_samples=min_samples,
+                        top_n=top_n,
+                        population=population,
+                    )[:limit]
+                ]
         return {
             "demo": demo,
             "backend": db.dialect,
@@ -610,8 +630,11 @@ def create_app() -> FastAPI:
             # Carries of any cost in the window before the cost/min filters:
             # 0 means the window genuinely has no carry data; otherwise an
             # empty `candidates` list means the filters matched nothing.
-            "window_carries": len(population),
-            "candidates": [enrich_candidate(asdict(c)) for c in candidates],
+            "window_carries": window_carries,
+            # Where these numbers came from: a current prepared run, or live
+            # computation because the latest run is "stale" or "missing".
+            "prepared": prepared.describe(),
+            "candidates": [enrich_candidate(c) for c in candidates],
         }
 
     @app.get("/api/discovery/{character_id}")
@@ -624,18 +647,25 @@ def create_app() -> FastAPI:
         with db:
             resolved_window = balance_window or default_balance_window(db)
             candidate = None
+            prepared = PreparedLookup("missing")
             if resolved_window is not None:
-                candidate = discovery_candidate_for(
-                    db, character_id, balance_window=resolved_window, top_n=top_n,
-                    population=cached_discovery_population(db, resolved_window),
-                )
+                prepared = lookup_prepared(db, resolved_window)
+                if prepared.status == "current" and prepared.run is not None:
+                    candidate = read_prepared_candidate(db, prepared.run, character_id, top_n=top_n)
+                else:
+                    live = discovery_candidate_for(
+                        db, character_id, balance_window=resolved_window, top_n=top_n,
+                        population=cached_discovery_population(db, resolved_window),
+                    )
+                    candidate = asdict(live) if live is not None else None
         if candidate is None:
             raise HTTPException(status_code=404, detail="Carry not found")
         return {
             "demo": demo,
             "backend": db.dialect,
             "balance_window": resolved_window,
-            "candidate": enrich_candidate(asdict(candidate)),
+            "prepared": prepared.describe(),
+            "candidate": enrich_candidate(candidate),
         }
 
     return app

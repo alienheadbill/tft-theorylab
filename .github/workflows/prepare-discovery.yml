@@ -1,0 +1,75 @@
+name: Prepare Discovery analytics
+
+# Recomputes and publishes the prepared Discovery analytics the website reads
+# (`tftlab prepare-discovery`, see tftlab.prepared_discovery). Live ingest
+# already runs this after every ingest; dispatch this workflow by hand only
+# when no ingest is due soon, e.g. right after deploying a change to the
+# analytics code (which makes existing prepared runs stale, so the website
+# computes Discovery live until a new run is published).
+#
+# Reads the production database's match tables and writes only the
+# discovery_prepared_* tables. Never contacts Riot. Windows whose latest run
+# is already current are skipped unless `force` is set.
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild every window even if its prepared run is already current"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-discovery:
+    # Same group as live ingest: never runs while an ingest is writing.
+    concurrency:
+      group: live-ingest-production
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FORCE: ${{ inputs.force }}
+    steps:
+      # Before checkout or any database access. Static messages only; never
+      # echoes the Neon production DATABASE_URL.
+      - name: Validate production configuration
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::This workflow must be run with 'main' explicitly selected as the branch (got ${GITHUB_REF})." >&2
+            exit 1
+          fi
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "::error::NEON_DATABASE_URL repository secret is not set." >&2
+            exit 1
+          fi
+          case "${DATABASE_URL}" in
+            postgres://*|postgresql://*) ;;
+            *)
+              echo "::error::DATABASE_URL must start with postgres:// or postgresql://." >&2
+              exit 1
+              ;;
+          esac
+          echo "Production configuration looks valid."
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package with Postgres support
+        run: pip install -e ".[postgres]"
+
+      - name: Prepare Discovery analytics
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          if [ "${FORCE}" = "true" ]; then
+            tftlab prepare-discovery --force
+          else
+            tftlab prepare-discovery
+          fi
