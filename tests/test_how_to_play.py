@@ -16,6 +16,7 @@ TFTLAB_TEST_DATABASE_URL) Postgres.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -119,26 +120,27 @@ def row(item_ids: list[str], games: int, *, without: int = 20, top4_with: float 
     }
 
 
-def test_support_rule_is_the_sample_floor_and_keeps_the_existing_ranking() -> None:
-    assert htp.is_supported(row([GUINSOO], 10))
-    assert not htp.is_supported(row([GUINSOO], 9))  # too few boards
-    # A near-universal item with a small negative gap is still shown (noise must
-    # not hide a core item); ranking, not a filter, puts it after better rows.
+def test_board_floor_is_a_sample_rule_and_a_frequent_item_with_a_negative_result_is_still_common() -> None:
+    assert htp.meets_board_floor(row([GUINSOO], 10))
+    assert not htp.meets_board_floor(row([GUINSOO], 9))  # too few boards
+    # On 152 boards with a negative with-vs-without result: still a common item
+    # (frequency), and nothing labels it strong or recommended.
     core = row([DCAP], 152, without=28, top4_with=0.51, top4_without=0.54, adjusted=-0.02)
-    assert htp.is_supported(core)
-    ranked = [row([IE], 83, adjusted=0.03), core]
-    assert [r["items"][0]["id"] for r in htp.supported_items(ranked)] == [IE, DCAP]
+    better_ranked = row([IE], 83, adjusted=0.09)
+    picked = htp.common_items([better_ranked, core])
+    assert [r["items"][0]["id"] for r in picked] == [DCAP, IE]  # most boards first, not association order
+    assert picked[0]["adjusted_top4_difference"] < 0
 
 
 def test_component_direction_comes_only_from_verified_recipes_and_says_so() -> None:
     rows = [
         row([GUINSOO], 40),  # Bow + Rod
-        row(["DA_18_EmblemCoven"], 25),  # supported emblem without a recipe: listed, not counted
+        row(["DA_18_EmblemCoven"], 25),  # common emblem without a recipe: listed, not counted
         row([DCAP], 30),  # Rod + Rod: Rod counted once for this recipe, twice in copies
         row([IE], 12),  # Sword + Gloves
     ]
-    selected = htp.supported_items(rows)
-    assert [r["items"][0]["id"] for r in selected] == [GUINSOO, "DA_18_EmblemCoven", DCAP, IE]
+    selected = htp.common_items(rows)
+    assert [r["items"][0]["id"] for r in selected] == [GUINSOO, DCAP, "DA_18_EmblemCoven", IE]  # by boards
     direction = htp.component_direction(selected)
     assert direction["derived_from_recipes"] is True and direction["observed_components"] is False
     assert "not what players actually held" in direction["basis"]
@@ -161,19 +163,22 @@ def test_special_items_and_thiefs_gloves_never_reach_the_direction() -> None:
         row(["DA_NotAnItem"], 50),
         row([JG], 20),
     ]
-    selected = htp.supported_items(rows)
+    selected = htp.common_items(rows)
     assert [r["items"][0]["id"] for r in selected] == [JG]
     assert {c["component"]["id"] for c in htp.component_direction(selected)["components"]} == {GLOVE, ROD}
 
 
-def test_direction_reads_only_the_first_six_supported_rows_in_ranking_order() -> None:
+def test_concise_items_are_the_six_most_common_by_boards_then_name() -> None:
     crafts = [GUINSOO, IE, DCAP, JG, BT, CLAW, "DA_Deathblade"]
-    selected = htp.supported_items([row([i], 10 + n) for n, i in enumerate(crafts)])
-    assert [r["items"][0]["id"] for r in selected] == crafts[:6]  # existing order kept, 7th dropped
+    rows = [row([i], 10 + n, adjusted=0.1 - n / 100) for n, i in enumerate(crafts)]  # ranking order = list order
+    picked = htp.common_items(rows)
+    assert [r["items"][0]["id"] for r in picked] == list(reversed(crafts))[:6]  # most boards first; 10-board GUINSOO dropped
+    tied = htp.common_items([row([JG], 20), row([BT], 20), row([IE], 20)])
+    assert [r["items"][0]["name"] for r in tied] == ["Bloodthirster", "Infinity Edge", "Jeweled Gauntlet"]
 
 
-def test_no_supported_recipe_is_an_insufficient_state_not_a_guess() -> None:
-    direction = htp.component_direction(htp.supported_items([row([GUINSOO], 4)]))
+def test_no_common_item_is_an_insufficient_recipe_state_not_a_guess() -> None:
+    direction = htp.component_direction(htp.common_items([row([GUINSOO], 4)]))
     assert direction["status"] == "insufficient" and direction["components"] == []
 
 
@@ -297,7 +302,50 @@ def test_trait_directions_skip_the_singleton_baseline_and_read_num_units(db: Dat
     assert CAUSTIC not in picks  # Kog'Maw's guaranteed 1-unit Caustic
     assert picks[ADAPTOR]["num_units"] == 3  # Riot num_units, not tier_current (1)
     assert picks[INVOKER]["num_units"] == 2
-    assert all(t["num_units"] != 1 or t["trait_id"] == BOUNTY for t in h["trait_directions"])
+
+
+def test_a_teammates_singleton_trait_at_one_unit_is_detail_evidence_not_a_trait_direction(db: Database) -> None:
+    """Draven's Bounty Seeker at 1 unit on 12 Kog'Maw boards only says Draven
+    was there, which the teammates list already shows."""
+    body = champion_investigation(db, KOG, WINDOW)
+    h = body["how_to_play"]
+    assert [t["trait_id"] for t in h["trait_directions"]] == [ADAPTOR, INVOKER]
+    assert DRAVEN in {m["character_id"] for m in h["teammates"]}
+    bounty = next(t for t in body["traits"] if t["trait_id"] == BOUNTY)  # TRAITS tab keeps it
+    assert [c["num_units"] for c in bounty["counts"]] == [1] and bounty["games"] == 12
+    assert "Bounty Seeker" not in h["summary"] and "Adaptor at 3 units" in h["summary"]
+
+
+def test_a_teammates_singleton_trait_selected_at_two_units_stays_eligible(db: Database) -> None:
+    for i in range(14):  # Bounty Seeker reported at 2 units (e.g. an emblem) on 14 boards: now its most common count
+        db.ingest_match(_board(f"KOG_BS2_{i}", KOGMAW, [GUINSOO, DCAP], 3,
+                               [(ADAPTOR, 3, 1), (BOUNTY, 2, 1)], (DRAVEN,)))
+    db.commit()
+    picks = {t["trait_id"]: t for t in champion_investigation(db, KOG, WINDOW)["how_to_play"]["trait_directions"]}
+    assert picks[BOUNTY]["num_units"] == 2 and picks[BOUNTY]["count_games"] == 14
+
+
+def test_provider_count_comes_from_the_roster_not_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The 1-unit filter applies to a trait with exactly one natural shop
+    provider in the committed roster. Give the same trait a second provider
+    and the same 1-unit observation becomes an ordinary direction."""
+    def count(n, games):
+        return {"num_units": n, "games": games, "share_of_carry_games": games / 100}
+
+    def trait(trait_id, counts):
+        return {"trait_id": trait_id, "name": trait_id, "art_url": None, "games": sum(c["games"] for c in counts),
+                "share_of_carry_games": 0.5, "counts": counts}
+
+    rows = [trait(BOUNTY, [count(1, 60), count(2, 9)]), trait(ADAPTOR, [count(1, 40), count(3, 20)])]
+    assert htp.natural_provider_count(BOUNTY) == 1 and htp.natural_provider_count(ADAPTOR) > 1
+    # One-provider trait selected at 1 unit: skipped. Multi-provider trait at 1 unit: unchanged.
+    assert [(t["trait_id"], t["num_units"]) for t in htp.trait_directions(rows)] == [(ADAPTOR, 1)]
+
+    karma = dict(ROSTER.champions[KARMA], traits=[*ROSTER.champions[KARMA]["traits"], BOUNTY])
+    two_providers = dataclasses.replace(ROSTER, champions={**ROSTER.champions, KARMA: karma})
+    monkeypatch.setattr(htp, "load_roster", lambda: two_providers)
+    assert htp.natural_provider_count(BOUNTY) == 2
+    assert [(t["trait_id"], t["num_units"]) for t in htp.trait_directions(rows)] == [(BOUNTY, 1), (ADAPTOR, 1)]
 
 
 def test_a_singleton_trait_above_its_baseline_can_be_a_direction(db: Database) -> None:
@@ -335,6 +383,45 @@ def test_page_has_accessible_tabs_and_no_intrinsic_block() -> None:
         assert f"'{tab}'" in js, tab
     assert "Comps" not in js and "intrinsic" not in js.lower()
     assert "derived from recipes" in js.lower() or "recipe direction" in js.lower()
+
+
+def test_concise_labels_describe_frequency_never_strength() -> None:
+    js = (Path(__file__).parents[1] / "src" / "tftlab" / "web" / "static" / "champion.js").read_text()
+    play = js[js.index("function howToPlaySection("):js.index("// ------------------------------------------------------------------ tabs")]
+    for word in ("support", "strong", "best", "recommend", "optimal"):
+        assert word not in play.lower().replace("support_min_boards", ""), word
+    for label in ("Common items", "Common observed pairs", "Common full builds", "most used first"):
+        assert label in play, label
+    assert "Supported items" not in js and "Strong observed pairs" not in js
+    summary = htp.evidence_summary("X", 50, [row([GUINSOO], 40)], [], [])
+    assert "most commonly used items" in summary and not any(w in summary.lower() for w in ("best", "strong", "support"))
+
+
+def test_concise_pairs_and_builds_are_ordered_by_boards_then_name() -> None:
+    carry = {"games": 100, "three_star": {"hit_games": 0, "miss_games": 100, "hit_rate": 0.0,
+                                          "hit_top4_rate": None, "miss_top4_rate": 0.5}}
+    pairs = [row([GUINSOO, IE], 12, adjusted=0.09), row([GUINSOO, DCAP], 60, adjusted=-0.03),
+             row([IE, DCAP], 30), row([GUINSOO, JG], 30, adjusted=0.0), row([JG, DCAP], 9)]
+    builds = [row([GUINSOO, IE, DCAP], 15, adjusted=0.1), row([GUINSOO, JG, DCAP], 25, adjusted=-0.05)]
+    h = htp.how_to_play("X", carry, item_rows=[], pair_rows=pairs, build_rows=builds, partner_rows=[], trait_rows=[])
+    assert [(r["games"], r["items"][1]["name"]) for r in h["pairs"]] == [
+        (60, "Rabadon's Deathcap"), (30, "Jeweled Gauntlet"), (30, "Rabadon's Deathcap")]  # 9-board pair below floor
+    assert [r["games"] for r in h["builds"]] == [25, 15]
+
+
+def test_recipe_direction_reads_exactly_the_common_items_shown(db: Database) -> None:
+    h = champion_investigation(db, KOG, WINDOW)["how_to_play"]
+    assert h["component_direction"]["items_considered"] == [r["items"][0]["id"] for r in h["items"]]
+
+
+def test_items_tab_keeps_the_analytics_order_and_with_vs_without_values(db: Database) -> None:
+    from tftlab.analytics import item_package_stats
+
+    body = champion_investigation(db, KOG, WINDOW)
+    ranked = [a.key for a in item_package_stats(db, KOGMAW, WINDOW)["items"]][:len(body["items"]["individual"])]
+    assert [r["items"][0]["id"] for r in body["items"]["individual"]] == ranked
+    for r in body["items"]["individual"]:
+        assert {"top4_with", "top4_without", "adjusted_top4_difference", "games_without"} <= set(r)
 
 
 def test_normal_items_fall_back_to_an_exact_display_name_icon_but_special_items_never_borrow() -> None:

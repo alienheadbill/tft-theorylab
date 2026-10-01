@@ -8,18 +8,19 @@ already built from the existing analytics (`item_package_stats`,
 picks a few of them for a quick read. The rules are fixed and documented
 below; the deeper tabs keep every row.
 
-Support rule. A row is "supported" when it has at least `SUPPORT_MIN_BOARDS`
-carry boards (Discovery's existing minimum sample). Nothing else is
-filtered: a small with-vs-without gap on a near-universal item is noise,
-and hiding such an item (e.g. one on 84% of boards) would mislead. Supported
-rows keep the existing analytics ranking (the shrinkage-adjusted
-with-vs-without association score), so rows observed doing worse sort
-last; the ITEMS tab shows every comparison.
+Common rows. The concise view answers "what do players commonly build?":
+an item, pair or full build qualifies when it is on at least `MIN_BOARDS`
+carry boards (Discovery's existing minimum sample) and is ordered most
+boards first (ties by display name, then id). That is a sample/frequency
+rule only -- it says nothing about how those boards placed, so the page
+labels these "common", never "supported", "strong" or "best". A common row
+can have a negative with-vs-without result; the ITEMS tab keeps the
+existing analytics order and every with-vs-without comparison.
 
 Component direction is DERIVED, not observed. Match-V1 lists a unit's final
 items only, never which components a player held or when, so this reads the
 committed CommunityDragon recipes (`tftlab.items.item_recipe`) of the
-supported completed items and counts the components those recipes share.
+common completed items shown and counts the components those recipes share.
 """
 
 from __future__ import annotations
@@ -31,11 +32,12 @@ from .game_art import NORMAL_ITEM_KINDS, item_ref
 from .itemization import thiefs_gloves_item_ids
 from .items import item_recipe
 from .research_report import WEB_DISCOVERY_MIN_SAMPLES
+from .roster import load_roster
 
-#: A row needs at least this many carry boards to be "supported" (Discovery's
-#: own minimum sample, also the page's "Limited sample" cutoff).
-SUPPORT_MIN_BOARDS = WEB_DISCOVERY_MIN_SAMPLES
-#: Supported individual items read for component direction (and shown).
+#: A concise row needs at least this many carry boards (Discovery's own
+#: minimum sample, also the page's "Limited sample" cutoff). Sample size only.
+MIN_BOARDS = WEB_DISCOVERY_MIN_SAMPLES
+#: Common individual items shown, which are also the component direction's input.
 DIRECTION_ITEMS = 6
 #: Components shown in the concise recipe direction.
 DIRECTION_COMPONENTS = 3
@@ -45,14 +47,25 @@ CONCISE_TEAMMATES = 4
 CONCISE_TRAITS = 3
 
 COMPONENT_DIRECTION_BASIS = (
-    "Derived from the item recipes of this champion's supported completed items: the components those "
-    "recipes share. Match-V1 records final items only, so this is not what players actually held or opened with."
+    "Derived from the recipes of this champion's most common completed items (each on 10+ carry boards): the "
+    "components those recipes share. Match-V1 records final items only, so this is not what players actually "
+    "held or opened with."
 )
 
 
-def is_supported(row: dict[str, Any]) -> bool:
-    """Enough carry boards to show (see the module docstring)."""
-    return row["games"] >= SUPPORT_MIN_BOARDS
+def meets_board_floor(row: dict[str, Any]) -> bool:
+    """On at least `MIN_BOARDS` carry boards: a sample-size rule, nothing more."""
+    return row["games"] >= MIN_BOARDS
+
+
+def common_rows(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Item/pair/build rows most carry boards first; ties by display name,
+    then ids, so the order never depends on the analytics ranking."""
+    return sorted(rows, key=lambda r: (
+        -r["games"],
+        " + ".join(i["name"] for i in r["items"]).casefold(),
+        "+".join(i["id"] for i in r["items"]),
+    ))
 
 
 def _normal(row: dict[str, Any]) -> bool:
@@ -61,20 +74,21 @@ def _normal(row: dict[str, Any]) -> bool:
     return bool(row["items"]) and all(i["kind"] in NORMAL_ITEM_KINDS for i in row["items"])
 
 
-def supported_items(item_rows: Sequence[dict[str, Any]], limit: int = DIRECTION_ITEMS) -> list[dict[str, Any]]:
-    """The first `limit` supported normal individual-item rows, in the
-    existing ranking order. Thief's Gloves is excluded outright: its holder
-    is never a carry, and its random rolls are never equipped items."""
+def common_items(item_rows: Sequence[dict[str, Any]], limit: int = DIRECTION_ITEMS) -> list[dict[str, Any]]:
+    """The `limit` most common normal individual items on `MIN_BOARDS`+
+    carry boards (`common_rows` order). Thief's Gloves is excluded outright:
+    its holder is never a carry, and its random rolls are never equipped."""
     gloves = thiefs_gloves_item_ids()
     rows = [
         r for r in item_rows
-        if len(r["items"]) == 1 and _normal(r) and r["items"][0]["id"] not in gloves and is_supported(r)
+        if len(r["items"]) == 1 and _normal(r) and r["items"][0]["id"] not in gloves and meets_board_floor(r)
     ]
-    return rows[:limit]
+    return common_rows(rows)[:limit]
 
 
 def component_direction(selected: Sequence[dict[str, Any]], limit: int = DIRECTION_COMPONENTS) -> dict[str, Any]:
-    """Recipe direction over `selected` (the `supported_items` rows):
+    """Recipe direction over `selected` (the `common_items` rows, the same
+    items the concise view shows):
 
     1. read each selected item's verified two-component recipe; items
        without one are listed in `items_without_recipe` and ignored;
@@ -125,7 +139,7 @@ def component_direction(selected: Sequence[dict[str, Any]], limit: int = DIRECTI
 
 def star_signal(carry: dict[str, Any]) -> dict[str, Any]:
     """The existing 3★ hit/miss split, labelled for a quick read. `status`:
-    `compared` (both sides have `SUPPORT_MIN_BOARDS`+ boards), `limited`
+    `compared` (both sides have `MIN_BOARDS`+ boards), `limited`
     (both sides exist, one is smaller), `no_hits` or `all_hits`. Never a
     causal or "reroll" claim."""
     ts = carry["three_star"]
@@ -134,13 +148,13 @@ def star_signal(carry: dict[str, Any]) -> dict[str, Any]:
         status = "no_hits"
     elif not miss:
         status = "all_hits"
-    elif min(hit, miss) < SUPPORT_MIN_BOARDS:
+    elif min(hit, miss) < MIN_BOARDS:
         status = "limited"
     else:
         status = "compared"
     return {
         "status": status,
-        "min_boards": SUPPORT_MIN_BOARDS,
+        "min_boards": MIN_BOARDS,
         "hit_games": hit,
         "miss_games": miss,
         "hit_rate": ts["hit_rate"],
@@ -156,18 +170,31 @@ def teammates(partner_rows: Sequence[dict[str, Any]], limit: int = CONCISE_TEAMM
     return sorted(partner_rows, key=lambda r: (-r["games"], r["name"].casefold(), r["character_id"]))[:limit]
 
 
+def natural_provider_count(trait_id: str) -> int:
+    """How many shop champions (cost 1-5) naturally have this trait, from
+    the committed roster's static trait membership."""
+    return len(load_roster().trait_champions(trait_id))
+
+
 def trait_directions(trait_rows: Sequence[dict[str, Any]], limit: int = CONCISE_TRAITS) -> list[dict[str, Any]]:
-    """A few buildable trait directions from the corrected trait evidence
-    (the carry's own singleton-provider trait never appears at its
-    guaranteed one unit; at 2+ units it stays eligible). Traits with at
-    least `SUPPORT_MIN_BOARDS` boards, most boards first, each with its most
-    common observed unit count (Riot `num_units`; ties go to the lower
-    count). Not a canonical breakpoint."""
+    """A few buildable trait directions from the corrected trait evidence.
+    Traits with at least `MIN_BOARDS` boards, most boards first, each with
+    its most common observed unit count (Riot `num_units`; ties go to the
+    lower count). Not a canonical breakpoint.
+
+    Not actionable, so skipped here: a trait with exactly one natural
+    shop-champion provider whose selected count is 1 unit. That only says
+    its one champion was on the board -- the carry itself, or a teammate
+    the teammates list already shows (e.g. a 1-unit trait that only that
+    teammate has). The same trait at a selected 2+ units stays eligible
+    (it may have been extended). The TRAITS tab keeps every row."""
     out = []
     for t in trait_rows:
-        if t["games"] < SUPPORT_MIN_BOARDS or not t["counts"]:
+        if t["games"] < MIN_BOARDS or not t["counts"]:
             continue
         top = min(t["counts"], key=lambda c: (-c["games"], c["num_units"] or 0))
+        if top["num_units"] == 1 and natural_provider_count(t["trait_id"]) == 1:
+            continue
         out.append({
             "trait_id": t["trait_id"],
             "name": t["name"],
@@ -182,11 +209,6 @@ def trait_directions(trait_rows: Sequence[dict[str, Any]], limit: int = CONCISE_
     return out[:limit]
 
 
-def by_frequency(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Rows most-boards first (stable, so ties keep the existing ranking)."""
-    return sorted(rows, key=lambda r: -r["games"])
-
-
 def _names(rows: Sequence[dict[str, Any]], key: str = "name") -> str:
     names = [r[key] for r in rows]
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
@@ -196,17 +218,18 @@ def evidence_summary(
     name: str, boards: int, items: Sequence[dict[str, Any]], mates: Sequence[dict[str, Any]],
     traits: Sequence[dict[str, Any]],
 ) -> str | None:
-    """One cautious sentence restating the concise picks. Observed evidence
-    only: no mechanic, causal or strategy claim."""
+    """One cautious sentence restating the concise picks by frequency.
+    Observed evidence only: no "best", mechanic, causal or strategy claim.
+    The trait clause appears only when a trait direction survived the
+    concise filter."""
     parts = []
     if items:
-        common = by_frequency(items)[:2]
-        parts.append(f"the most used supported items are {_names([r['items'][0] for r in common])}")
+        parts.append(f"the most commonly used items are {_names([r['items'][0] for r in items[:2]])}")
     if mates:
         parts.append(f"frequent teammates include {_names(mates[:2])}")
     if traits:
         t = traits[0]
-        parts.append(f"the most common trait direction is {t['name']} at {t['num_units']} units")
+        parts.append(f"the most common buildable trait direction is {t['name']} at {t['num_units']} units")
     if not parts:
         return None
     return (
@@ -225,20 +248,20 @@ def how_to_play(
     partner_rows: Sequence[dict[str, Any]],
     trait_rows: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
-    """The concise view: every list is already-ranked evidence, filtered by
-    the support rule and shortened. Empty lists are honest empty states.
-    Which items are supported (and feed the component direction) follows
-    the existing ranking; they are listed most-boards first for reading."""
-    selected = supported_items(item_rows)
-    items = by_frequency(selected)
-    pairs = [r for r in pair_rows if _normal(r) and is_supported(r)][:CONCISE_PAIRS]
-    builds = [r for r in build_rows if _normal(r) and is_supported(r)][:CONCISE_BUILDS]
+    """The concise view: existing evidence rows on `MIN_BOARDS`+ carry
+    boards, most boards first, shortened (see "Common rows" above). Empty
+    lists are honest empty states. The component direction reads exactly
+    the common items shown."""
+    items = common_items(item_rows)
+    pairs = common_rows([r for r in pair_rows if _normal(r) and meets_board_floor(r)])[:CONCISE_PAIRS]
+    builds = common_rows([r for r in build_rows if _normal(r) and meets_board_floor(r)])[:CONCISE_BUILDS]
     mates = teammates(partner_rows)
     traits = trait_directions(trait_rows)
     return {
         "evidence": "observed",
-        "support_min_boards": SUPPORT_MIN_BOARDS,
-        "component_direction": component_direction(selected),
+        # Kept under its original key for API compatibility: the board floor.
+        "support_min_boards": MIN_BOARDS,
+        "component_direction": component_direction(items),
         "items": items,
         "pairs": pairs,
         "builds": builds,

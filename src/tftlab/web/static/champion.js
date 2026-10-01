@@ -315,12 +315,12 @@ function evidenceList(rows, render, emptyText) {
   return rows.length ? `<ol class="ev-list">${rows.map(render).join('')}</ol>` : `<p class="none-note">${esc(emptyText)}</p>`;
 }
 
-// Recipe direction: DERIVED from the CommunityDragon recipes of the supported
+// Recipe direction: DERIVED from the CommunityDragon recipes of the common
 // completed items, never observed components (Match-V1 has no component
-// history). Each component lists the supported items whose recipe uses it.
+// history). Each component lists the items whose recipe uses it.
 function recipeDirectionDetail(direction, minBoards) {
   if (direction.status !== 'available') {
-    return `<p class="none-note">Not enough completed-item evidence yet: no supported item (on ${plural(minBoards, 'carry board')} or more) with a verified recipe.</p>`;
+    return `<p class="none-note">Not enough completed-item evidence yet: no item on ${plural(minBoards, 'carry board')} or more with a verified recipe.</p>`;
   }
   const rows = direction.components
     .map(
@@ -329,14 +329,14 @@ function recipeDirectionDetail(direction, minBoards) {
         ${refIcon(c.component.name, c.component.art_url, { kind: 'item' })}
         <span class="row-name">${esc(c.component.name)}</span>
         <span class="row-meta">
-          <span>in ${c.recipes} of ${direction.recipes_considered} supported recipes${c.copies > c.recipes ? ` · ${c.copies} copies` : ''}</span>
+          <span>in ${c.recipes} of ${direction.recipes_considered} recipes read${c.copies > c.recipes ? ` · ${c.copies} copies` : ''}</span>
           <span class="recipe-uses">for ${c.items.map(i => `${refIcon(i.name, i.art_url, { kind: 'item' })} ${esc(i.name)}`).join(' · ')}</span>
         </span>
       </li>`,
     )
     .join('');
   const skipped = direction.items_without_recipe.length
-    ? `<p class="inv-help">${plural(direction.items_without_recipe.length, 'supported item')} without a verified two-component recipe ${direction.items_without_recipe.length === 1 ? 'is' : 'are'} not counted.</p>`
+    ? `<p class="inv-help">${plural(direction.items_without_recipe.length, 'item')} without a verified two-component recipe ${direction.items_without_recipe.length === 1 ? 'is' : 'are'} not counted.</p>`
     : '';
   return `<ol class="ev-list">${rows}</ol>${skipped}`;
 }
@@ -356,7 +356,7 @@ function itemSection(inv, name) {
   return `
     <section class="inv-section" aria-labelledby="sec-recipes">
       <h3 id="sec-recipes">Recipe direction ${stamp('interpretation', 'Derived from recipes')}</h3>
-      <p class="inv-help">${esc(h.component_direction.basis)} Supported items: on ${plural(h.support_min_boards, 'carry board')} or more, in the order of the with-vs-without ranking below.</p>
+      <p class="inv-help">${esc(h.component_direction.basis)} Items read: the six most common normal items on ${plural(h.support_min_boards, 'carry board')} or more, the same ones How to play shows.</p>
       ${recipeDirectionDetail(h.component_direction, h.support_min_boards)}
     </section>
     <section class="inv-section" aria-labelledby="sec-items">
@@ -428,8 +428,8 @@ function trustSection(inv) {
         <div><dt>Carry board</dt><dd>One player's final board where this champion finished with 2+ completed items, at least one of them a carry item. Boards that missed the 3★ still count, so bad outcomes aren't hidden.</dd></div>
         <div><dt>Boards, not matches</dt><dd>Every match has eight player boards, so a champion can be carried on more boards than there are matches in the window.</dd></div>
         <div><dt>With vs. without</dt><dd>Item, partner and trait rows compare this champion's carry boards that had the thing against its carry boards that didn't. Rows marked ${stamp('low', 'Limited sample')} have fewer than ${SMALL_SPLIT} boards on one side of that comparison.</dd></div>
-        <div><dt>How to play</dt><dd>A short selection from the same observed rows: items, pairs and builds on at least 10 carry boards, teammates by how often they shared the board, trait directions by the unit count Riot reported most often. Nothing is predicted.</dd></div>
-        <div><dt>Recipe direction</dt><dd>Derived, not observed: the components in the CommunityDragon recipes of the supported completed items. Riot match data lists final items only, so TheoryLabs can't see which components a player held or opened with.</dd></div>
+        <div><dt>How to play</dt><dd>A short selection from the same observed rows, chosen by sample size and frequency, not by results: items, pairs and builds on at least 10 carry boards (most used first), teammates by how often they shared the board, trait directions by the unit count Riot reported most often. A one-champion trait at its single unit (e.g. a teammate's own trait) is not a trait direction; it stays in the Traits tab. Nothing is predicted.</dd></div>
+        <div><dt>Recipe direction</dt><dd>Derived, not observed: the components in the CommunityDragon recipes of the completed items How to play shows. Riot match data lists final items only, so TheoryLabs can't see which components a player held or opened with.</dd></div>
         <div><dt>Interpretation</dt><dd>The interpretation above comes from fixed rules, not a model. The 3★ comparison needs at least 30 boards on each side before TheoryLabs interprets it; then it reports the observed Top 4 difference in percentage points. That is an association, not proof that reaching 3★ caused the result.</dd></div>
         <div><dt>Not shown yet</dt><dd>Full comp families and recurring cores (that research is still experimental and unvalidated), positioning, augments, and leveling or rolling plans.</dd></div>
       </dl>
@@ -478,7 +478,7 @@ function componentCard(direction, minBoards) {
   return `
     <section class="htp-card" aria-labelledby="htp-components">
       <h4 id="htp-components">Recipe direction</h4>
-      <p class="htp-sub">Useful components for the supported item lines below</p>
+      <p class="htp-sub">Components in the recipes of the items below</p>
       ${body}
       <p class="htp-foot">${stamp('interpretation', 'Derived from recipes')} Not what players opened with: match data lists final items only.</p>
     </section>`;
@@ -489,7 +489,7 @@ function howToPlaySection(inv) {
   const c = inv.champion;
   const min = h.support_min_boards;
   const items = h.items.length
-    ? `<ul class="htp-tiles" aria-label="Supported items">${h.items.map(r => `<li>${tile(r.items[0].name, r.items[0].art_url, { sub: share(r) })}</li>`).join('')}</ul>`
+    ? `<ul class="htp-tiles" aria-label="Common items">${h.items.map(r => `<li>${tile(r.items[0].name, r.items[0].art_url, { sub: share(r) })}</li>`).join('')}</ul>`
     : htpEmpty('Not enough completed-item evidence yet.');
   const lines = (rows, empty) => (rows.length ? `<ul class="htp-lines">${rows.map(itemLine).join('')}</ul>` : htpEmpty(empty));
   const mates = h.teammates.length
@@ -510,10 +510,11 @@ function howToPlaySection(inv) {
         ${starCard(h.star_signal)}
       </div>
       <h3 class="htp-heading" id="htp-items">Item direction</h3>
+      <p class="htp-sub">Each on ${min}+ carry boards, most used first. How they placed is in the Items tab.</p>
       <div class="htp-grid htp-grid-3">
-        <section class="htp-card" aria-labelledby="htp-supported"><h4 id="htp-supported">Supported items</h4>${items}</section>
-        <section class="htp-card" aria-labelledby="htp-pairs"><h4 id="htp-pairs">Strong observed pairs</h4>${lines(h.pairs, `No item pair on ${min}+ carry boards yet.`)}</section>
-        <section class="htp-card" aria-labelledby="htp-builds"><h4 id="htp-builds">Observed full builds</h4>${lines(h.builds, `No full build on ${min}+ carry boards yet.`)}</section>
+        <section class="htp-card" aria-labelledby="htp-common-items"><h4 id="htp-common-items">Common items</h4>${items}</section>
+        <section class="htp-card" aria-labelledby="htp-pairs"><h4 id="htp-pairs">Common observed pairs</h4>${lines(h.pairs, `No item pair on ${min}+ carry boards yet.`)}</section>
+        <section class="htp-card" aria-labelledby="htp-builds"><h4 id="htp-builds">Common full builds</h4>${lines(h.builds, `No full build on ${min}+ carry boards yet.`)}</section>
       </div>
       <h3 class="htp-heading" id="htp-around">Build around</h3>
       <div class="htp-grid">
