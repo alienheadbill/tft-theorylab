@@ -830,5 +830,9 @@
    "DA_18_RiftbeastTraitAugment"
   ]
  },
- "unresolved_emblems": []
+ "unresolved_emblems": [
+  "DA_PhantomEmblem18",
+  "DA_PhantomEmblemUpgrade18"
+ ],
+ "_unresolved_emblems_fetched": "2026-10-01 from the live CommunityDragon feed (cdragon-live workflow_dispatch on PR #51, test_every_live_set_emblem_links_to_a_trait): 23 Set 18 emblem-like items, 21 linked to a trait, the two 'Phantom Emblem' items link to none, so tftlab.roster classifies nothing as intrinsic until they are resolved"
 }

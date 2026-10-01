@@ -83,16 +83,23 @@ def test_every_live_set_emblem_links_to_a_trait(tmp_path, capsys) -> None:
     """Every emblem the live feed lists for the current set must link to one
     of its traits; otherwise `Roster.intrinsic_traits` fails closed. Prints
     each emblem with its trait(s) so the log shows the full inventory."""
-    from tftlab.cdragon import _item_trait_ids, is_set_emblem, unresolved_emblem_ids
+    from tftlab.cdragon import _item_trait_ids, is_set_emblem, parse_set_metadata, unresolved_emblem_ids
 
     with CommunityDragonClient(cache_dir=tmp_path) as client:
-        meta = client.get_set_metadata("latest", use_cache=False)
+        raw = client.fetch_raw("latest", use_cache=False)
+    meta = parse_set_metadata(raw, patch="latest")
     emblems = sorted(i for i, item in meta.items.items() if is_set_emblem(meta, i, item))
     with capsys.disabled():
         print(f"\nSET {meta.set_number} EMBLEM INVENTORY: {len(emblems)} emblem-like items")
         for item_id in emblems:
             print(f"  {item_id} {meta.items[item_id].name!r} -> {sorted(_item_trait_ids(meta, meta.items[item_id]))}")
         print(f"UNRESOLVED EMBLEMS: {list(unresolved_emblem_ids(meta))}")
+        unresolved = set(unresolved_emblem_ids(meta))
+        for entry in raw.get("items", []):
+            if entry.get("apiName") in unresolved:
+                print(json.dumps({k: entry.get(k) for k in (
+                    "apiName", "name", "desc", "associatedTraits", "incompatibleTraits", "tags", "effects",
+                    "composition", "unique")}, ensure_ascii=False, default=str))
     assert emblems, "expected the current set to have emblems"
     assert unresolved_emblem_ids(meta) == (), "emblems that link to no current trait (classification fails closed)"
 

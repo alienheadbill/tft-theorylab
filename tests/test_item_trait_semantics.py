@@ -13,6 +13,7 @@ TFTLAB_TEST_DATABASE_URL) Postgres.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -38,6 +39,12 @@ BT, CLAW, JG, KRAKEN = "DA_Bloodthirster", "DA_DragonsClaw", "DA_JeweledGauntlet
 GUINSOO, IE, DCAP, WARMOG = "DA_GuinsoosRageblade", "DA_InfinityEdge", "DA_RabadonsDeathcap", "DA_WarmogsArmor"
 
 ROSTER = load_roster()
+#: The committed snapshot records two live "Phantom Emblem" items that link to
+#: no Set 18 trait, so its classification fails closed. The exclusion
+#: mechanism is tested on this copy, which is the same roster with the guard
+#: marked verified (as it would be once those emblems are resolved).
+VERIFIED_ROSTER = dataclasses.replace(ROSTER, unresolved_emblems=[])
+PHANTOM_EMBLEMS = ["DA_PhantomEmblem18", "DA_PhantomEmblemUpgrade18"]
 KOGMAW, = ROSTER.champion_ids("Kog'Maw")
 ALUNE, = ROSTER.champion_ids("Alune")
 DRAVEN, = ROSTER.champion_ids("Draven")
@@ -324,7 +331,7 @@ def test_every_committed_set_emblem_is_linked_to_a_trait() -> None:
     from tftlab.cdragon import ItemMeta, SetMetadata, TraitMeta, is_set_emblem
     from tftlab.items import ITEM_STATS_PATH
 
-    assert ROSTER.unresolved_emblems == [] and ROSTER.trait_item_guard_verified
+    assert ROSTER.unresolved_emblems == PHANTOM_EMBLEMS  # recorded, so classification fails closed
     stats = json.loads(ITEM_STATS_PATH.read_text())["items"]
     meta = SetMetadata(patch="committed", set_number=ROSTER.set_number, champions={},
                        items={k: ItemMeta(item_id=k, name=v["name"], icon_url=None) for k, v in stats.items()},
@@ -332,15 +339,24 @@ def test_every_committed_set_emblem_is_linked_to_a_trait() -> None:
     emblems = {k for k, v in meta.items.items() if is_set_emblem(meta, k, v)}
     linked = {i for items in ROSTER.trait_items.values() for i in items}
     assert len(emblems) >= 20
-    assert emblems <= linked, sorted(emblems - linked)
+    assert emblems <= linked | set(PHANTOM_EMBLEMS), sorted(emblems - linked)
 
 
-def test_current_set_intrinsic_traits_have_no_trait_item_path() -> None:
-    """Static guard on the committed snapshot: Set 18's intrinsic traits have
-    no emblem or trait item, while emblem-able traits (e.g. Ravager) are
-    recorded and therefore never intrinsic."""
+def test_committed_set_fails_closed_on_its_unresolved_phantom_emblems() -> None:
+    """The live feed lists two "Phantom Emblem" items that name no Set 18
+    trait. Until they are resolved nothing is intrinsic: every trait,
+    including Caustic and Attuned, stays ordinary trait evidence."""
+    assert ROSTER.unresolved_emblems == PHANTOM_EMBLEMS
+    assert not ROSTER.trait_item_guard_verified
+    assert all(ROSTER.intrinsic_traits(c) == () for c in ROSTER.champions)
+
+
+def test_current_set_intrinsic_candidates_have_no_trait_item_path() -> None:
+    """Static guard on the committed snapshot: the nine one-champion Set 18
+    traits have no emblem or trait item, while emblem-able traits (e.g.
+    Ravager) are recorded and therefore never intrinsic."""
     assert ROSTER.trait_items is not None
-    intrinsic = {t for c in ROSTER.champions for t in ROSTER.intrinsic_traits(c)}
+    intrinsic = {t for c in VERIFIED_ROSTER.champions for t in VERIFIED_ROSTER.intrinsic_traits(c)}
     assert len(intrinsic) == 9
     assert not intrinsic & set(ROSTER.trait_items)
     ravager, = ROSTER.trait_ids("Ravager")
@@ -350,17 +366,38 @@ def test_current_set_intrinsic_traits_have_no_trait_item_path() -> None:
 
 
 def test_current_set_examples_kogmaw_caustic_and_alune_attuned() -> None:
-    assert ROSTER.intrinsic_traits(KOGMAW) == (CAUSTIC,)
-    assert ROSTER.intrinsic_traits(ALUNE) == (ATTUNED,)
-    assert {ADAPTOR, INVOKER} <= set(ROSTER.champion_traits(KOGMAW))  # multi-unit traits stay buildable
-    for champion in ROSTER.champions:
-        for trait in ROSTER.intrinsic_traits(champion):
-            assert ROSTER.trait_champions(trait) == (champion,)  # only one-champion traits, never "uncommon" ones
-    multi = {t for t in ROSTER.traits if len(ROSTER.trait_champions(t)) >= 2}
-    assert multi and not multi & {t for c in ROSTER.champions for t in ROSTER.intrinsic_traits(c)}
+    roster = VERIFIED_ROSTER
+    assert roster.intrinsic_traits(KOGMAW) == (CAUSTIC,)
+    assert roster.intrinsic_traits(ALUNE) == (ATTUNED,)
+    assert {ADAPTOR, INVOKER} <= set(roster.champion_traits(KOGMAW))  # multi-unit traits stay buildable
+    for champion in roster.champions:
+        for trait in roster.intrinsic_traits(champion):
+            assert roster.trait_champions(trait) == (champion,)  # only one-champion traits, never "uncommon" ones
+    multi = {t for t in roster.traits if len(roster.trait_champions(t)) >= 2}
+    assert multi and not multi & {t for c in roster.champions for t in roster.intrinsic_traits(c)}
 
 
-def test_carry_intrinsic_trait_is_context_not_ranked_shell_evidence(db: Database) -> None:
+@pytest.fixture
+def verified_roster(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Analytics and the champion payload see `VERIFIED_ROSTER`."""
+    import tftlab.analytics.traits as traits_module
+    import tftlab.champion_investigation as investigation_module
+
+    monkeypatch.setattr(traits_module, "load_roster", lambda: VERIFIED_ROSTER)
+    monkeypatch.setattr(investigation_module, "load_roster", lambda: VERIFIED_ROSTER)
+
+
+def test_with_the_committed_fail_closed_roster_caustic_stays_trait_evidence(db: Database) -> None:
+    champion = {"character_id": KOGMAW, "name": "Kog'Maw", "slug": "kogmaw", "cost": 4, "art_url": None}
+    body = champion_investigation(db, champion, WINDOW)
+    assert body["intrinsic_traits"] == []
+    assert CAUSTIC in [t["trait_id"] for t in body["traits"]]
+    kog = {a.key.split(":")[0] for a in trait_count_associations(db, KOGMAW, WINDOW, min_games=1)}
+    assert CAUSTIC in kog
+    assert trait_profile(db, KOGMAW, WINDOW).intrinsic == ()
+
+
+def test_carry_intrinsic_trait_is_context_not_ranked_shell_evidence(db: Database, verified_roster) -> None:
     champion = {"character_id": KOGMAW, "name": "Kog'Maw", "slug": "kogmaw", "cost": 4, "art_url": None}
     body = champion_investigation(db, champion, WINDOW)
     ranked = [t["trait_id"] for t in body["traits"]]
@@ -380,7 +417,7 @@ def test_carry_intrinsic_trait_is_context_not_ranked_shell_evidence(db: Database
     assert all(a.key != CAUSTIC for a in profile.active)
 
 
-def test_discovery_trait_evidence_uses_the_same_rule(db: Database) -> None:
+def test_discovery_trait_evidence_uses_the_same_rule(db: Database, verified_roster) -> None:
     alune = {a.key.split(":")[0] for a in trait_count_associations(db, ALUNE, WINDOW, min_games=1)}
     assert ATTUNED not in alune and SPELLWEAVER in alune
     kog = {a.key.split(":")[0] for a in trait_count_associations(db, KOGMAW, WINDOW, min_games=1)}
@@ -419,14 +456,15 @@ def test_semantic_sources_are_in_the_prepared_analytics_digest(tmp_path: Path) -
 
 
 def test_old_prepared_runs_go_stale_and_re_preparation_uses_the_corrected_semantics(
-    db: Database, monkeypatch: pytest.MonkeyPatch
+    db: Database, monkeypatch: pytest.MonkeyPatch, verified_roster
 ) -> None:
     from tftlab.prepared_discovery import lookup_prepared, prepare_window, read_prepared_candidate
 
+    current_version = prepared_discovery.ANALYTICS_VERSION
     monkeypatch.setattr(prepared_discovery, "ANALYTICS_VERSION", "v1-before-this-change")
     prepare_window(db, WINDOW)
     assert lookup_prepared(db, WINDOW).status == "current"
-    monkeypatch.undo()  # deploy the corrected code: the old run no longer matches
+    monkeypatch.setattr(prepared_discovery, "ANALYTICS_VERSION", current_version)  # deploy the corrected code
     assert lookup_prepared(db, WINDOW).status == "stale"
 
     result = prepare_window(db, WINDOW)
