@@ -116,13 +116,26 @@ def carry_partner_associations_for_many(
 ) -> dict[str, list[Association]]:
     """`carry_partner_associations` for several carries from one row query."""
     per_carry = _partner_games_for(db, character_ids, balance_window, commitment_items=commitment_items)
-    result: dict[str, list[Association]] = {}
-    for character_id in character_ids:
-        games, names, costs = per_carry.get(character_id, ([], {}, {}))
-        result[character_id] = compute_associations(
-            games,
-            label_fn=lambda key, names=names: names.get(key, key),
-            cost_fn=lambda key, costs=costs: costs.get(key),
-            min_games=min_games,
-        )
-    return result
+    return {
+        character_id: partner_associations_from_games(*per_carry.get(character_id, ([], {}, {})), min_games=min_games)
+        for character_id in character_ids
+    }
+
+
+def partner_associations_from_games(
+    games: list[tuple[int, frozenset[str]]],
+    names: dict[str, str],
+    costs: dict[str, int],
+    *,
+    min_games: int = 1,
+) -> list[Association]:
+    """`carry_partner_associations` from an already-fetched
+    `carry_commitment_games_with_partners` result, so one board query can
+    feed both the individual partners and other board-level evidence (e.g.
+    `tftlab.analytics.cores`) without a second query."""
+    return compute_associations(
+        games,
+        label_fn=lambda key: names.get(key, key),
+        cost_fn=lambda key: costs.get(key),
+        min_games=min_games,
+    )

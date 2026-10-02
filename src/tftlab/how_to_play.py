@@ -45,6 +45,10 @@ CONCISE_PAIRS = 3
 CONCISE_BUILDS = 3
 CONCISE_TEAMMATES = 4
 CONCISE_TRAITS = 3
+CONCISE_CORES = 3
+#: At most this many of the concise cores are 4-unit, so the most common
+#: 3-unit package is not crowded out by overlapping 4-unit supersets.
+CONCISE_FOUR_UNIT_CORES = 2
 
 COMPONENT_DIRECTION_BASIS = (
     "Derived from the recipes of this champion's most common completed items (each on 10+ carry boards): the "
@@ -209,6 +213,26 @@ def trait_directions(trait_rows: Sequence[dict[str, Any]], limit: int = CONCISE_
     return out[:limit]
 
 
+def concise_cores(
+    four_unit: Sequence[dict[str, Any]], three_unit: Sequence[dict[str, Any]], limit: int = CONCISE_CORES
+) -> list[dict[str, Any]]:
+    """Up to `limit` recurring cores for a quick read.
+
+    Which rows: the most common 4-unit cores (at most
+    `CONCISE_FOUR_UNIT_CORES`), then the most common 3-unit cores to fill the
+    rest -- a fixed size-diversity quota, not a score (filling every slot
+    with 4-unit cores showed only overlapping supersets and hid the most
+    common 3-unit package). Both input lists already qualify on
+    `MIN_BOARDS`+ boards and are ordered by boards together.
+
+    Display order: the selected rows sorted by boards together (most first),
+    then canonical member ids, so "most common first" holds across sizes.
+    2-unit cores are the teammates list."""
+    four = list(four_unit[:min(CONCISE_FOUR_UNIT_CORES, limit)])
+    selected = [*four, *three_unit[:limit - len(four)]]
+    return sorted(selected, key=lambda r: (-r["games"], tuple(r["member_ids"])))
+
+
 def _names(rows: Sequence[dict[str, Any]], key: str = "name") -> str:
     names = [r[key] for r in rows]
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
@@ -247,6 +271,8 @@ def how_to_play(
     build_rows: Sequence[dict[str, Any]],
     partner_rows: Sequence[dict[str, Any]],
     trait_rows: Sequence[dict[str, Any]],
+    four_unit_cores: Sequence[dict[str, Any]] = (),
+    three_unit_cores: Sequence[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     """The concise view: existing evidence rows on `MIN_BOARDS`+ carry
     boards, most boards first, shortened (see "Common rows" above). Empty
@@ -266,6 +292,9 @@ def how_to_play(
         "pairs": pairs,
         "builds": builds,
         "teammates": mates,
+        # Recurring 3-4 unit cores (`tftlab.analytics.cores`): subsets of final
+        # boards, selected by recurrence only.
+        "recurring_cores": concise_cores(four_unit_cores, three_unit_cores),
         "trait_directions": traits,
         "star_signal": star_signal(carry),
         "summary": evidence_summary(name, carry["games"], items, mates, traits),

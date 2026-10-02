@@ -323,7 +323,10 @@ def test_champion_page_leads_with_how_to_play_and_keeps_the_evidence_in_its_own_
     assert "state.tab || tabFromHash() || 'play'" in js  # How to play is the default
     assert "stamp('interpretation', 'Interpretation')" in js
     assert "2+ completed items, at least one of them a carry item" in js  # still explained, in the trust section
-    assert "position" not in js.lower().replace("positioning advice", "").replace("positioning, augments", "")
+    # No positioning advice; "composition" (as in "not exact compositions") is not positioning.
+    assert "position" not in (
+        js.lower().replace("positioning advice", "").replace("positioning, augments", "").replace("composition", "")
+    )
 
 
 def test_champion_picker_keeps_loading_state_during_slow_request() -> None:
