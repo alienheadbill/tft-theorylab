@@ -22,12 +22,14 @@ from .analytics import (
     available_balance_windows,
     carry_board_average,
     carry_board_counts,
+    carry_commitment_games_with_partners,
     carry_commitment_stats,
-    carry_partner_associations,
     item_package_stats,
     trait_profile,
 )
 from .analytics.association import Association
+from .analytics.cores import RecurringCore, recurring_cores
+from .analytics.partners import partner_associations_from_games
 from .analytics.traits import TraitProfile, split_trait_count_key
 from .game_art import (
     NORMAL_ITEM_KINDS,
@@ -38,7 +40,7 @@ from .game_art import (
     trait_art,
     trait_name,
 )
-from .how_to_play import how_to_play
+from .how_to_play import MIN_BOARDS, how_to_play
 from .research_report import WEB_DISCOVERY_MIN_SAMPLES
 from .roster import INTRINSIC_TRAIT_REASON, id_key, load_roster, name_key
 from .scout import LOW_SAMPLE_COMMITMENT_GAMES
@@ -195,6 +197,74 @@ def _partner_row(a: Association) -> dict[str, Any]:
     }
 
 
+def _champion_ref(character_id: str, names: Mapping[str, str], costs: Mapping[str, int]) -> dict[str, Any]:
+    """One champion for the web: id, display name, cost, page slug and cached art."""
+    name = champion_name(character_id, names.get(character_id, character_id))
+    cost = (load_roster().champions.get(character_id) or {}).get("cost") or costs.get(character_id)
+    return {
+        "character_id": character_id, "name": name, "cost": cost,
+        "slug": champion_slug(character_id, name), "art_url": champion_art(character_id, name),
+    }
+
+
+#: What a recurring core is, stated once for the API (see `tftlab.analytics.cores`).
+CORE_DEFINITION = (
+    "Units directly observed together on the same final carry boards: the carry plus 2 or 3 teammates, counted "
+    "only when every member was on the board. Other units were also present; a core is not an exact composition, "
+    "and its numbers describe association, not cause."
+)
+
+
+def _core_row(core: RecurringCore, carry: dict[str, Any], names: Mapping[str, str],
+              costs: Mapping[str, int]) -> dict[str, Any]:
+    """One recurring core: the carry first, then its teammates by cost and
+    name; observed numbers for boards with the WHOLE core (`_comparison`)."""
+    mates = sorted((_champion_ref(m, names, costs) for m in core.members),
+                   key=lambda u: (u["cost"] or 0, u["name"].casefold(), u["character_id"]))
+    return {
+        "size": core.size,
+        "units": [carry, *mates],
+        # Canonical identity: the carry, then teammate ids in sorted order.
+        "member_ids": [carry["character_id"], *core.members],
+        "subset_of_final_board": True,
+        **_comparison(core.evidence),
+    }
+
+
+def core_evidence(
+    games: list[tuple[int, frozenset[str]]],
+    champion: dict[str, Any],
+    names: Mapping[str, str],
+    costs: Mapping[str, int],
+    *,
+    top_n: int,
+) -> dict[str, Any]:
+    """Recurring 3- and 4-unit cores for the Champion page, from the same
+    committed-board universe as the partner evidence. Kept only on
+    `MIN_BOARDS`+ boards and ordered by boards together; never by results.
+    (2-unit cores are the individual teammates, already shown.)"""
+    carry = {k: champion[k] for k in ("character_id", "name", "cost", "slug", "art_url")}
+    found = recurring_cores(games, eligible=load_roster().is_shop_champion, sizes=(3, 4), min_games=MIN_BOARDS)
+    counts = {size: sum(1 for c in found if c.size == size) for size in (3, 4)}
+    # Names and art only for the rows shown (already ordered by recurrence).
+    by_size = {
+        size: [_core_row(c, carry, names, costs) for c in [c for c in found if c.size == size][:top_n]]
+        for size in (3, 4)
+    }
+    return {
+        "evidence": OBSERVED,
+        "subset_of_final_board": True,
+        "definition": CORE_DEFINITION,
+        "min_boards": MIN_BOARDS,
+        "carry_boards": len(games),
+        "ordering": "boards together, most first; ties by canonical unit ids",
+        "qualifying": {"three_unit": counts[3], "four_unit": counts[4]},
+        "three_unit": by_size[3][:top_n],
+        "four_unit": by_size[4][:top_n],
+        "_all": by_size,  # the shown lists for the concise view; removed before returning
+    }
+
+
 def _trait_count_row(a: Association) -> dict[str, Any]:
     trait_id, num_units = split_trait_count_key(a.key)
     return {
@@ -295,6 +365,9 @@ def champion_investigation(
             "individual": [],
         },
         "partners": [],
+        # Recurring 3-4 unit cores around the carry (`core_evidence`); None
+        # without carry boards.
+        "cores": None,
         # Active traits on the carry boards, each with Riot's observed unit
         # counts (`num_units`). Denominator: `carry.games`.
         "traits": [],
@@ -352,14 +425,20 @@ def champion_investigation(
     body["items"]["builds"] = rows[:top_n]
     body["items"]["pairs"] = pairs[:top_n]
     body["items"]["individual"] = singles[:top_n]
-    partners = [_partner_row(a) for a in carry_partner_associations(db, character_id, balance_window)]
+    # One board query feeds both the individual partners and the cores.
+    games, names, costs = carry_commitment_games_with_partners(db, character_id, balance_window)
+    partners = [_partner_row(a) for a in partner_associations_from_games(games, names, costs)]
+    cores = core_evidence(games, champion, names, costs, top_n=top_n)
+    all_cores = cores.pop("_all")
     traits = _trait_rows(trait_profile(db, character_id, balance_window))
     body["partners"] = partners[:top_n]
+    body["cores"] = cores
     body["traits"] = traits[:trait_top_n]
     body["summary"] = carry_summary(champion["name"], body["carry"], rows, partners, traits)
     body["how_to_play"] = how_to_play(
         champion["name"], body["carry"],
         item_rows=singles, pair_rows=pairs, build_rows=rows, partner_rows=partners, trait_rows=traits,
+        four_unit_cores=all_cores[4], three_unit_cores=all_cores[3],
     )
     return body
 

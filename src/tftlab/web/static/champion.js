@@ -377,9 +377,42 @@ function partnerSection(inv, name) {
     `<li class="ev-row">${refIcon(row.name, row.art_url, { cost: row.cost, kind: 'partner' })}<span class="row-name"><a href="${esc(championHref(row.slug))}">${esc(row.name)}</a>${row.cost ? ` <span class="aside">${row.cost}-cost</span>` : ''}</span>${rowMeta(row, name)}</li>`;
   return `
     <section class="inv-section" aria-labelledby="sec-partners">
-      <h3 id="sec-partners">Who it plays with ${stamp('observed', 'Observed')}</h3>
+      <h3 id="sec-partners">Individual teammates ${stamp('observed', 'Observed')}</h3>
       <p class="inv-help">Champions that finished on the same board as a ${esc(name)} carry, and how those boards placed compared with ${esc(name)} carry boards without them. This is an association, not proof: a partner may simply belong to the same comp rather than cause the result.</p>
       ${evidenceList(inv.partners, render, 'No partner evidence for this champion yet.')}
+    </section>`;
+}
+
+// Recurring cores: the carry plus 2-3 teammates directly observed together on
+// the same final boards (every member present). A subset of each board, never
+// an exact comp; picked and ordered by how often it recurs, not by results.
+const CORE_NOTE = 'These are unit subsets directly observed together on final carry boards. Other units were also present; these are not exact compositions.';
+const corePortraits = (units, size = 'sm') =>
+  `<span class="core-stack core-${size}" aria-hidden="true">${units.map(u => refIcon(u.name, u.art_url, { cost: u.cost, kind: 'partner' })).join('')}</span>`;
+const coreNames = units =>
+  units.map((u, i) => (i === 0 ? `<b>${esc(u.name)}</b>` : `<a href="${esc(championHref(u.slug))}">${esc(u.name)}</a>`)).join(' <span class="core-plus" aria-hidden="true">+</span> ');
+
+function coreSection(inv, name) {
+  const cores = inv.cores;
+  const render = row => `
+    <li class="ev-row core-row">
+      ${corePortraits(row.units)}
+      <span class="row-name">${coreNames(row.units)}</span>
+      ${rowMeta(row, name)}
+      <span class="row-meta"><span>avg place ${fmtPlace(row.avg_placement_with)}</span></span>
+    </li>`;
+  const list = (rows, size) =>
+    rows.length
+      ? `<ol class="ev-list">${rows.map(render).join('')}</ol>`
+      : `<p class="none-note">No recurring ${size}-unit core has enough boards yet (${cores.min_boards}+).</p>`;
+  return `
+    <section class="inv-section" aria-labelledby="sec-cores">
+      <h3 id="sec-cores">Recurring 3–4 unit cores ${stamp('observed', 'Observed')}</h3>
+      <p class="inv-help">${esc(CORE_NOTE)} A core counts only on boards where every member was present. Each is on ${plural(cores.min_boards, 'carry board')} or more and ordered by how many boards it appeared on; the Top 4 comparison is the core's own boards against ${esc(name)}'s other carry boards. Larger cores contain smaller ones, so these rows overlap and their numbers can't be added up.</p>
+      <h4>4-unit cores</h4>
+      ${list(cores.four_unit, 4)}
+      <h4>3-unit cores</h4>
+      ${list(cores.three_unit, 3)}
     </section>`;
 }
 
@@ -497,6 +530,11 @@ function howToPlaySection(inv) {
         .map(m => `<li><a class="htp-link" href="${esc(championHref(m.slug))}">${tile(m.name, m.art_url, { kind: 'partner', cost: m.cost, sub: share(m) })}</a></li>`)
         .join('')}</ul>`
     : htpEmpty('No teammate evidence yet.');
+  const coreLines = h.recurring_cores.length
+    ? `<ul class="htp-lines htp-cores" aria-label="Recurring cores">${h.recurring_cores
+        .map(r => `<li class="htp-line">${corePortraits(r.units, 'md')}<span class="htp-line-name">${r.units.map(u => esc(u.name)).join(' + ')}</span><span class="htp-num">${share(r)}</span></li>`)
+        .join('')}</ul>`
+    : htpEmpty('No recurring 3–4 unit core has enough boards yet.');
   const traits = h.trait_directions.length
     ? `<ul class="htp-tiles" aria-label="Trait directions">${h.trait_directions
         .map(t => `<li>${tile(t.name, t.art_url, { kind: 'trait', sub: `<b>${plural(t.num_units, 'unit')}</b> · ${fmtPctShort(t.count_share)} of boards` })}</li>`)
@@ -520,6 +558,7 @@ function howToPlaySection(inv) {
       <div class="htp-grid">
         <section class="htp-card" aria-labelledby="htp-mates"><h4 id="htp-mates">Teammates</h4>${mates}</section>
         <section class="htp-card" aria-labelledby="htp-traits"><h4 id="htp-traits">Trait direction</h4>${traits}<p class="htp-foot">Unit counts Riot reported on the final boards, not official trait thresholds.</p></section>
+        <section class="htp-card htp-span" aria-labelledby="htp-cores"><h4 id="htp-cores">Recurring cores</h4>${coreLines}<p class="htp-foot">Units seen together on the same final carry boards, most common first. Other units were there too: not exact comps.</p></section>
       </div>
       <section class="htp-why" aria-labelledby="htp-why">
         <h4 id="htp-why">Why: evidence summary ${stamp('observed', 'Observed')}</h4>
@@ -633,7 +672,7 @@ function renderInvestigation(inv) {
       ${tabList(active)}
       ${panel('play', active, howToPlaySection(inv))}
       ${panel('items', active, itemSection(inv, c.name))}
-      ${panel('teammates', active, partnerSection(inv, c.name))}
+      ${panel('teammates', active, partnerSection(inv, c.name) + coreSection(inv, c.name))}
       ${panel('traits', active, traitSection(inv, c.name))}
       ${panel('evidence', active, summarySection(inv, c.name) + carrySection(inv) + trustSection(inv))}
     </article>`,

@@ -133,8 +133,9 @@ Riot access currently uses a **development key that must be regenerated regularl
     - what star target appears important when the sample supports that comparison;
     - augments and positioning only when a verified source actually supports those claims.
     Use champion/item/trait art heavily so the section is scannable. Keep the practical recommendation distinct from the deeper observed evidence below it.
-  - **NEXT:** recurring 2–4 unit cores to extend the frequency-based teammates in "How to play" (not started).
-  - **FUTURE:** composition families/variants and practical alternatives.
+  - **IMPLEMENTED:** recurring 2–4 unit core evidence (`tftlab.analytics.cores`). The 2-unit layer is the existing individual teammate evidence; the new observed 3–4 unit packages (carry + 2–3 teammates counted only where all were on the same final board, shop champions only, 10+ boards, ordered by recurrence, never by results, no core score, no summed pair evidence) appear in How to play ("Recurring cores") and the Teammates tab. They are subsets of final boards, not compositions, and bridge individual teammates toward composition families. Experimental S2 archetype research stays separate and is not promoted by this.
+  - **NEXT:** composition-family/variant evidence once that research is trustworthy.
+  - **FUTURE:** practical alternatives.
 - **Rules:**
   - Use Riot/source data directly when it already answers the question; derived systems must justify what additional question they answer.
   - Keep association separate from causation.
@@ -143,7 +144,7 @@ Riot access currently uses a **development key that must be regenerated regularl
 
 ### Track 4: Website/product
 
-- **Product loop (ACCEPTED/CURRENT):** keep the Champion Investigation vertical slice as the main player-facing refinement loop. Real production use has now shown that the page is visually clear but its top "How players carry with {champion}" prose is not actionable enough. That refinement, a practical "How to play {champion}" guidance layer backed by the same source-faithful evidence with inline item/champion/trait art, is now IMPLEMENTED as the page's default tab; recurring cores are the next step.
+- **Product loop (ACCEPTED/CURRENT):** keep the Champion Investigation vertical slice as the main player-facing refinement loop. Real production use has now shown that the page is visually clear but its top "How players carry with {champion}" prose is not actionable enough. That refinement, a practical "How to play {champion}" guidance layer backed by the same source-faithful evidence with inline item/champion/trait art, is now IMPLEMENTED as the page's default tab, and recurring 3–4 unit cores are IMPLEMENTED on top of it; composition-family/variant evidence is next once trustworthy.
 - **It should eventually present:**
   - star-level and carry evidence;
   - itemization;
@@ -158,7 +159,7 @@ Riot access currently uses a **development key that must be regenerated regularl
   - confidence and evidence type;
   - observed vs inferred results.
 - **Sequencing:** the slice uses whatever evidence is ready (Track 3). Families and variants arrive when Track 2 supports them. Once the evidence is trustworthy, the same composition/board objects should support both Champion Investigation and the main discovery experience.
-- **First vertical slice (IMPLEMENTED):** `/champions` (pick a champion by name) and `/champions/<name>`, one data-driven template for every champion. It currently shows carry and 3★ hit/miss evidence, item builds and pairs, partners, trait associations, sample size, balance window, freshness and observed evidence. Still FUTURE: recurring cores, composition families/variants and practical alternatives.
+- **First vertical slice (IMPLEMENTED):** `/champions` (pick a champion by name) and `/champions/<name>`, one data-driven template for every champion. It currently shows carry and 3★ hit/miss evidence, item builds and pairs, partners, trait associations, sample size, balance window, freshness and observed evidence. Recurring 3–4 unit cores are now IMPLEMENTED (above); still FUTURE: composition families/variants and practical alternatives.
 - **Current refinement (IMPLEMENTED; PR #36):** Discovery/Champion request work was reduced, loading states were made explicit, player-facing terminology now says "carry boards", Champion Investigation leads with "How players carry with {champion}", observed evidence is separated from interpretation, special-item presentation is cleaner, and trait presentation uses Riot's observed final-board trait data instead of ordinal "breakpoint 1/2" labels.
 - **Production acceptance (PARTIAL):** PR #36 is merged and deployed on the Ohio production service. Health, Champion directory, Kha'Zix Investigation and Discovery API smoke checks all passed against live Neon data. Player-facing cold/warm navigation timing is still the acceptance step for usability.
 
@@ -236,8 +237,8 @@ Riot access currently uses a **development key that must be regenerated regularl
 
 **Next:**
 
-1. **Make Champion Investigation practically useful (IMPLEMENTED):** the source-faithful "How to play {champion}" layer is the default tab, covering recipe-derived component direction, common items/pairs/builds (10+ boards, most used first), frequent teammates, buildable trait directions and the 3★ signal, with item/champion/trait icons; the deeper evidence lives in the Items/Teammates/Traits/Evidence tabs. Cores remain the next step (below).
-2. **Develop recurring core evidence** that bridges a carry from single-partner associations to a real playable shell and can later support both Champion Investigation and composition discovery (Track 3).
+1. **Make Champion Investigation practically useful (IMPLEMENTED):** the source-faithful "How to play {champion}" layer is the default tab, covering recipe-derived component direction, common items/pairs/builds (10+ boards, most used first), frequent teammates, buildable trait directions and the 3★ signal, with item/champion/trait icons; the deeper evidence lives in the Items/Teammates/Traits/Evidence tabs. Recurring cores followed (item 2).
+2. **Develop recurring core evidence (IMPLEMENTED):** observed 3–4 unit cores around a carry, from complete co-occurrence on the same final boards, selected by recurrence, shown in How to play and the Teammates tab. Next for Champion Intelligence: composition-family/variant evidence once trustworthy (Track 3).
 3. **Monitor scheduled live ingestion** across multiple runs: inspect yield, duplicate rate, collection lag, Riot errors/429s and storage growth; keep maximum mode manual until the deep-ladder 401 is understood (Track 1).
 4. **Repair the CommunityDragon live smoke** by resolving the duplicate-component namespace/test assumption without discarding legitimate source data (Track 6).
 5. **In parallel, instrument unchanged S2** to quantify recursive lock-in and order dependence; do not change Condition 1 before measurement (Track 2).

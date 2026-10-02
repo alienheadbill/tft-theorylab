@@ -917,6 +917,18 @@ input[type="search"]::placeholder { color: var(--graphite); opacity: 0.8; }
   background: transparent; border: 1px dashed currentColor; border-radius: 3px 6px 4px 7px;
 }
 .htp-more:hover { color: var(--text); }
+/* recurring cores: the carry's portrait first, teammates after, slightly fanned */
+.core-stack { display: inline-flex; align-self: center; flex: none; }
+.core-stack .ref-icon { width: 28px; height: 28px; }
+.core-stack.core-md .ref-icon { width: 34px; height: 34px; }
+.core-stack .ref-icon + .ref-icon { margin-left: -5px; box-shadow: -2px 0 0 rgba(0, 0, 0, 0.4); }
+.core-stack .ref-icon:first-child { outline: 2px solid var(--amber); outline-offset: -1px; }
+.core-plus { color: var(--graphite); }
+.core-row .row-name a { color: var(--text); }
+.core-row > .core-stack { grid-row: span 3; align-self: start; padding-top: 2px; }
+.htp-span { grid-column: 1 / -1; }
+.htp-cores .htp-line { grid-template-columns: auto minmax(0, 1fr); }
+.htp-cores .core-stack { grid-row: span 2; }
 .recipe-uses { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
 .recipe-uses .ref-icon { width: 20px; height: 20px; }
 
@@ -924,6 +936,8 @@ input[type="search"]::placeholder { color: var(--graphite); opacity: 0.8; }
   .htp-grid-3 { grid-template-columns: 1fr; }
 }
 @media (max-width: 620px) {
+  .core-row { grid-template-columns: minmax(0, 1fr); }
+  .core-row > .core-stack { grid-row: auto; }
   .htp-grid { grid-template-columns: 1fr; }
   .htp-tiles { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
   .inv-tabs [role="tab"] { padding: 10px 11px 8px; letter-spacing: 0.08em; }

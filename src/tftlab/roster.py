@@ -75,6 +75,14 @@ class Roster:
         """The champion's own traits (canonical trait ids), from static data."""
         return tuple((self.champions.get(character_id or "") or {}).get("traits") or ())
 
+    def is_shop_champion(self, character_id: str | None) -> bool:
+        """A player-selectable current-set shop champion: a roster entry with a
+        shop cost of 1-5 and at least one set trait. Cost-1 jungle camps,
+        training dummies and summons in the feed (`TFT_Krug`, `TFT_Voidspawn`,
+        ...) carry no trait and are not; neither is any id outside the roster."""
+        entry = self.champions.get(character_id or "") or {}
+        return 1 <= int(entry.get("cost") or 0) <= 5 and bool(entry.get("traits"))
+
     def trait_champions(self, trait_id: str) -> tuple[str, ...]:
         """Shop champions (cost 1-5) whose own traits include `trait_id`, sorted."""
         return tuple(sorted(
