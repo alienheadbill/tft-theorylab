@@ -648,7 +648,7 @@ def _merge_and_audit(eligible: Sequence[Board], vecs, assign: dict[int, int], lo
     group, merges, checks, diagnostics = dict(assign), 0, {}, None
     if strategy.merge:
         progress(f"{strategy.name}: variant merge started over {len(set(assign.values()))} variants")
-        diagnostics = MergeDiagnostics(config.tau)
+        diagnostics = MergeDiagnostics(config.tau, lock_in=strategy.similarity_rule == "s2")
         to_group, merge_log, checks = merge_variants([b for b in eligible if b.obs in assign], assign, strategy, config,
                                                      vecs=vecs, diagnostics=diagnostics)
         group = {k: to_group[v] for k, v in assign.items()}
@@ -771,14 +771,17 @@ class MergeDiagnostics:
     unit ids and anonymous observation ids only -- never match or player
     identifiers."""
 
-    def __init__(self, tau: float) -> None:
+    def __init__(self, tau: float, *, lock_in: bool = False) -> None:
         self.tau = tau
         self.rows: list[dict[str, Any]] = []
-        #: Recursive lock-in instrumentation (report only), kept OUT of
+        #: Recursive lock-in instrumentation (report only; experimental S2
+        #: strategies only -- `lock_in` stays False for the A/B/C controls,
+        #: whose diagnostics then hold no lock-in state at all). Kept OUT of
         #: `rows` so every existing diagnostic and sample is unchanged.
         #: `lock[i]` describes `rows[i]`; `provenance` maps an anonymous
         #: observation id to its FIRST below-tau admission by an accepted
         #: merge; `admissions` lists every such admission event.
+        self.lock_in = lock_in
         self.lock: list[dict[str, Any]] = []
         self.provenance: dict[int, dict[str, Any]] = {}
         self.admissions: list[dict[str, Any]] = []
@@ -828,7 +831,8 @@ class MergeDiagnostics:
             "smaller_side_below_tau_share": side_below[smaller] / n[smaller],
             "larger_side_min_post": side_min[larger], "smaller_side_min_post": side_min[smaller],
         })
-        self.lock.append(self._lock_entry(self.rows[-1], obs, post, side, larger, evaluate))
+        if self.lock_in:
+            self.lock.append(self._lock_entry(self.rows[-1], obs, post, side, larger, evaluate))
 
     def _lock_entry(self, r: Mapping[str, Any], obs: Sequence[int], post: Mapping[int, float], side: Mapping[int, str],
                     larger: str, evaluate: Callable[[Sequence[int]], Mapping[int, float]] | None) -> dict[str, Any]:
@@ -1013,13 +1017,15 @@ class MergeDiagnostics:
                "accepted_attempts": len(accepted), "rejected_similarity_attempts": len(rejected),
                "rejected": self._aggregate(rejected), "accepted": self._aggregate(accepted),
                "sample": self._sample(rejected, accepted)}
-        if decision_rule == "S0":
+        if decision_rule == "S0":  # the A/B/C controls: legacy structure, no lock-in provenance
             return {**out, "shadow": shadow_evaluation(self.rows, self.tau)}
+        # experimental S2: tail provenance joins the trajectory only when lock-in tracking was on
+        lock = {e["attempt"]: e for e in self.lock} if decision_rule == "S2" and self.lock_in else None
         return {**out, "decision_rule": decision_rule,
                 "decision_rule_mismatches": sum(
                     all(shadow_conditions(r, self.tau)[decision_rule].values()) != (r["outcome"] == "accepted")
                     for r in self.rows),
-                "trajectory": merge_trajectory(accepted, self.tau, {e["attempt"]: e for e in self.lock})}
+                "trajectory": merge_trajectory(accepted, self.tau, lock)}
 
 
 # ---------------------------------------------------------------- shadow merge rules (report only)
@@ -1343,7 +1349,9 @@ LOCK_IN_DEFINITIONS: dict[str, str] = {
                                   "pre-merge side a/b, larger/smaller role, similarity and tau are kept). It stays "
                                   "historical through every later merge whatever its later similarity; a board that "
                                   "falls below tau only later, without an accepted merge admitting it below tau, is "
-                                  "never historical. Boards below tau inside an original variant are not historical.",
+                                  "never historical. Pre-merge similarity (a board's similarity to its own side's or "
+                                  "original variant's profile) is a separate diagnostic: it neither qualifies nor "
+                                  "disqualifies a board -- only the accepted merge's tentative merged profile decides.",
     "historical (at an attempt)": "admitted by an accepted merge judged EARLIER than this attempt.",
     "similarity_rejection_attribution": "denominator: every S2 similarity rejection, i.e. every tentative merge that "
                                         "passed the pairwise core checks (overlap, swaps, C's restriction) and the "
@@ -1441,6 +1449,8 @@ def _lock_case(reason: str, r: Mapping[str, Any], e: Mapping[str, Any]) -> dict[
 def recursive_lock_in_summary(diag: MergeDiagnostics) -> dict[str, Any]:
     """Report-only recursive lock-in section of one S2 merge run (see
     LOCK_IN_DEFINITIONS). Reads `diag`, decides nothing."""
+    if not diag.lock_in:
+        raise ValueError("recursive lock-in tracking was not enabled for these diagnostics")
     tau, rows, lock = diag.tau, {r["attempt"]: r for r in diag.rows}, diag.lock
     rejected = [e for e in lock if e["outcome"] == "rejected_similarity"]
     accepted = [e for e in lock if e["outcome"] == "accepted"]
@@ -1606,7 +1616,7 @@ def order_replays(boards: Sequence[Board], vecs, assign: Mapping[int, int], stra
     out = []
     for order in orders:
         progress(f"{strategy.name}: order replay '{order.label}' started")
-        diag = MergeDiagnostics(config.tau)
+        diag = MergeDiagnostics(config.tau, lock_in=True)
         stats = {"judged_steps": 0, "steps_with_tied_candidates": 0}
         to_group, log, checks = merge_variants(members, assign, strategy, config, vecs=vecs, diagnostics=diag,
                                                tie_order=order, tie_stats=stats)

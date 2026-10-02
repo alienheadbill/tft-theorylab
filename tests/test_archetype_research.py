@@ -901,7 +901,7 @@ PARTIAL = ([SHELL8] * 299 + [WEAK_X], TAILED, [SHELL8 + [10, 11]] * 60)
 
 def lock_run(groups, strategy=B_S2, config=None):
     boards, variant = boards_by_variant(*groups)
-    diag = ar.MergeDiagnostics(TAU)
+    diag = ar.MergeDiagnostics(TAU, lock_in=True)
     result = ar.merge_variants(boards, variant, strategy, config or ar.ArchetypeConfig(), diagnostics=diag)
     return boards, variant, result, diag
 
@@ -1003,9 +1003,10 @@ def test_counterfactual_removes_only_historical_tails_never_other_weak_boards() 
 
 
 def test_condition1_rejection_by_a_non_tail_board_is_no_historical_tail() -> None:
-    """knife_edge: the only failing board X sits on the larger side and comes from its original variant."""
+    """knife_edge: the only failing board X sits on the larger side and was never admitted below tau by an accepted
+    merge (there is none), so it is not historical."""
     boards, variant = knife_edge([[11]])
-    diag = ar.MergeDiagnostics(TAU)
+    diag = ar.MergeDiagnostics(TAU, lock_in=True)
     ar.merge_variants(boards, variant, B_S2, ar.ArchetypeConfig(), diagnostics=diag)
     [e] = diag.lock
     assert e["outcome"] == "rejected_similarity" and "larger side: no board below tau" in e["failed_conditions"]
@@ -1063,7 +1064,7 @@ def test_lock_in_diagnostics_never_change_the_s2_partition(strategy: ar.Strategy
     cases = [boards_by_variant(*LOCK_T), boards_by_variant(*PARTIAL), knife_edge([[11]])] + [random_variants(s) for s in range(12)]
     for boards, variant in cases:
         plain = ar.merge_variants(boards, variant, strategy, ar.ArchetypeConfig())
-        diag = ar.MergeDiagnostics(TAU)
+        diag = ar.MergeDiagnostics(TAU, lock_in=True)
         assert ar.merge_variants(boards, variant, strategy, ar.ArchetypeConfig(), diagnostics=diag) == plain
         assert len(diag.lock) == len(diag.rows) == plain[2]["rejected_similarity"] + len(plain[1])
         assert diag.summary("S2")["decision_rule_mismatches"] == 0
@@ -1091,16 +1092,73 @@ def test_controls_get_no_lock_in_or_replays_and_stay_unchanged(store: Path) -> N
             assert grouping.group == {k: to_group[v] for k, v in grouping.variant.items()} and grouping.merges == len(log)
             assert "recursive_lock_in" not in grouping.merge_diagnostics and "trajectory" not in grouping.merge_diagnostics
     for boards_, variant in [boards_by_variant(*LOCK_T)] + [random_variants(s) for s in range(6)]:
-        for strategy in (B_STRATEGY, C_STRATEGY):  # an S0 merge never admits a below-tau board
-            diag = ar.MergeDiagnostics(TAU)
+        for strategy in (B_STRATEGY, C_STRATEGY):
+            diag = ar.MergeDiagnostics(TAU)  # as the report builds it for the controls
             ar.merge_variants(boards_, variant, strategy, ar.ArchetypeConfig(), diagnostics=diag)
-            assert diag.provenance == {} and all(e["counterfactual"] is None for e in diag.lock)
+            assert diag.lock == [] and diag.provenance == {} and diag.admissions == []
+            tracked = ar.MergeDiagnostics(TAU, lock_in=True)  # and even if tracked, an S0 merge admits no tail
+            ar.merge_variants(boards_, variant, strategy, ar.ArchetypeConfig(), diagnostics=tracked)
+            assert tracked.provenance == {} and all(e["counterfactual"] is None for e in tracked.lock)
+
+
+#: Legacy (pre-lock-in, `main` at a7b6f4f) diagnostic schemas, written out literally so the comparison is with the
+#: earlier implementation, not with another run of this one.
+LEGACY_S0_SUMMARY_KEYS = {"accepted", "accepted_attempts", "attempts_evaluated", "definitions", "rejected",
+                          "rejected_similarity_attempts", "sample", "shadow", "tau"}
+LEGACY_SAMPLE_ROW_KEYS = {
+    "a_boards", "a_only", "a_root_variant", "a_variants", "attempt", "b_boards", "b_only", "b_root_variant", "b_variants",
+    "below_tau", "below_tau_from_a", "below_tau_from_b", "below_tau_share", "core_a", "core_a_size", "core_b",
+    "core_b_size", "core_overlap", "dropped_from_merged_core", "identical_cores", "larger_side", "larger_side_below_tau",
+    "larger_side_below_tau_share", "larger_side_boards", "larger_side_min_post", "merged_boards", "merged_core",
+    "merged_core_size", "new_in_merged_core", "outcome", "post", "pre_a", "pre_b", "pre_combined", "reason",
+    "shared_core_size", "shortfall_max", "shortfall_mean", "shortfall_median", "smaller_side_below_tau",
+    "smaller_side_below_tau_share", "smaller_side_boards", "smaller_side_min_post", "splash_exception_applies", "weakest"}
+LEGACY_TRAJECTORY_ROW_KEYS = {
+    "attempt", "below_tau", "below_tau_share", "core_larger", "core_overlap", "core_smaller", "identical_cores",
+    "larger_side_boards", "merged_boards", "min_post", "post_median", "post_p10", "smaller_side_below_tau",
+    "smaller_side_below_tau_share", "smaller_side_boards", "splash_exception_applies", "variants_after_merge"}
+PROVENANCE_TRAJECTORY_KEYS = {"admitted_below_tau", "newly_admitted_below_tau", "historical_tails_before_merge",
+                              "larger_side_historical_tails", "smaller_side_historical_tails"}
+
+
+def test_control_diagnostics_keep_the_legacy_schema_and_hold_no_lock_in_state(store: Path) -> None:
+    """Recursive lock-in provenance is S2-only. The controls' diagnostics hold no lock-in state at all (on head
+    b753045 they still built lock entries in memory, which only the S0 early return kept out of the JSON), and their
+    serialized summary and sample rows keep the exact legacy key sets; S2 trajectory rows gain the provenance fields
+    only when lock-in tracking is on."""
+    boards, variant = boards_by_variant(*LOCK_T)  # B and C accept merges here, so trajectory/sample rows exist
+    for strategy in (B_STRATEGY, C_STRATEGY):
+        diag = ar.MergeDiagnostics(TAU)
+        ar.merge_variants(boards, variant, strategy, ar.ArchetypeConfig(), diagnostics=diag)
+        assert diag.lock == [] and diag.provenance == {} and diag.admissions == []  # no lock-in state for controls
+        assert diag.lock_in is False
+        summary = diag.summary()
+        assert summary["accepted_attempts"] >= 1 and set(summary) == LEGACY_S0_SUMMARY_KEYS
+        assert summary["sample"] and all(set(row) == LEGACY_SAMPLE_ROW_KEYS for row in summary["sample"])
+        with pytest.raises(ValueError):
+            ar.recursive_lock_in_summary(diag)
+    untracked = ar.MergeDiagnostics(TAU)
+    ar.merge_variants(boards, variant, B_S2, ar.ArchetypeConfig(), diagnostics=untracked)
+    assert all(set(m) == LEGACY_TRAJECTORY_ROW_KEYS for m in untracked.summary("S2")["trajectory"]["merges"])
+    tracked = ar.MergeDiagnostics(TAU, lock_in=True)
+    ar.merge_variants(boards, variant, B_S2, ar.ArchetypeConfig(), diagnostics=tracked)
+    rows = tracked.summary("S2")["trajectory"]["merges"]
+    assert rows and all(set(m) == LEGACY_TRAJECTORY_ROW_KEYS | PROVENANCE_TRAJECTORY_KEYS for m in rows)
+    # the real report: control merge diagnostics in the legacy shape, S2 trajectory rows with provenance
+    report, _, _ = run(store)
+    for name in ("B_flex_tolerant", "C_structure_aware"):
+        md = report["strategies"][name]["merge_diagnostics"]
+        assert set(md) == LEGACY_S0_SUMMARY_KEYS and all(set(row) == LEGACY_SAMPLE_ROW_KEYS for row in md["sample"])
+    for name in ("B_S2_experimental", "C_S2_experimental"):
+        merges = report["strategies"][name]["merge_diagnostics"]["trajectory"]["merges"]
+        assert all(set(m) == LEGACY_TRAJECTORY_ROW_KEYS | PROVENANCE_TRAJECTORY_KEYS for m in merges)
 
 
 @pytest.mark.parametrize("strategy", [B_STRATEGY, C_STRATEGY, B_S2, C_S2], ids=lambda s: s.name)
 def test_baseline_order_replay_reproduces_the_real_merge(strategy: ar.Strategy) -> None:
     for boards, variant in [boards_by_variant(*LOCK_T), boards_by_variant(*PARTIAL)] + [random_variants(s) for s in range(25)]:
-        real_diag, replay_diag = ar.MergeDiagnostics(TAU), ar.MergeDiagnostics(TAU)
+        tracked = strategy.similarity_rule == "s2"
+        real_diag, replay_diag = ar.MergeDiagnostics(TAU, lock_in=tracked), ar.MergeDiagnostics(TAU, lock_in=tracked)
         real = ar.merge_variants(boards, variant, strategy, ar.ArchetypeConfig(), diagnostics=real_diag)
         replay = ar.merge_variants(boards, variant, strategy, ar.ArchetypeConfig(), diagnostics=replay_diag,
                                    tie_order=ar.TieOrder("baseline"))
