@@ -226,8 +226,11 @@ def test_units_resolve_names_slugs_and_art_with_the_carry_first(db: Database) ->
 def test_how_to_play_shows_three_and_four_unit_cores_and_never_two_unit_ones(db: Database) -> None:
     h = champion_investigation(db, KOG, WINDOW)["how_to_play"]
     shown = h["recurring_cores"]
-    assert [r["size"] for r in shown] == [4, 3, 3]  # up to 2 four-unit, then 3-unit, most common first
-    assert set(shown[1]["member_ids"]) == {KOGMAW, DRAVEN, KARMA}
+    # Selected: the one qualifying 4-unit core (11 boards) and the two most common
+    # 3-unit cores (20, 12); displayed most common first across sizes.
+    assert [(r["size"], r["games"]) for r in shown] == [(3, 20), (3, 12), (4, 11)]
+    assert set(shown[0]["member_ids"]) == {KOGMAW, DRAVEN, KARMA}
+    assert set(shown[2]["member_ids"]) == {KOGMAW, DRAVEN, KARMA, VI}
     assert all(r["size"] in (3, 4) for r in shown)
 
 
@@ -256,16 +259,32 @@ def test_one_partner_board_query_feeds_partners_and_cores(db: Database, monkeypa
     assert sum("LEFT JOIN units f" in sql for sql in seen) == 1
 
 
-def test_concise_quota_is_a_fixed_presentation_rule() -> None:
-    four = [{"size": 4, "games": g} for g in (30, 20, 15)]
-    three = [{"size": 3, "games": g} for g in (60, 40)]
-    assert [r["games"] for r in htp.concise_cores(four, three)] == [30, 20, 60]
-    assert [r["games"] for r in htp.concise_cores([], three)] == [60, 40]
-    assert [r["games"] for r in htp.concise_cores(four[:1], [])] == [30]
+def _core(size: int, games: int, *members: str) -> dict:
+    return {"size": size, "games": games, "member_ids": [KOGMAW, *members]}
+
+
+def test_concise_cores_keep_the_size_quota_then_show_most_common_first() -> None:
+    """The Kog'Maw case from review: 4-unit cores on 39 and 28 boards plus the
+    most common 3-unit core (67) are selected, then displayed 67, 39, 28."""
+    four = [_core(4, 39, "a", "b", "c"), _core(4, 28, "a", "b", "d"), _core(4, 19, "a", "c", "d")]
+    three = [_core(3, 67, "a", "b"), _core(3, 63, "b", "c")]
+    shown = htp.concise_cores(four, three)
+    assert [(r["size"], r["games"]) for r in shown] == [(3, 67), (4, 39), (4, 28)]  # 63-board 3-unit core: not selected
+    assert [r["games"] for r in htp.concise_cores([], three)] == [67, 63]
+    assert [r["games"] for r in htp.concise_cores(four[:1], [])] == [39]
+    assert htp.concise_cores([], []) == []
+
+
+def test_concise_core_ties_break_on_canonical_member_ids() -> None:
+    four = [_core(4, 30, "b", "c", "d")]
+    three = [_core(3, 30, "c", "d"), _core(3, 30, "a", "z")]
+    shown = htp.concise_cores(four, three)
+    assert [tuple(r["member_ids"][1:]) for r in shown] == [("a", "z"), ("b", "c", "d"), ("c", "d")]
 
 
 def test_page_labels_cores_as_recurring_subsets_never_strength() -> None:
     js = (Path(__file__).parents[1] / "src" / "tftlab" / "web" / "static" / "champion.js").read_text()
+    assert "within each section rows are ordered by how many boards they appeared on" in js
     for needle in ("Recurring cores", "Recurring 3–4 unit cores", "Individual teammates",
                    "Other units were also present; these are not exact compositions.",
                    "No recurring 3–4 unit core has enough boards yet."):

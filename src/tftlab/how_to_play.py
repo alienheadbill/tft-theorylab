@@ -216,15 +216,21 @@ def trait_directions(trait_rows: Sequence[dict[str, Any]], limit: int = CONCISE_
 def concise_cores(
     four_unit: Sequence[dict[str, Any]], three_unit: Sequence[dict[str, Any]], limit: int = CONCISE_CORES
 ) -> list[dict[str, Any]]:
-    """Up to `limit` recurring cores for a quick read: the most common 4-unit
-    cores (at most `CONCISE_FOUR_UNIT_CORES`), then the most common 3-unit
-    cores to fill the rest. Both lists already qualify on `MIN_BOARDS`+
-    boards and are ordered by boards together. A fixed presentation quota,
-    not a score: filling every slot with 4-unit cores showed only
-    overlapping supersets and hid the most common 3-unit package. 2-unit
-    cores are the teammates list."""
+    """Up to `limit` recurring cores for a quick read.
+
+    Which rows: the most common 4-unit cores (at most
+    `CONCISE_FOUR_UNIT_CORES`), then the most common 3-unit cores to fill the
+    rest -- a fixed size-diversity quota, not a score (filling every slot
+    with 4-unit cores showed only overlapping supersets and hid the most
+    common 3-unit package). Both input lists already qualify on
+    `MIN_BOARDS`+ boards and are ordered by boards together.
+
+    Display order: the selected rows sorted by boards together (most first),
+    then canonical member ids, so "most common first" holds across sizes.
+    2-unit cores are the teammates list."""
     four = list(four_unit[:min(CONCISE_FOUR_UNIT_CORES, limit)])
-    return [*four, *three_unit[:limit - len(four)]]
+    selected = [*four, *three_unit[:limit - len(four)]]
+    return sorted(selected, key=lambda r: (-r["games"], tuple(r["member_ids"])))
 
 
 def _names(rows: Sequence[dict[str, Any]], key: str = "name") -> str:

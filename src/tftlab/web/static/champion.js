@@ -408,7 +408,7 @@ function coreSection(inv, name) {
   return `
     <section class="inv-section" aria-labelledby="sec-cores">
       <h3 id="sec-cores">Recurring 3–4 unit cores ${stamp('observed', 'Observed')}</h3>
-      <p class="inv-help">${esc(CORE_NOTE)} A core counts only on boards where every member was present. Each is on ${plural(cores.min_boards, 'carry board')} or more and ordered by how many boards it appeared on; the Top 4 comparison is the core's own boards against ${esc(name)}'s other carry boards. Larger cores contain smaller ones, so these rows overlap and their numbers can't be added up.</p>
+      <p class="inv-help">${esc(CORE_NOTE)} A core counts only on boards where every member was present. Each is on ${plural(cores.min_boards, 'carry board')} or more. 4-unit and 3-unit cores are listed separately, and within each section rows are ordered by how many boards they appeared on (most first); the Top 4 comparison is the core's own boards against ${esc(name)}'s other carry boards. Larger cores contain smaller ones, so these rows overlap and their numbers can't be added up.</p>
       <h4>4-unit cores</h4>
       ${list(cores.four_unit, 4)}
       <h4>3-unit cores</h4>
