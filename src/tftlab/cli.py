@@ -1051,6 +1051,16 @@ def archetype_report_command(
     balance_window: str = typer.Option("18.3", "--balance-window", help="Balance window to analyze"),
     out_dir: Path = typer.Option(Path("archetype-report"), "--out-dir"),
     print_report: bool = typer.Option(True, "--print/--no-print", help="Also print the Markdown report to stdout"),
+    report_mode: str = typer.Option(
+        "full", "--report-mode",
+        help="full (default): every strategy with its full section. s2-diagnostics: focused S2 research run -- "
+             "B_S2 and C_S2 with all their diagnostics; A skipped; B and C computed only as their variant sources "
+             "and comparison baselines.",
+    ),
+    workers: int = typer.Option(
+        0, "--workers", min=0,
+        help="Processes for each refinement pass (0 = every available CPU). Execution only: results are identical.",
+    ),
 ) -> None:
     """EXPERIMENTAL board-archetype research report (research/validation
     only; results are not served to users).
@@ -1069,15 +1079,20 @@ def archetype_report_command(
     section is printed and saved (as a labelled PARTIAL file) as soon as its
     phase finishes, so a timeout keeps the finished phases. The final report
     files exist only when every phase completed."""
-    from .archetype_research import ArchetypeConfig, Progress, ProgressiveWriter, analyze, load_inputs
+    from .archetype_research import (REPORT_MODES, ArchetypeConfig, Progress, ProgressiveWriter, analyze, load_inputs,
+                                     resolve_workers)
 
-    writer = ProgressiveWriter(out_dir, balance_window)
+    if report_mode not in REPORT_MODES:
+        raise typer.BadParameter(f"--report-mode must be one of {', '.join(REPORT_MODES)}")
+    workers = resolve_workers(workers)
+    writer = ProgressiveWriter(out_dir, balance_window, report_mode)
 
     def emit(line: str) -> None:
         typer.echo(line)
         writer.log(line)
 
     progress = Progress(emit)
+    progress(f"report mode {report_mode}; refinement workers {workers}")
     if print_report:
         # Plain lines, not rich: the log must stay readable (no wrapping at 80 columns).
         typer.echo("Report sections are printed as each phase completes. The report is complete only if the line "
@@ -1094,7 +1109,8 @@ def archetype_report_command(
             typer.echo("\n".join(lines))
 
     report, markdown, membership = analyze(
-        inputs.boards, inputs.population, inputs.access, ArchetypeConfig(), progress=progress, on_section=on_section
+        inputs.boards, inputs.population, inputs.access, ArchetypeConfig(), progress=progress, on_section=on_section,
+        workers=workers, mode=report_mode,
     )
     paths = writer.complete(report, markdown, membership)
     progress("final report written; partial files removed")
