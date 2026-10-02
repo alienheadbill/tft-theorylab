@@ -33,7 +33,12 @@ refuses to continue unless a Postgres server reports
       (item counts, splash weighting, active traits);
    plus two EXPERIMENTAL strategies (B_S2 / C_S2, research only): B and C
    on the same variants with the merged-result similarity check replaced by
-   the S2 rule (`s2_conditions`); A, B and C stay unchanged controls.
+   the S2 rule (`s2_conditions`); A, B and C stay unchanged controls. The
+   experimental strategies also get REPORT-ONLY recursive lock-in
+   instrumentation (`recursive_lock_in_summary`: below-tau tails admitted by
+   accepted merges, Condition-1 attribution of later rejections, the
+   historical-tail removal counterfactual) and tie-order replays
+   (`order_replays`); neither changes the real S2 grouping.
 4. Reports global grouping statistics and a deterministic, human-reviewable
    sample of real groups with member boards, core/flex, carry/tank/Thief's
    Gloves diagnostics and item sets, using canonical names from committed
@@ -475,6 +480,10 @@ class Grouping:
     prune_audit: dict[str, Any] = field(default_factory=dict)
     merge_checks: dict[str, int] = field(default_factory=dict)
     merge_diagnostics: dict[str, Any] = field(default_factory=dict)
+    #: Experimental S2 strategies only (report only): the recursive lock-in
+    #: summary of the real merge and the merge-order replays.
+    lock_in: dict[str, Any] = field(default_factory=dict)
+    order_replays: list[dict[str, Any]] = field(default_factory=list)
 
 
 #: Leader-pass progress line every this many boards (status only).
@@ -653,6 +662,9 @@ def _merge_and_audit(eligible: Sequence[Board], vecs, assign: dict[int, int], lo
     result = Grouping(variant=assign, group=group, log=log, converged=converged, refine_moves=moves, merges=merges,
                       merge_checks=checks,
                       merge_diagnostics=diagnostics.summary(decision_rule) if diagnostics else {})
+    if strategy.merge and strategy.similarity_rule == "s2":  # report only; the real grouping above is final
+        result.lock_in = recursive_lock_in_summary(diagnostics)
+        result.order_replays = order_replays(eligible, vecs, assign, strategy, config, progress)
     progress(f"{strategy.name}: prune audit started")
     result.prune_audit = prune_audit(eligible, vecs, assign, strategy, config)
     progress(f"{strategy.name}: prune audit completed, {result.prune_audit['disagreements']} disagreements "
@@ -762,10 +774,19 @@ class MergeDiagnostics:
     def __init__(self, tau: float) -> None:
         self.tau = tau
         self.rows: list[dict[str, Any]] = []
+        #: Recursive lock-in instrumentation (report only), kept OUT of
+        #: `rows` so every existing diagnostic and sample is unchanged.
+        #: `lock[i]` describes `rows[i]`; `provenance` maps an anonymous
+        #: observation id to its FIRST below-tau admission by an accepted
+        #: merge; `admissions` lists every such admission event.
+        self.lock: list[dict[str, Any]] = []
+        self.provenance: dict[int, dict[str, Any]] = {}
+        self.admissions: list[dict[str, Any]] = []
 
     def record(self, *, accepted: bool, a: int, b: int, variants_a: int, variants_b: int, core_a: set[str],
                core_b: set[str], merged_core: set[str], overlap: float, splash: bool, pre: Mapping[int, float],
-               post: Mapping[int, float], side: Mapping[int, str]) -> None:
+               post: Mapping[int, float], side: Mapping[int, str],
+               evaluate: Callable[[Sequence[int]], Mapping[int, float]] | None = None) -> None:
         tau = self.tau
         obs = sorted(post)
         n_a = sum(1 for k in obs if side[k] == "a")
@@ -807,6 +828,95 @@ class MergeDiagnostics:
             "smaller_side_below_tau_share": side_below[smaller] / n[smaller],
             "larger_side_min_post": side_min[larger], "smaller_side_min_post": side_min[smaller],
         })
+        self.lock.append(self._lock_entry(self.rows[-1], obs, post, side, larger, evaluate))
+
+    def _lock_entry(self, r: Mapping[str, Any], obs: Sequence[int], post: Mapping[int, float], side: Mapping[int, str],
+                    larger: str, evaluate: Callable[[Sequence[int]], Mapping[int, float]] | None) -> dict[str, Any]:
+        """Recursive lock-in measurement of one judged attempt (report only).
+        `historical` = boards an EARLIER accepted merge admitted while below
+        tau (provenance is updated only after this attempt is described, so
+        a board admitted by this very merge is not historical here)."""
+        tau = self.tau
+        smaller = "b" if larger == "a" else "a"
+        hist = self.provenance
+        on = {s: [k for k in obs if side[k] == s] for s in ("a", "b")}
+        larger_below = [k for k in on[larger] if post[k] < tau]
+        failed = [name for name, ok in s2_conditions(
+            larger_below=r["larger_side_below_tau"], smaller_below=r["smaller_side_below_tau"],
+            smaller_boards=r["smaller_side_boards"], merged_below=r["below_tau"], merged_boards=r["merged_boards"],
+            min_post=r["post"]["min"], tau=tau).items() if not ok]
+        below_hist = sum(1 for k in larger_below if k in hist)
+        if not larger_below:
+            attribution = C1_ATTRIBUTION[3]
+        elif below_hist == len(larger_below):
+            attribution = C1_ATTRIBUTION[0]
+        else:
+            attribution = C1_ATTRIBUTION[1] if below_hist else C1_ATTRIBUTION[2]
+        entry: dict[str, Any] = {
+            "attempt": r["attempt"], "outcome": r["outcome"], "larger_side": larger,
+            "historical_tails_a": sum(1 for k in on["a"] if k in hist),
+            "historical_tails_b": sum(1 for k in on["b"] if k in hist),
+            "larger_side_historical_tails": sum(1 for k in on[larger] if k in hist),
+            "smaller_side_historical_tails": sum(1 for k in on[smaller] if k in hist),
+            "larger_side_below_tau_historical": below_hist,
+            "larger_side_below_tau_not_historical": len(larger_below) - below_hist,
+            "larger_side_historical_tails_at_or_above_tau": sum(1 for k in on[larger] if k in hist and post[k] >= tau),
+            "failed_conditions": failed,
+            "condition1_attribution": attribution,
+            "admitted_below_tau": 0, "newly_admitted_below_tau": 0,
+            "counterfactual": None,
+        }
+        if r["outcome"] == "accepted":
+            admitted = [k for k in obs if post[k] < tau]
+            entry["admitted_below_tau"] = len(admitted)
+            for k in admitted:
+                event = {"observation": k, "attempt": r["attempt"], "side": side[k],
+                         "side_role": "larger" if side[k] == larger else "smaller", "similarity": post[k], "tau": tau}
+                self.admissions.append(event)
+                if k not in hist:
+                    hist[k] = event
+                    entry["newly_admitted_below_tau"] += 1
+        elif entry["larger_side_historical_tails"] and evaluate is not None:
+            entry["counterfactual"] = self._tail_removal(r, on, larger, failed, evaluate)
+        return entry
+
+    def _tail_removal(self, r: Mapping[str, Any], on: Mapping[str, list[int]], larger: str, failed: Sequence[str],
+                      evaluate: Callable[[Sequence[int]], Mapping[int, float]]) -> dict[str, Any]:
+        """`historical_tail_removal_counterfactual` for one rejected attempt:
+        drop from the CURRENT larger side every board an earlier accepted
+        merge admitted below tau -- those boards and no others, however
+        weak any other board is -- then recompute the tentative merged
+        profile of (remaining larger side + unchanged smaller side) and the
+        unchanged S2 conditions (sides re-derived by board count, ties to
+        side a, exactly as the real rule derives them). Changes nothing."""
+        tau, hist = self.tau, self.provenance
+        smaller = "b" if larger == "a" else "a"
+        removed = [k for k in on[larger] if k in hist]
+        kept = {larger: [k for k in on[larger] if k not in hist], smaller: list(on[smaller])}
+        before = {"merged_boards": r["merged_boards"], "larger_side_boards": r["larger_side_boards"],
+                  "smaller_side_boards": r["smaller_side_boards"], "larger_side_below_tau": r["larger_side_below_tau"],
+                  "smaller_side_below_tau": r["smaller_side_below_tau"], "merged_below_tau": r["below_tau"],
+                  "min_similarity": r["post"]["min"], "failed_conditions": list(failed)}
+        out: dict[str, Any] = {"removed_boards": len(removed), "removed_share_of_larger_side": len(removed) / len(on[larger]),
+                               "before": before, "after": None, "evaluable": bool(kept[larger]), "passes": False}
+        if not kept[larger]:  # every larger-side board was a historical tail: nothing left to merge with
+            return out
+        subset = sorted(kept["a"] + kept["b"])
+        post = evaluate(subset)
+        new_larger = "a" if len(kept["a"]) >= len(kept["b"]) else "b"
+        new_smaller = "b" if new_larger == "a" else "a"
+        below = {s: sum(1 for k in kept[s] if post[k] < tau) for s in ("a", "b")}
+        conditions = s2_conditions(larger_below=below[new_larger], smaller_below=below[new_smaller],
+                                   smaller_boards=len(kept[new_smaller]), merged_below=below["a"] + below["b"],
+                                   merged_boards=len(subset), min_post=min(post.values()), tau=tau)
+        out["after"] = {"merged_boards": len(subset), "larger_side_boards": len(kept[new_larger]),
+                        "smaller_side_boards": len(kept[new_smaller]), "larger_side_below_tau": below[new_larger],
+                        "smaller_side_below_tau": below[new_smaller], "merged_below_tau": below["a"] + below["b"],
+                        "min_similarity": min(post.values()),
+                        "failed_conditions": [name for name, ok in conditions.items() if not ok],
+                        "sides_flipped": new_larger != larger}
+        out["passes"] = all(conditions.values())
+        return out
 
     def _aggregate(self, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         def counts(labels: Sequence[str], values: Iterable[str]) -> dict[str, int]:
@@ -909,7 +1019,7 @@ class MergeDiagnostics:
                 "decision_rule_mismatches": sum(
                     all(shadow_conditions(r, self.tau)[decision_rule].values()) != (r["outcome"] == "accepted")
                     for r in self.rows),
-                "trajectory": merge_trajectory(accepted, self.tau)}
+                "trajectory": merge_trajectory(accepted, self.tau, {e["attempt"]: e for e in self.lock})}
 
 
 # ---------------------------------------------------------------- shadow merge rules (report only)
@@ -970,6 +1080,11 @@ def s2_conditions(*, larger_below: int, smaller_below: int, smaller_boards: int,
             "smaller side: <= 10% below tau": SHADOW_SMALLER_TAIL * smaller_below <= smaller_boards,
             "merged: <= 1% below tau": SHADOW_MERGED_TAIL * merged_below <= merged_boards,
             "every board >= tau - 0.10": min_post >= tau - SHADOW_FLOOR}
+
+
+#: The S2 condition names, in `s2_conditions` order (labels only).
+S2_CONDITION_NAMES: tuple[str, ...] = tuple(s2_conditions(larger_below=0, smaller_below=0, smaller_boards=1, merged_below=0,
+                                                          merged_boards=1, min_post=1.0, tau=0.0))
 
 
 def shadow_conditions(r: Mapping[str, Any], tau: float) -> dict[str, dict[str, bool]]:
@@ -1148,13 +1263,26 @@ def _variant_band(n: int) -> str:
     return next(label for label, lo, hi in TRAJECTORY_VARIANT_BANDS if n >= lo and (hi is None or n <= hi))
 
 
-def merge_trajectory(accepted: Sequence[Mapping[str, Any]], tau: float) -> dict[str, Any]:
+def merge_trajectory(accepted: Sequence[Mapping[str, Any]], tau: float,
+                     lock: Mapping[int, Mapping[str, Any]] | None = None) -> dict[str, Any]:
     """Accepted merges of an experimental strategy, each measured AT THE TIME
     it was accepted (against its tentative merged profile). Later merges can
-    change the final group; see the final-group diagnostics for that."""
+    change the final group; see the final-group diagnostics for that.
+    `lock` (attempt -> recursive lock-in entry) adds each merge's tail
+    provenance: boards it admitted below tau and historical tails it held."""
+    def provenance(r: Mapping[str, Any]) -> dict[str, Any]:
+        entry = (lock or {}).get(r["attempt"])
+        if entry is None:
+            return {}
+        return {"admitted_below_tau": entry["admitted_below_tau"],
+                "newly_admitted_below_tau": entry["newly_admitted_below_tau"],
+                "historical_tails_before_merge": entry["historical_tails_a"] + entry["historical_tails_b"],
+                "larger_side_historical_tails": entry["larger_side_historical_tails"],
+                "smaller_side_historical_tails": entry["smaller_side_historical_tails"]}
+
     def row(r: Mapping[str, Any]) -> dict[str, Any]:
         larger, smaller = r["larger_side"], "b" if r["larger_side"] == "a" else "a"
-        return {"attempt": r["attempt"], "merged_boards": r["merged_boards"],
+        return {**provenance(r), "attempt": r["attempt"], "merged_boards": r["merged_boards"],
                 "larger_side_boards": r["larger_side_boards"], "smaller_side_boards": r["smaller_side_boards"],
                 "variants_after_merge": r["a_variants"] + r["b_variants"], "below_tau": r["below_tau"],
                 "below_tau_share": r["below_tau_share"], "smaller_side_below_tau": r["smaller_side_below_tau"],
@@ -1188,9 +1316,346 @@ def merge_trajectory(accepted: Sequence[Mapping[str, Any]], tau: float) -> dict[
     }
 
 
+# ---------------------------------------------------------------- experimental S2 strategies: recursive lock-in (report only)
+
+#: Mutually exclusive Condition-1 attribution of an S2 similarity rejection.
+C1_ATTRIBUTION: tuple[str, ...] = ("all historical-tail", "partial historical-tail", "no historical-tail",
+                                   "condition 1 did not fail")
+#: Condition-failure categories of an S2 similarity rejection (an attempt can
+#: be in several; the first three split the Condition-1 failures).
+REJECTION_CATEGORIES: tuple[str, ...] = (
+    "condition 1 failed: all failing larger-side boards are historical tails",
+    "condition 1 failed: some failing larger-side boards are historical tails",
+    "condition 1 failed: no failing larger-side board is a historical tail",
+    "only condition 1 failed",
+    "only the smaller-side tail condition failed",
+    "only the merged-tail condition failed",
+    "floor condition failed (alone or with others)",
+    "multiple conditions failed",
+)
+LOCK_SAMPLE_PER_REASON = 2
+LOCK_IN_DEFINITIONS: dict[str, str] = {
+    "scope": "Experimental S2 strategies only. REPORT ONLY: every number here is measured on the real S2 merge "
+             "trajectory (or on a report-only order replay); no grouping decision reads any of it, and S2's conditions, "
+             "tau, tail percentages and every other threshold are unchanged.",
+    "historically admitted tail": "a board that was below tau against the tentative merged profile of an ACCEPTED S2 "
+                                  "merge at the moment that merge was accepted (anonymous observation id, attempt, "
+                                  "pre-merge side a/b, larger/smaller role, similarity and tau are kept). It stays "
+                                  "historical through every later merge whatever its later similarity; a board that "
+                                  "falls below tau only later, without an accepted merge admitting it below tau, is "
+                                  "never historical. Boards below tau inside an original variant are not historical.",
+    "historical (at an attempt)": "admitted by an accepted merge judged EARLIER than this attempt.",
+    "similarity_rejection_attribution": "denominator: every S2 similarity rejection, i.e. every tentative merge that "
+                                        "passed the pairwise core checks (overlap, swaps, C's restriction) and the "
+                                        "merged-core check and was then rejected by the S2 conditions. Merged-core "
+                                        "rejections never reach the similarity check and are excluded.",
+    "condition 1": "S2's 'larger side: no board below tau'. Failing larger-side boards = larger-side boards below "
+                   "tau against this attempt's tentative merged profile. A historical tail now at or above tau is "
+                   "not a current blocker.",
+    "condition1_attribution": "mutually exclusive over the denominator: 'all historical-tail' (Condition 1 failed and "
+                              "every failing larger-side board is historical), 'partial historical-tail' (some are), "
+                              "'no historical-tail' (none are), 'condition 1 did not fail'.",
+    "categories": "multi-label condition-failure categories over the same denominator (an attempt can be in "
+                  "several); 'exact_failed_condition_sets' is the mutually exclusive version.",
+    "historical_tail_removal_counterfactual": "for an S2 similarity rejection whose CURRENT larger side holds >= 1 "
+                                              "historical tail: remove exactly those historical-tail boards from the "
+                                              "larger side (no other board, however weak; no search for a passing "
+                                              "subset), recompute the tentative merged profile of the remaining larger "
+                                              "side + the unchanged smaller side, and evaluate the unchanged S2 "
+                                              "conditions (sides re-derived by board count, ties to side a, as the real "
+                                              "rule does). It changes no real grouping decision and is a diagnostic "
+                                              "of recursive lock-in, not evidence that the merge should happen.",
+    "tail_trajectory": "attempts judged after an accepted merge admitted below-tau boards, where either side "
+                       "already holds historical tails; outcomes as the real S2 decided them.",
+    "order_sensitivity": "report-only replays of the same S2 merge on the same variants. They change only which of "
+                         "several candidates tied at the SAME highest core overlap is judged first (baseline = the real "
+                         "order, lowest ids first; reversed = highest ids first; seeded = fixed deterministic "
+                         "pseudo-random permutations of the tied candidates). A lower-overlap candidate is never judged "
+                         "while a valid higher-overlap one exists. The real S2 grouping stays the canonical baseline.",
+    "evidence": "Patch-window results on a population that has already shaped this work (e.g. 18.3) are "
+                "DEVELOPMENT evidence, not independent validation. No result here proves that any composition-family "
+                "rule is correct, and placement plays no part in any of it.",
+}
+
+
+def _counts(entries: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    """Lock-in headline counts of one merge run (real or replay)."""
+    rejected = [e for e in entries if e["outcome"] == "rejected_similarity"]
+    c1 = [e for e in rejected if e["condition1_attribution"] != C1_ATTRIBUTION[3]]
+    cf = [e for e in rejected if e["counterfactual"] is not None]
+    return {
+        "accepted_merges": sum(e["outcome"] == "accepted" for e in entries),
+        "accepted_merges_with_any_board_below_tau": sum(e["admitted_below_tau"] > 0 for e in entries),
+        "boards_admitted_below_tau": sum(e["newly_admitted_below_tau"] for e in entries),
+        "similarity_rejections": len(rejected),
+        "condition1_rejections": len(c1),
+        "condition1_rejections_all_historical_tail": sum(e["condition1_attribution"] == C1_ATTRIBUTION[0] for e in c1),
+        "condition1_rejections_partial_historical_tail": sum(e["condition1_attribution"] == C1_ATTRIBUTION[1] for e in c1),
+        "historical_tail_attributed_condition1_rejections": sum(e["condition1_attribution"] in C1_ATTRIBUTION[:2] for e in c1),
+        "counterfactual_eligible": len(cf),
+        "counterfactual_recoveries": sum(e["counterfactual"]["passes"] for e in cf),
+    }
+
+
+def _categories(e: Mapping[str, Any]) -> list[str]:
+    c1, small, merged, floor = S2_CONDITION_NAMES
+    failed = set(e["failed_conditions"])
+    out = []
+    if c1 in failed:
+        out.append(REJECTION_CATEGORIES[C1_ATTRIBUTION.index(e["condition1_attribution"])])
+    for single, label in ((c1, REJECTION_CATEGORIES[3]), (small, REJECTION_CATEGORIES[4]), (merged, REJECTION_CATEGORIES[5])):
+        if failed == {single}:
+            out.append(label)
+    if floor in failed:
+        out.append(REJECTION_CATEGORIES[6])
+    if len(failed) > 1:
+        out.append(REJECTION_CATEGORIES[7])
+    return out
+
+
+def _lock_case(reason: str, r: Mapping[str, Any], e: Mapping[str, Any]) -> dict[str, Any]:
+    larger, smaller = r["larger_side"], "b" if r["larger_side"] == "a" else "a"
+    cf = e["counterfactual"]
+    return {
+        "reason": reason, "attempt": r["attempt"], "outcome": r["outcome"], "merged_boards": r["merged_boards"],
+        "larger_side_boards": r["larger_side_boards"], "smaller_side_boards": r["smaller_side_boards"],
+        "core_larger": r[f"core_{larger}"], "core_smaller": r[f"core_{smaller}"],
+        "larger_only": r[f"{larger}_only"], "smaller_only": r[f"{smaller}_only"], "core_overlap": r["core_overlap"],
+        "larger_side_historical_tails": e["larger_side_historical_tails"],
+        "smaller_side_historical_tails": e["smaller_side_historical_tails"],
+        "larger_side_below_tau": r["larger_side_below_tau"],
+        "larger_side_below_tau_historical": e["larger_side_below_tau_historical"],
+        "larger_side_below_tau_not_historical": e["larger_side_below_tau_not_historical"],
+        "smaller_side_below_tau": r["smaller_side_below_tau"], "merged_below_tau": r["below_tau"],
+        "condition1_attribution": e["condition1_attribution"],
+        "failed_conditions_before": e["failed_conditions"],
+        "failed_conditions_after": cf["after"]["failed_conditions"] if cf and cf["after"] else None,
+        "counterfactual_passes": cf["passes"] if cf else None,
+        "removed_boards": cf["removed_boards"] if cf else None,
+        "larger_side_min_similarity": r["larger_side_min_post"], "smaller_side_min_similarity": r["smaller_side_min_post"],
+        "post_min": r["post"]["min"], "post_p10": r["post"]["p10"],
+        "counterfactual_after": cf["after"] if cf else None,
+    }
+
+
+def recursive_lock_in_summary(diag: MergeDiagnostics) -> dict[str, Any]:
+    """Report-only recursive lock-in section of one S2 merge run (see
+    LOCK_IN_DEFINITIONS). Reads `diag`, decides nothing."""
+    tau, rows, lock = diag.tau, {r["attempt"]: r for r in diag.rows}, diag.lock
+    rejected = [e for e in lock if e["outcome"] == "rejected_similarity"]
+    accepted = [e for e in lock if e["outcome"] == "accepted"]
+    adm = diag.admissions
+    provenance = {
+        "accepted_merges": len(accepted),
+        "accepted_merges_with_any_board_below_tau": sum(e["admitted_below_tau"] > 0 for e in accepted),
+        "tail_admission_events": len(adm),
+        "boards_admitted_below_tau": len(diag.provenance),
+        "boards_admitted_below_tau_more_than_once": sum(c > 1 for c in Counter(a["observation"] for a in adm).values()),
+        "admission_events_by_side_role": _counted(("larger", "smaller"), (a["side_role"] for a in adm)),
+        "admission_events_by_pre_merge_side": _counted(("a", "b"), (a["side"] for a in adm)),
+        "similarity_at_admission": quantiles(a["similarity"] for a in adm),
+        "shortfall_below_tau_at_admission": quantiles(tau - a["similarity"] for a in adm),
+    }
+    c1 = [e for e in rejected if e["condition1_attribution"] != C1_ATTRIBUTION[3]]
+    combos = Counter(" + ".join(e["failed_conditions"]) for e in rejected)
+    attribution = {
+        "denominator": "S2 similarity rejections (passed the pairwise core and merged-core checks)",
+        "s2_similarity_rejections": len(rejected),
+        "condition_failures": _counted(S2_CONDITION_NAMES, (c for e in rejected for c in e["failed_conditions"])),
+        "exact_failed_condition_sets": dict(sorted(combos.items(), key=lambda kv: (-kv[1], kv[0]))),
+        "categories": _counted(REJECTION_CATEGORIES, (c for e in rejected for c in _categories(e))),
+        "condition1_attribution": _counted(C1_ATTRIBUTION, (e["condition1_attribution"] for e in rejected)),
+        "condition1_attribution_when_condition1_is_the_only_failure": _counted(
+            C1_ATTRIBUTION[:3], (e["condition1_attribution"] for e in c1 if len(e["failed_conditions"]) == 1)),
+        "failing_larger_side_boards": sum(e["larger_side_below_tau_historical"] + e["larger_side_below_tau_not_historical"]
+                                          for e in rejected),
+        "failing_larger_side_boards_historical_tails": sum(e["larger_side_below_tau_historical"] for e in rejected),
+        "failing_larger_side_boards_not_historical": sum(e["larger_side_below_tau_not_historical"] for e in rejected),
+        "historical_tails_on_larger_side_at_or_above_tau": sum(e["larger_side_historical_tails_at_or_above_tau"]
+                                                               for e in rejected),
+    }
+    eligible = [e for e in rejected if e["counterfactual"] is not None]
+    evaluable = [e for e in eligible if e["counterfactual"]["evaluable"]]
+    cfs = [e["counterfactual"] for e in evaluable]
+
+    def side(key: str) -> dict[str, Any]:
+        return {"before": quantiles(c["before"][key] for c in cfs), "after": quantiles(c["after"][key] for c in cfs)}
+
+    counterfactual = {
+        "eligible_rejections": len(eligible),
+        "not_evaluable_every_larger_side_board_removed": len(eligible) - len(evaluable),
+        "would_pass_all_unchanged_s2_conditions": sum(c["passes"] for c in cfs),
+        "would_still_fail": sum(not c["passes"] for c in cfs),
+        "by_condition1_attribution": {label: {"eligible": sum(e["condition1_attribution"] == label for e in eligible),
+                                              "would_pass": sum(e["condition1_attribution"] == label
+                                                                and e["counterfactual"]["passes"] for e in evaluable)}
+                                      for label in C1_ATTRIBUTION},
+        "failed_conditions_before": _counted(S2_CONDITION_NAMES, (c for x in cfs for c in x["before"]["failed_conditions"])),
+        "failed_conditions_after": _counted(S2_CONDITION_NAMES, (c for x in cfs for c in x["after"]["failed_conditions"])),
+        "failure_transitions": dict(sorted(Counter(
+            f"{' + '.join(x['before']['failed_conditions'])} -> {' + '.join(x['after']['failed_conditions']) or 'passes'}"
+            for x in cfs).items(), key=lambda kv: (-kv[1], kv[0]))),
+        "sides_flipped": sum(c["after"]["sides_flipped"] for c in cfs),
+        "removed_boards_total": sum(e["counterfactual"]["removed_boards"] for e in eligible),
+        "removed_boards": quantiles(e["counterfactual"]["removed_boards"] for e in eligible),
+        "removed_share_of_larger_side": quantiles(e["counterfactual"]["removed_share_of_larger_side"] for e in eligible),
+        **{key: side(key) for key in ("merged_boards", "min_similarity", "larger_side_below_tau", "smaller_side_below_tau",
+                                      "merged_below_tau")},
+    }
+    involving = [e for e in lock if e["historical_tails_a"] + e["historical_tails_b"]]
+    on_larger = [e for e in involving if e["larger_side_historical_tails"]]
+    trajectory = {
+        "accepted_merges": len(accepted),
+        "accepted_merges_with_any_board_below_tau": provenance["accepted_merges_with_any_board_below_tau"],
+        "boards_admitted_below_tau": len(diag.provenance),
+        "admission_events_by_side_role": provenance["admission_events_by_side_role"],
+        "later_attempts_involving_historical_tails": len(involving),
+        "later_attempts_involving_historical_tails_accepted": sum(e["outcome"] == "accepted" for e in involving),
+        "later_s2_rejections_involving_historical_tails": sum(e["outcome"] != "accepted" for e in involving),
+        "later_attempts_with_historical_tails_on_larger_side": len(on_larger),
+        "later_s2_rejections_with_historical_tails_on_larger_side": sum(e["outcome"] != "accepted" for e in on_larger),
+        "later_condition1_rejections_with_historical_tails_on_larger_side": sum(
+            e["outcome"] != "accepted" and e["condition1_attribution"] != C1_ATTRIBUTION[3] for e in on_larger),
+        "later_condition1_rejections_attributed_to_historical_tails": sum(
+            e["condition1_attribution"] in C1_ATTRIBUTION[:2] for e in rejected),
+        "counterfactual_recoveries": counterfactual["would_pass_all_unchanged_s2_conditions"],
+    }
+    n = lambda e: rows[e["attempt"]]["merged_boards"]  # noqa: E731
+    reasons = [
+        ("largest later rejection recovered by historical-tail removal",
+         [e for e in evaluable if e["counterfactual"]["passes"]]),
+        ("condition 1 failed: ALL failing larger-side boards are historical tails",
+         [e for e in rejected if e["condition1_attribution"] == C1_ATTRIBUTION[0]]),
+        ("condition 1 failed: PARTIAL historical-tail attribution",
+         [e for e in rejected if e["condition1_attribution"] == C1_ATTRIBUTION[1]]),
+        ("condition 1 failed with NO historical tail involved (none on either side)",
+         [e for e in rejected if e["condition1_attribution"] == C1_ATTRIBUTION[2]
+          and not e["historical_tails_a"] + e["historical_tails_b"]]),
+    ]
+    chosen: dict[int, dict[str, Any]] = {}
+    for reason, pool in reasons:
+        for e in [e for e in sorted(pool, key=lambda e: (-n(e), e["attempt"])) if e["attempt"] not in chosen][:LOCK_SAMPLE_PER_REASON]:
+            chosen[e["attempt"]] = _lock_case(reason, rows[e["attempt"]], e)
+    return {"definitions": LOCK_IN_DEFINITIONS, "tau": tau, "counts": _counts(lock),
+            "accepted_tail_provenance_summary": provenance, "similarity_rejection_attribution": attribution,
+            "historical_tail_removal_counterfactual": counterfactual, "tail_trajectory": trajectory,
+            "deterministic_review_samples": list(chosen.values())}
+
+
+# ---------------------------------------------------------------- experimental S2 strategies: merge-order sensitivity (report only)
+
+_MASK64 = (1 << 64) - 1
+
+
+def _splitmix64(x: int) -> int:
+    x = (x + 0x9E3779B97F4A7C15) & _MASK64
+    x = ((x ^ (x >> 30)) * 0xBF58476D1CE4E5B9) & _MASK64
+    x = ((x ^ (x >> 27)) * 0x94D049BB133111EB) & _MASK64
+    return x ^ (x >> 31)
+
+
+def _tie_hash(seed: int, *values: int) -> int:
+    """Deterministic across processes and platforms (no Python `hash`)."""
+    h = _splitmix64(seed & _MASK64)
+    for v in values:
+        h = _splitmix64(h ^ (v & _MASK64))
+    return h
+
+
+@dataclass(frozen=True)
+class TieOrder:
+    """A REPORT-ONLY tie order for `merge_variants`: which of several valid
+    candidates tied at the same highest core overlap is judged first.
+    "baseline" = the real order (lowest group ids first); "reversed" =
+    highest ids first; "seeded" = a fixed pseudo-random permutation of the
+    tied candidates (the key hashes the seed, both group ids and their
+    current versions, so a pair whose groups changed is a new draw)."""
+
+    mode: str
+    seed: int = 0
+
+    @property
+    def label(self) -> str:
+        return f"seeded tie permutation {self.seed}" if self.mode == "seeded" else f"{self.mode} tie order"
+
+    def key(self, lo: int, hi: int, va: int, vb: int) -> tuple[int, ...]:
+        if self.mode == "baseline":
+            return (lo, hi)
+        if self.mode == "reversed":
+            return (-lo, -hi)
+        if self.mode == "seeded":
+            return (_tie_hash(self.seed, lo, hi, va, vb), lo, hi)
+        raise ValueError(f"unknown tie order {self.mode!r}")
+
+
+#: Fixed before any real run: the baseline (a check that the replay path
+#: reproduces the real grouping), the reversed order, and three seeds -- the
+#: smallest set that still shows whether different tie choices diverge.
+ORDER_REPLAYS: tuple[TieOrder, ...] = (TieOrder("baseline"), TieOrder("reversed"), TieOrder("seeded", 1),
+                                       TieOrder("seeded", 2), TieOrder("seeded", 3))
+
+
+def order_replays(boards: Sequence[Board], vecs, assign: Mapping[int, int], strategy: Strategy, config: ArchetypeConfig,
+                  progress: Callable[[str], None] | None = None,
+                  orders: Sequence[TieOrder] = ORDER_REPLAYS) -> list[dict[str, Any]]:
+    """Re-run the strategy's variant merge in memory once per tie order, on
+    the same variants and vectors (no database, no new data). Report only:
+    the real grouping is never replaced."""
+    progress = progress or _noop
+    members = [b for b in boards if b.obs in assign]
+    out = []
+    for order in orders:
+        progress(f"{strategy.name}: order replay '{order.label}' started")
+        diag = MergeDiagnostics(config.tau)
+        stats = {"judged_steps": 0, "steps_with_tied_candidates": 0, "max_tied_candidates": 0}
+        to_group, log, checks = merge_variants(members, assign, strategy, config, vecs=vecs, diagnostics=diag,
+                                               tie_order=order, tie_stats=stats)
+        out.append({"replay": order.label, "mode": order.mode, "seed": order.seed if order.mode == "seeded" else None,
+                    "variant_to_group": to_group, "merges": len(log), "merge_checks": checks, "tie_stats": stats,
+                    "decision_rule_mismatches": sum(
+                        all(shadow_conditions(r, config.tau)["S2"].values()) != (r["outcome"] == "accepted")
+                        for r in diag.rows),
+                    "counts": _counts(diag.lock)})
+        progress(f"{strategy.name}: order replay '{order.label}' completed, {len(log)} merges, "
+                 f"{len(set(to_group.values()))} groups, {stats['steps_with_tied_candidates']} of "
+                 f"{stats['judged_steps']} judged steps had tied candidates")
+    return out
+
+
+def partition_disagreement(universe: Iterable[int], x: Mapping[int, int], y: Mapping[int, int]) -> dict[str, Any]:
+    """Pairwise co-membership disagreement between two partitions of the same
+    boards (a board absent from a mapping is a singleton). Pair counts come
+    from group sizes and group intersections (sum of C(n, 2)), never from
+    enumerating board pairs."""
+    obs = sorted(set(universe))
+
+    def pairs(c: int) -> int:
+        return c * (c - 1) // 2
+
+    tx = sum(pairs(c) for c in Counter(x[k] for k in obs if k in x).values())
+    ty = sum(pairs(c) for c in Counter(y[k] for k in obs if k in y).values())
+    inter = Counter((x[k], y[k]) for k in obs if k in x and k in y)
+    both = sum(pairs(c) for c in inter.values())
+    size_x, size_y = Counter(x[k] for k in obs if k in x), Counter(y[k] for k in obs if k in y)
+    unchanged = sum(c for (gx, gy), c in inter.items() if c == size_x[gx] == size_y[gy])
+    unchanged += sum(1 for k in obs if k not in x and k not in y)
+    either = tx + ty - both
+    total = pairs(len(obs))
+    disagree = tx + ty - 2 * both
+    return {"boards": len(obs), "board_pairs": total, "pairs_together_in_baseline": tx, "pairs_together_in_replay": ty,
+            "pairs_together_in_both": both, "together_in_baseline_apart_in_replay": tx - both,
+            "together_in_replay_apart_in_baseline": ty - both, "disagreeing_pairs": disagree,
+            "disagreement_share_of_all_pairs": disagree / total if total else 0.0,
+            "disagreement_share_of_pairs_together_in_either": disagree / either if either else 0.0,
+            "boards_with_identical_group_membership": unchanged,
+            "boards_with_changed_group_membership": len(obs) - unchanged}
+
+
 def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy: Strategy,
                    config: ArchetypeConfig, *, vecs: Mapping[int, tuple[dict[str, float], dict[str, float]]] | None = None,
-                   diagnostics: MergeDiagnostics | None = None) -> tuple[dict[int, int], list[str], dict[str, int]]:
+                   diagnostics: MergeDiagnostics | None = None, tie_order: TieOrder | None = None,
+                   tie_stats: dict[str, int] | None = None,
+                   trace: list[tuple[float, float | None, int]] | None = None) -> tuple[dict[int, int], list[str], dict[str, int]]:
     """Variant -> group. Greedy: the highest core-overlap mergeable pair first
     (ties: lowest ids), every candidate re-checked against the merged group's
     recomputed statistics. Pairwise checks alone let a merged core shrink
@@ -1202,7 +1667,17 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
 
     `diagnostics` (research only) receives a measurement of every tentative
     merge that reaches the similarity check; it only reads the merge state
-    and never influences a decision."""
+    and never influences a decision.
+
+    `tie_order` (REPORT-ONLY order replays; None for every real grouping)
+    changes only which of several candidates tied at the SAME highest core
+    overlap is judged first: each step takes every valid candidate at the
+    current top score off the queue, picks one by `tie_order.key`, and puts
+    the others back. A lower-overlap candidate is never judged while a valid
+    higher-overlap one exists, and every check and threshold is unchanged.
+    `TieOrder("baseline")` reproduces the real order exactly. `tie_stats`
+    receives tie counts on that path; `trace` (tests only) receives, per
+    judged step, (chosen score, brute-force best valid score, tied count)."""
     if vecs is None:
         champions = load_roster().champions
         vecs = {b.obs: board_vectors(b, strategy, config, champions) for b in boards}
@@ -1314,9 +1789,16 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
         splash = (strategy.merge == "structure_aware"
                   and ((not da and len(db_) == 1) or (not db_ and len(da) == 1))
                   and len(ca & cb) >= config.merge_min_result_core)
+
+        def evaluate(subset: Sequence[int]) -> dict[int, float]:
+            """Similarity of each board to the mean profile of `subset` (the
+            lock-in counterfactual); reads vectors only."""
+            sub = mean_profile([vecs[k] for k in subset])
+            return {k: similarity(vecs[k], sub, strategy) for k in subset}
+
         diagnostics.record(accepted=accepted, a=a, b=b, variants_a=len(groups[a]), variants_b=len(groups[b]),
                            core_a=ca, core_b=cb, merged_core=merged_core, overlap=overlap, splash=splash,
-                           pre=pre, post=post, side=side)
+                           pre=pre, post=post, side=side, evaluate=evaluate)
 
     def core_index() -> dict[str, set[int]]:
         idx: dict[str, set[int]] = defaultdict(set)
@@ -1339,16 +1821,55 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
                 heapq.heappush(heap, (-s, lo, hi, version[lo], version[hi]))
 
     rejected: set[tuple[int, int, int, int]] = set()
+
+    def pop_tied() -> tuple[float, int, int, int, int] | None:
+        """Replay path only: every valid candidate at the current top score
+        (stale, already-rejected and duplicate entries dropped exactly as the
+        real loop drops them), one chosen by the tie key, the rest re-queued."""
+        top, tied, seen = heap[0][0], [], set()
+        while heap and heap[0][0] == top:
+            entry = heapq.heappop(heap)
+            _, a, b, va, vb = entry
+            if a not in groups or b not in groups or version[a] != va or version[b] != vb:
+                continue
+            if entry[1:] in rejected or entry[1:] in seen:
+                continue
+            seen.add(entry[1:])
+            tied.append(entry)
+        if not tied:
+            return None
+        tied.sort(key=lambda e: tie_order.key(*e[1:]))
+        for entry in tied[1:]:
+            heapq.heappush(heap, entry)
+        if tie_stats is not None:
+            tie_stats["judged_steps"] = tie_stats.get("judged_steps", 0) + 1
+            tie_stats["steps_with_tied_candidates"] = tie_stats.get("steps_with_tied_candidates", 0) + (len(tied) > 1)
+            tie_stats["max_tied_candidates"] = max(tie_stats.get("max_tied_candidates", 0), len(tied))
+        if trace is not None:  # tests only: the best valid score over ALL current pairs, by brute force
+            ids = sorted(groups)
+            scores = [score(g, h) for i, g in enumerate(ids) for h in ids[i + 1:]
+                      if (g, h, version[g], version[h]) not in rejected]
+            trace.append((-tied[0][0], max((s for s in scores if s is not None), default=None), len(tied)))
+        return tied[0]
+
     for g in sorted(groups):
         push_pairs(g)
     while heap:
-        neg, a, b, va, vb = heapq.heappop(heap)
-        if a not in groups or b not in groups or version[a] != va or version[b] != vb:
-            continue
-        if score(a, b) is None:  # stats unchanged since push, but stay defensive
-            continue
-        if (a, b, va, vb) in rejected:  # the same pair can be queued from both sides
-            continue
+        if tie_order is None:  # every real grouping
+            neg, a, b, va, vb = heapq.heappop(heap)
+            if a not in groups or b not in groups or version[a] != va or version[b] != vb:
+                continue
+            if score(a, b) is None:  # stats unchanged since push, but stay defensive
+                continue
+            if (a, b, va, vb) in rejected:  # the same pair can be queued from both sides
+                continue
+        else:  # report-only order replay
+            picked = pop_tied()
+            if picked is None:
+                continue
+            neg, a, b, va, vb = picked
+            if score(a, b) is None:
+                continue
         failed = result_check(a, b)
         if diagnostics is not None and failed != "core":  # after the decision; before any state changes
             measure(a, b, -neg, failed is None)
@@ -2026,6 +2547,174 @@ def chaining_review(final: Mapping[str, Any]) -> list[tuple[str, int]]:
     return [(reason, g) for g, reason in chosen.items()]
 
 
+def light_group_cores(group: Mapping[int, int], by_obs: Mapping[int, Board],
+                      config: ArchetypeConfig) -> dict[int, dict[str, Any]]:
+    """Per group: size, member observations and `core_candidates` exactly as
+    `group_summary` defines them (presence >= display_core_presence, ordered
+    by presence then id) -- without the item/outcome work, for replays."""
+    members: dict[int, list[int]] = defaultdict(list)
+    for k, g in sorted(group.items()):
+        members[g].append(k)
+    out = {}
+    for g, obs in sorted(members.items()):
+        presence = Counter(u for k in obs for u in by_obs[k].identity)
+        core = [u for u, c in sorted(presence.items(), key=lambda kv: (-kv[1], kv[0])) if c / len(obs) >= config.display_core_presence]
+        out[g] = {"group": g, "boards": len(obs), "core_candidates": core, "members": frozenset(obs)}
+    return out
+
+
+FAMILY_CHANGE_LABELS: tuple[str, ...] = ("identical", "more merged", "more fragmented",
+                                         "same group count, different membership")
+REGRESSION_CHANGE_LABELS: tuple[str, ...] = (
+    "absent in both", "appears (absent in baseline)", "disappears (absent in replay)", "present in both: identical",
+    "present in both: more groups", "present in both: fewer groups", "present in both: same group count, different membership")
+#: Numeric per-run metrics compared between each replay and the baseline.
+ORDER_METRICS: tuple[str, ...] = (
+    "groups", "grouped_boards", "ungrouped_boards", "accepted_merges", "core_rejections", "similarity_rejections",
+    "condition1_rejections", "historical_tail_attributed_condition1_rejections", "counterfactual_eligible",
+    "counterfactual_recoveries", "boards_admitted_below_tau", "final_boards_below_tau",
+    "final_groups_with_any_board_below_tau", "tiny_core_large_groups")
+ORDER_SAMPLE_LIMIT = 5
+ORDER_SENSITIVITY_DEFINITIONS: dict[str, str] = {
+    "baseline": "the REAL S2 grouping (canonical); the 'baseline tie order' replay re-runs it through the replay path "
+                "and must be identical (checked, not assumed).",
+    "tie_stats": "judged steps on the replay path; a step 'had tied candidates' when >= 2 valid candidates shared the "
+                 "top core overlap (only those steps can differ between tie orders).",
+    "partition_vs_baseline": "pairwise co-membership over the strategy's eligible boards (>= min_identity_units; "
+                             "ungrouped boards are singletons): pairs together in the baseline but apart in the replay, "
+                             "and vice versa. Shares use two stated denominators: all eligible board pairs, and pairs "
+                             "together in either partition. Pair counts come from group-intersection sizes.",
+    "family_anchors": "groups whose core (presence >= display core threshold) contains every anchor unit, as in the "
+                      "family review; 'identical' = the same matching groups with the same members; otherwise more "
+                      "merged (fewer matching groups), more fragmented (more), or same count with different membership. "
+                      "Descriptive structural proxies, not ground truth; fewer groups is not better by itself.",
+    "regression_anchors": "the same lookup for the shells of earlier mixed groups (report only; never used by "
+                          "grouping), compared with the baseline.",
+}
+
+
+def _anchor_lookup(light: Mapping[int, Mapping[str, Any]], anchors: frozenset[str]) -> dict[str, Any]:
+    m = anchored_groups(light, anchors)
+    return {"groups": len(m), "boards": sum(s["boards"] for s in m), "largest_sizes": [s["boards"] for s in m[:8]],
+            "largest_core_sizes": [len(s["core_candidates"]) for s in m[:8]],
+            "largest_cores": [list(s["core_candidates"]) for s in m[:3]],
+            "members": frozenset(s["members"] for s in m)}
+
+
+def _family_change(base: Mapping[str, Any], rep: Mapping[str, Any]) -> str:
+    if base["members"] == rep["members"]:
+        return FAMILY_CHANGE_LABELS[0]
+    if rep["groups"] != base["groups"]:
+        return FAMILY_CHANGE_LABELS[1] if rep["groups"] < base["groups"] else FAMILY_CHANGE_LABELS[2]
+    return FAMILY_CHANGE_LABELS[3]
+
+
+def _regression_change(base: Mapping[str, Any], rep: Mapping[str, Any]) -> str:
+    if not base["groups"] or not rep["groups"]:
+        return REGRESSION_CHANGE_LABELS[0 if not base["groups"] and not rep["groups"] else 1 if not base["groups"] else 2]
+    if base["members"] == rep["members"]:
+        return REGRESSION_CHANGE_LABELS[3]
+    if rep["groups"] != base["groups"]:
+        return REGRESSION_CHANGE_LABELS[4] if rep["groups"] > base["groups"] else REGRESSION_CHANGE_LABELS[5]
+    return REGRESSION_CHANGE_LABELS[6]
+
+
+def order_sensitivity(boards: Sequence[Board], strategy: Strategy, grouping: Grouping, config: ArchetypeConfig,
+                      final: Mapping[str, Any]) -> dict[str, Any]:
+    """Compare every report-only order replay with the real S2 grouping:
+    run metrics, pairwise partition disagreement, family and regression
+    anchors. Structural only; placement is never read."""
+    by_obs = {b.obs: b for b in boards}
+    universe = [b.obs for b in boards if len(b.identity) >= config.min_identity_units]
+
+    def run(group: Mapping[int, int], merges: int, checks: Mapping[str, int], counts: Mapping[str, int],
+            fin: Mapping[str, Any] | None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        if fin is None:
+            fin = final_group_diagnostics(boards, Grouping(variant=grouping.variant, group=dict(group), log=[],
+                                                           converged=grouping.converged, refine_moves=[], merges=merges,
+                                                           merge_checks=dict(checks)), strategy, config)
+        light = light_group_cores(group, by_obs, config)
+        row = {"groups": fin["groups"], "grouped_boards": fin["grouped_boards"],
+               "ungrouped_boards": len(universe) - fin["grouped_boards"], "accepted_merges": merges,
+               "core_rejections": checks.get("rejected_core"), "similarity_rejections": counts["similarity_rejections"],
+               "condition1_rejections": counts["condition1_rejections"],
+               "historical_tail_attributed_condition1_rejections": counts["historical_tail_attributed_condition1_rejections"],
+               "counterfactual_eligible": counts["counterfactual_eligible"],
+               "counterfactual_recoveries": counts["counterfactual_recoveries"],
+               "boards_admitted_below_tau": counts["boards_admitted_below_tau"],
+               "final_boards_below_tau": fin["boards_below_tau"],
+               "final_groups_with_any_board_below_tau": fin["groups_with_any_board_below_tau"],
+               "tiny_core_large_groups": fin["tiny_core_large_groups"]}
+        families = {label: _anchor_lookup(light, anchors) for label, anchors in FAMILY_ANCHORS}
+        regressions = {label: _anchor_lookup(light, anchors) for label, anchors in REGRESSION_ANCHORS}
+        return row, families, regressions
+
+    def public(lookup: Mapping[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in lookup.items() if k != "members"}
+
+    base_row, base_fam, base_reg = run(grouping.group, grouping.merges, grouping.merge_checks, grouping.lock_in["counts"], final)
+    baseline = {"replay": "real S2 grouping (canonical baseline)", **base_row,
+                "decision_rule_mismatches": grouping.merge_diagnostics["decision_rule_mismatches"],
+                "family_anchors": [{"label": label, **public(base_fam[label])} for label, _ in FAMILY_ANCHORS],
+                "regression_anchors": [{"label": label, **public(base_reg[label])} for label, _ in REGRESSION_ANCHORS]}
+    replays, family_changes, appearances = [], [], []
+    for i, rep in enumerate(grouping.order_replays):
+        group = {k: rep["variant_to_group"][v] for k, v in grouping.variant.items()}
+        identical = group == grouping.group and rep["merges"] == grouping.merges and rep["merge_checks"] == grouping.merge_checks
+        row, fam, reg = run(group, rep["merges"], rep["merge_checks"], rep["counts"], final if identical else None)
+        fam_rows = []
+        for j, (label, anchors) in enumerate(FAMILY_ANCHORS):
+            change = _family_change(base_fam[label], fam[label])
+            fam_rows.append({"label": label, **public(fam[label]), "change_vs_baseline": change,
+                             "groups_delta": fam[label]["groups"] - base_fam[label]["groups"],
+                             "boards_delta": fam[label]["boards"] - base_fam[label]["boards"]})
+            if change != FAMILY_CHANGE_LABELS[0]:
+                b0 = (base_fam[label]["largest_sizes"] or [0])[0]
+                r0 = (fam[label]["largest_sizes"] or [0])[0]
+                bc = set((base_fam[label]["largest_cores"] or [[]])[0])
+                rc = set((fam[label]["largest_cores"] or [[]])[0])
+                family_changes.append(((-abs(r0 - b0), -abs(fam[label]["groups"] - base_fam[label]["groups"]), j, i), {
+                    "reason": "largest order-sensitive family change", "replay": rep["replay"], "family": label,
+                    "change_vs_baseline": change, "baseline_groups": base_fam[label]["groups"],
+                    "baseline_sizes": base_fam[label]["largest_sizes"], "baseline_cores": base_fam[label]["largest_cores"],
+                    "replay_groups": fam[label]["groups"], "replay_sizes": fam[label]["largest_sizes"],
+                    "replay_cores": fam[label]["largest_cores"],
+                    "largest_core_differing_units": sorted(bc ^ rc)}))
+        reg_rows = []
+        for label, _ in REGRESSION_ANCHORS:
+            change = _regression_change(base_reg[label], reg[label])
+            reg_rows.append({"label": label, **public(reg[label]), "change_vs_baseline": change})
+            if change == REGRESSION_CHANGE_LABELS[1]:
+                appearances.append({"reason": "replay creates a regression-anchor pattern", "replay": rep["replay"],
+                                    "pattern": label, "replay_groups": reg[label]["groups"],
+                                    "replay_sizes": reg[label]["largest_sizes"],
+                                    "replay_core_sizes": reg[label]["largest_core_sizes"],
+                                    "replay_cores": reg[label]["largest_cores"]})
+        replays.append({"replay": rep["replay"], "mode": rep["mode"], "seed": rep["seed"], **row,
+                        "decision_rule_mismatches": rep["decision_rule_mismatches"], "tie_stats": rep["tie_stats"],
+                        "identical_to_real_grouping": identical,
+                        "partition_vs_baseline": partition_disagreement(universe, grouping.group, group),
+                        "deltas_vs_baseline": {k: (row[k] - base_row[k]) if isinstance(row[k], int) and isinstance(base_row[k], int)
+                                               else None for k in ORDER_METRICS},
+                        "family_anchors": fam_rows, "regression_anchors": reg_rows})
+    baseline_replay = next((r for r in replays if r["mode"] == "baseline"), None)
+    others = [r for r in replays if r["mode"] != "baseline"]
+    samples = [case for _, case in sorted(family_changes, key=lambda kv: kv[0])[:2]] + appearances[:ORDER_SAMPLE_LIMIT]
+    return {
+        "definitions": ORDER_SENSITIVITY_DEFINITIONS,
+        "replay_modes": [r["replay"] for r in replays],
+        "baseline": baseline,
+        "baseline_replay_identical_to_real_grouping": baseline_replay["identical_to_real_grouping"] if baseline_replay else None,
+        "replays_with_any_partition_change": sum(r["partition_vs_baseline"]["disagreeing_pairs"] > 0 for r in others),
+        "max_disagreement_share_of_all_pairs": max((r["partition_vs_baseline"]["disagreement_share_of_all_pairs"]
+                                                    for r in others), default=None),
+        "max_disagreement_share_of_pairs_together_in_either": max(
+            (r["partition_vs_baseline"]["disagreement_share_of_pairs_together_in_either"] for r in others), default=None),
+        "replays": replays,
+        "deterministic_review_samples": samples,
+    }
+
+
 def experimental_review(boards: Sequence[Board], strategy: Strategy, grouping: Grouping, metrics: Mapping[str, Any],
                         summaries: Mapping[int, Mapping[str, Any]], members: Mapping[int, Sequence[Board]],
                         control: Mapping[str, Any], names: Names, config: ArchetypeConfig) -> dict[str, Any]:
@@ -2058,6 +2747,9 @@ def experimental_review(boards: Sequence[Board], strategy: Strategy, grouping: G
                            "experimental_detail": [s["group"] for s in mine[:REVIEW_PER_REASON]]})
     tiny = sorted((r for r in final["per_group"] if r["final_core_size"] <= TINY_CORE_UNITS
                    and r["boards"] >= TINY_CORE_MIN_BOARDS), key=lambda r: (-r["boards"], r["group"]))
+    lock_in = None
+    if grouping.lock_in:
+        lock_in = {**grouping.lock_in, "order_sensitivity": order_sensitivity(boards, strategy, grouping, config, final)}
     return {
         "definition": "EXPERIMENTAL strategy -- report-only review; one Patch-window research population; S2 thresholds "
                       "frozen before validation run #5; same-population results are model-development evidence, not "
@@ -2070,6 +2762,7 @@ def experimental_review(boards: Sequence[Board], strategy: Strategy, grouping: G
         "family_review": family, "regression_review": regression,
         "tiny_core_groups": [r["group"] for r in tiny[:5]],
         "chaining_review": chaining_review(final),
+        "recursive_lock_in": lock_in,
     }
 
 
@@ -2150,7 +2843,127 @@ def render_experimental_review(strategy: Strategy, exp: Mapping[str, Any], summa
     for reason, g in exp["chaining_review"]:
         lines += compact(summaries[g], f"[{reason}] ")
         lines += [f"  - member board: {line}" for line in _member_lines(members[g], names)]
+    if exp.get("recursive_lock_in"):
+        lines += render_recursive_lock_in(exp["recursive_lock_in"], names)
     return lines + [""]
+
+
+def render_recursive_lock_in(lock: Mapping[str, Any], names: Names) -> list[str]:
+    """Markdown for the recursive lock-in section; every decision-relevant
+    count is printed (full values in `experimental_s2.recursive_lock_in`)."""
+    def f(x: Any) -> str:
+        return "n/a" if x is None else f"{x:.4f}" if isinstance(x, float) else str(x)
+
+    def units(ids: Sequence[str] | None) -> str:
+        return ", ".join(names.champion(u) for u in ids or ()) or "-"
+
+    def counts(d: Mapping[str, Any]) -> str:
+        return "; ".join(f"{k}: {v}" for k, v in d.items()) or "-"
+
+    def q(d: Mapping[str, Any] | None, stat: str = "median") -> str:
+        return f(d.get(stat)) if d else "n/a"
+
+    p, a = lock["accepted_tail_provenance_summary"], lock["similarity_rejection_attribution"]
+    c, t, o = lock["historical_tail_removal_counterfactual"], lock["tail_trajectory"], lock["order_sensitivity"]
+    lines = ["", "#### Recursive lock-in diagnostics (REPORT ONLY -- S2 itself is unchanged; no grouping decision reads this)",
+             *(f"- {k}: {v}" for k, v in LOCK_IN_DEFINITIONS.items()),
+             "", "##### Accepted-merge tail provenance",
+             f"- accepted S2 merges: {p['accepted_merges']}; with >= 1 board below tau at acceptance: "
+             f"{p['accepted_merges_with_any_board_below_tau']}",
+             f"- boards admitted below tau (historical tails): {p['boards_admitted_below_tau']} (admission events "
+             f"{p['tail_admission_events']}; admitted more than once {p['boards_admitted_below_tau_more_than_once']})",
+             f"- admission events by side role: {counts(p['admission_events_by_side_role'])}; by pre-merge side: "
+             f"{counts(p['admission_events_by_pre_merge_side'])}",
+             f"- similarity at admission: min {q(p['similarity_at_admission'], 'min')}, median "
+             f"{q(p['similarity_at_admission'])}, max {q(p['similarity_at_admission'], 'max')}",
+             "", f"##### S2 similarity-rejection attribution (denominator: {a['s2_similarity_rejections']} {a['denominator']})",
+             f"- S2 conditions failed (multi-label): {counts(a['condition_failures'])}",
+             f"- exact failed-condition sets: {counts(a['exact_failed_condition_sets'])}",
+             f"- categories (multi-label): {counts(a['categories'])}",
+             f"- Condition-1 attribution (mutually exclusive): {counts(a['condition1_attribution'])}",
+             f"- ... when Condition 1 was the ONLY failed condition: "
+             f"{counts(a['condition1_attribution_when_condition1_is_the_only_failure'])}",
+             f"- failing larger-side boards (below tau): {a['failing_larger_side_boards']}, of which historical tails "
+             f"{a['failing_larger_side_boards_historical_tails']} and not historical {a['failing_larger_side_boards_not_historical']}; "
+             f"historical tails on the larger side but at/above tau (not blockers): "
+             f"{a['historical_tails_on_larger_side_at_or_above_tau']}",
+             "", "##### historical_tail_removal_counterfactual (diagnostic of recursive lock-in; NOT evidence a merge should happen)",
+             f"- eligible rejections (larger side holds >= 1 historical tail): {c['eligible_rejections']}; not evaluable "
+             f"(every larger-side board removed): {c['not_evaluable_every_larger_side_board_removed']}",
+             f"- would pass ALL unchanged S2 conditions after removal: {c['would_pass_all_unchanged_s2_conditions']}; "
+             f"would still fail: {c['would_still_fail']}; sides flipped by removal: {c['sides_flipped']}",
+             "- by Condition-1 attribution: " + "; ".join(f"{k}: {v['would_pass']}/{v['eligible']} pass"
+                                                          for k, v in c["by_condition1_attribution"].items()),
+             f"- failed conditions before: {counts(c['failed_conditions_before'])}",
+             f"- failed conditions after: {counts(c['failed_conditions_after'])}",
+             f"- transitions: {counts(c['failure_transitions'])}",
+             f"- removed boards: total {c['removed_boards_total']}, median {q(c['removed_boards'])}, max "
+             f"{q(c['removed_boards'], 'max')}; share of the larger side: median {q(c['removed_share_of_larger_side'])}, "
+             f"max {q(c['removed_share_of_larger_side'], 'max')}",
+             *(f"- {key} before -> after: median {q(c[key]['before'])} -> {q(c[key]['after'])}, min "
+               f"{q(c[key]['before'], 'min')} -> {q(c[key]['after'], 'min')}, max {q(c[key]['before'], 'max')} -> "
+               f"{q(c[key]['after'], 'max')}" for key in ("merged_boards", "min_similarity", "larger_side_below_tau",
+                                                           "smaller_side_below_tau", "merged_below_tau")),
+             "", "##### Tail trajectory (attempts after a below-tau admission, as the real S2 decided them)",
+             *(f"- {k}: {counts(v) if isinstance(v, dict) else v}" for k, v in t.items()),
+             "", "##### Merge-order sensitivity (REPORT-ONLY replays; the real S2 grouping stays the canonical baseline)",
+             *(f"- {k}: {v}" for k, v in o["definitions"].items()),
+             f"- baseline-order replay identical to the real grouping: {o['baseline_replay_identical_to_real_grouping']}; "
+             f"other replays with any partition change: {o['replays_with_any_partition_change']}; max disagreement share: "
+             f"{f(o['max_disagreement_share_of_all_pairs'])} of all eligible pairs, "
+             f"{f(o['max_disagreement_share_of_pairs_together_in_either'])} of pairs together in either", ""]
+    rows = [o["baseline"], *o["replays"]]
+    lines += ["| metric | " + " | ".join(r["replay"] for r in rows) + " |", "|---|" + "---|" * len(rows)]
+    lines += [f"| {k} | " + " | ".join(f(r[k]) for r in rows) + " |" for k in (*ORDER_METRICS, "decision_rule_mismatches")]
+    lines.append("| tied steps / judged steps | - | " + " | ".join(
+        f"{r['tie_stats']['steps_with_tied_candidates']}/{r['tie_stats']['judged_steps']} (max {r['tie_stats']['max_tied_candidates']})"
+        for r in o["replays"]) + " |")
+    lines.append("| pairs together in baseline -> apart / apart -> together | - | " + " | ".join(
+        f"{r['partition_vs_baseline']['together_in_baseline_apart_in_replay']} / "
+        f"{r['partition_vs_baseline']['together_in_replay_apart_in_baseline']}" for r in o["replays"]) + " |")
+    lines.append("| boards with changed group membership | - | " + " | ".join(
+        str(r["partition_vs_baseline"]["boards_with_changed_group_membership"]) for r in o["replays"]) + " |")
+    lines += ["", "- family anchors (matching groups / boards / largest sizes; change vs baseline):"]
+    for i, (label, _) in enumerate(FAMILY_ANCHORS):
+        base = o["baseline"]["family_anchors"][i]
+        lines.append(f"  - **{label}**: baseline {base['groups']} / {base['boards']} / {base['largest_sizes']}; largest core: "
+                     f"{units((base['largest_cores'] or [[]])[0])}")
+        for r in o["replays"]:
+            fam = r["family_anchors"][i]
+            lines.append(f"    - {r['replay']}: {fam['groups']} / {fam['boards']} / {fam['largest_sizes']} -- "
+                         f"{fam['change_vs_baseline']}")
+    lines += ["- regression anchors (matching groups / largest sizes / core sizes; change vs baseline):"]
+    for i, (label, _) in enumerate(REGRESSION_ANCHORS):
+        base = o["baseline"]["regression_anchors"][i]
+        lines.append(f"  - **{label}**: baseline {base['groups']} / {base['largest_sizes']} / {base['largest_core_sizes']}; "
+                     + "; ".join(f"{r['replay']}: {r['regression_anchors'][i]['groups']} -- "
+                                 f"{r['regression_anchors'][i]['change_vs_baseline']}" for r in o["replays"]))
+    lines += ["", "##### Deterministic review samples (structure only, never placement)"]
+    for s in lock["deterministic_review_samples"]:
+        lines += [f"- attempt {s['attempt']} [{s['reason']}]: merged {s['merged_boards']} = larger {s['larger_side_boards']} + "
+                  f"smaller {s['smaller_side_boards']}; core overlap {f(s['core_overlap'])}; historical tails larger "
+                  f"{s['larger_side_historical_tails']} / smaller {s['smaller_side_historical_tails']}; larger-side below tau "
+                  f"{s['larger_side_below_tau']} (historical {s['larger_side_below_tau_historical']}, not "
+                  f"{s['larger_side_below_tau_not_historical']}); smaller-side below tau {s['smaller_side_below_tau']}",
+                  f"  - larger core: {units(s['core_larger'])} | smaller core: {units(s['core_smaller'])} | larger only: "
+                  f"{units(s['larger_only'])}; smaller only: {units(s['smaller_only'])}",
+                  f"  - failed before: {', '.join(s['failed_conditions_before']) or '-'}; after historical-tail removal: "
+                  + ("not eligible" if s["failed_conditions_after"] is None else (", ".join(s["failed_conditions_after"]) or "passes"))
+                  + f"; min similarity larger {f(s['larger_side_min_similarity'])}, smaller {f(s['smaller_side_min_similarity'])}"
+                  + (f", after removal {f(s['counterfactual_after']['min_similarity'])}" if s["counterfactual_after"] else "")]
+    for s in o["deterministic_review_samples"]:
+        if s["reason"].startswith("largest"):
+            lines += [f"- [{s['reason']}] {s['family']} under {s['replay']}: {s['change_vs_baseline']}; baseline "
+                      f"{s['baseline_groups']} groups {s['baseline_sizes']}, replay {s['replay_groups']} groups {s['replay_sizes']}",
+                      f"  - baseline largest core: {units((s['baseline_cores'] or [[]])[0])} | replay largest core: "
+                      f"{units((s['replay_cores'] or [[]])[0])} | differing units: {units(s['largest_core_differing_units'])}"]
+        else:
+            lines += [f"- [{s['reason']}] {s['pattern']} under {s['replay']}: {s['replay_groups']} groups, sizes "
+                      f"{s['replay_sizes']}, core sizes {s['replay_core_sizes']}",
+                      *(f"  - core: {units(core)}" for core in s["replay_cores"])]
+    if not lock["deterministic_review_samples"] and not o["deterministic_review_samples"]:
+        lines.append("- no case in any sampled category")
+    return lines
 
 
 def _member_lines(boards: Sequence[Board], names: Names, n: int = 3) -> list[str]:

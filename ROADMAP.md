@@ -76,7 +76,7 @@ Riot access currently uses a **development key that must be regenerated regularl
   - Known large merges generally kept strong cores.
 - **Open problem: likely recursive lock-in / order dependence.**
   - Once S2 admits a below-threshold tail, Condition 1 (no below-tau boards on the larger side) may let that admitted tail block a later, otherwise plausible merge.
-  - This is **inferred from family traces, not yet quantified.**
+  - This is **inferred from family traces, not yet quantified.** The instrumentation to quantify it (and tie-order dependence) is implemented; the production research run has not been made yet.
 - **Decision: do not modify S2 Condition 1 yet.** Keep the current S2 (`B_S2_experimental`, `C_S2_experimental`) as an experimental checkpoint. It is not production-ready and not independently validated.
 - **Patch 18.3 is development data.** It has shaped this work repeatedly, so further experiments on it are development evidence, not untouched validation.
 
@@ -103,7 +103,7 @@ Riot access currently uses a **development key that must be regenerated regularl
 
 - **Goal:** recognize when final boards are variants of the same composition, without merging unrelated strategies.
 - **Current checkpoint (EXPERIMENTAL):** run #6, recursive S2, classified R6-B.
-- **Immediate milestone (ACCEPTED/CURRENT):** instrument **unchanged** S2 and measure:
+- **Immediate milestone (instrumentation IMPLEMENTED; production research run PENDING):** the report now instruments **unchanged** S2 (`experimental_s2.recursive_lock_in`: historically admitted tails, Condition-1 attribution of every S2 similarity rejection, the historical-tail removal counterfactual, the tail trajectory, and report-only tie-order replays with partition disagreement and family/regression anchors). Next: run the read-only archetype report from `main` on Patch 18.3 (development evidence) and review the counts. The hypothesis is **not confirmed** until that run is reviewed. The instrumentation measures:
   - how many later merge rejections are caused by tails S2 admitted earlier;
   - which side (larger or smaller) caused each of those rejections;
   - whether each blocked merge would have passed without the previously admitted tail members;
@@ -241,7 +241,7 @@ Riot access currently uses a **development key that must be regenerated regularl
 2. **Develop recurring core evidence (IMPLEMENTED):** observed 3–4 unit cores around a carry, from complete co-occurrence on the same final boards, selected by recurrence, shown in How to play and the Teammates tab. Next for Champion Intelligence: composition-family/variant evidence once trustworthy (Track 3).
 3. **Monitor scheduled live ingestion** across multiple runs: inspect yield, duplicate rate, collection lag, Riot errors/429s and storage growth; keep maximum mode manual until the deep-ladder 401 is understood (Track 1).
 4. **Repair the CommunityDragon live smoke** by resolving the duplicate-component namespace/test assumption without discarding legitimate source data (Track 6).
-5. **In parallel, instrument unchanged S2** to quantify recursive lock-in and order dependence; do not change Condition 1 before measurement (Track 2).
+5. **In parallel, run the instrumented (unchanged) S2 report** from `main` on Patch 18.3 to quantify recursive lock-in and order dependence (instrumentation IMPLEMENTED); do not change Condition 1 before that measurement is reviewed (Track 2).
 6. Keep set-transition readiness in new work and move toward Riot production access as the product matures (Tracks 6/7).
 7. Build the **Reference / game knowledge** tab incrementally after the current Champion Investigation cleanup/redesign, starting only with subsections whose sources and refresh requirements are verified (Track 9).
 8. After cores and trustworthy family evidence are ready, connect Champion Investigation to composition boards/families and practical alternatives—the bridge into TheoryLabs' long-term composition discovery/theorycrafting differentiator (Track 8).

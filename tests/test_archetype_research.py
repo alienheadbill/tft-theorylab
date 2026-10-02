@@ -891,6 +891,318 @@ def test_control_report_sections_are_unaffected_by_the_experimental_strategies(s
     assert [m for m in full_members if not m["strategy"].endswith("_experimental")] == members
 
 
+# ---------------------------------------------------------------- recursive lock-in and merge-order sensitivity (report only)
+
+LOCK_T = ([SHELL8] * 300, TAILED, CLEAN_T)  # L ~ S (3 tails admitted) then (L+S) ~ T blocked by those tails
+#: A board X = shell[0:6] + units 8 and 30: >= tau inside its 300-board variant and at the first merge, below tau at the second.
+WEAK_X = [0, 1, 2, 3, 4, 5, 8, 30]
+PARTIAL = ([SHELL8] * 299 + [WEAK_X], TAILED, [SHELL8 + [10, 11]] * 60)
+
+
+def lock_run(groups, strategy=B_S2, config=None):
+    boards, variant = boards_by_variant(*groups)
+    diag = ar.MergeDiagnostics(TAU)
+    result = ar.merge_variants(boards, variant, strategy, config or ar.ArchetypeConfig(), diagnostics=diag)
+    return boards, variant, result, diag
+
+
+def random_variants(seed: int) -> tuple[list[ar.Board], dict[int, int]]:
+    """Variants drawn from a few overlapping shells (many exact core-overlap ties), with occasional poorly fitting
+    member boards so S2 admits and later trips over below-tau tails."""
+    rng = random.Random(seed)
+    shells = [SHELL8, SHELL8[:7] + [8], SHELL8[:6] + [8, 9], SHELL8 + [9], [0, 1, 2, 3, 4, 10, 11, 12]]
+    groups = []
+    for _ in range(rng.randint(5, 10)):
+        base = rng.choice(shells) + rng.sample(range(13, 19), rng.randint(0, 1))
+        boards = [base] * rng.randint(2, 30)
+        boards += [base + rng.sample(range(20, 60), rng.randint(3, 6)) for _ in range(rng.randint(0, 2))]
+        groups.append(boards)
+    return boards_by_variant(*groups)
+
+
+def test_s2_condition_names_are_the_rules_own() -> None:
+    assert ar.S2_CONDITION_NAMES == tuple(ar.s2_conditions(larger_below=1, smaller_below=0, smaller_boards=1, merged_below=1,
+                                                           merged_boards=1, min_post=0.0, tau=TAU))
+
+
+def test_accepted_s2_merge_marks_its_below_tau_boards_as_historical_tails() -> None:
+    boards, _, (to_group, _, checks), diag = lock_run(LOCK_T)
+    accepted = diag.lock[0]
+    assert accepted["outcome"] == "accepted" and accepted["admitted_below_tau"] == accepted["newly_admitted_below_tau"] == 3
+    tails = {b.obs for b in boards if len(b.identity) > 9}  # the three tail boards of S
+    assert set(diag.provenance) == tails
+    for obs, event in diag.provenance.items():
+        assert (event["attempt"], event["side"], event["side_role"], event["tau"]) == (0, "b", "smaller", TAU)
+        assert TAU - 0.10 <= event["similarity"] < TAU
+        assert event["similarity"] == pytest.approx(diag.rows[0]["post"]["min"], abs=1e-3)
+    assert len(diag.admissions) == 3
+    summary = ar.recursive_lock_in_summary(diag)["accepted_tail_provenance_summary"]
+    assert (summary["accepted_merges"], summary["accepted_merges_with_any_board_below_tau"], summary["boards_admitted_below_tau"]) == (1, 1, 3)
+    assert summary["admission_events_by_side_role"] == {"larger": 0, "smaller": 3}
+
+
+def test_board_above_tau_at_its_accepted_merge_is_never_a_historical_tail() -> None:
+    """X (shell[0:6] + 8 + 9) is 0.62 against the accepted V0+V1 profile and 0.598 at the later attempt: below tau
+    then, but it was never ADMITTED below tau, so it is not historical and the rejection is 'no historical-tail'."""
+    x = [0, 1, 2, 3, 4, 5, 8, 9]
+    boards, _, (_, _, checks), diag = lock_run(([SHELL8] * 9 + [x], [SHELL8] * 5, [SHELL8 + [11]] * 6))
+    assert [e["outcome"] for e in diag.lock] == ["accepted", "rejected_similarity"]
+    assert diag.rows[0]["below_tau"] == 0 and diag.provenance == {} and diag.admissions == []
+    later = diag.lock[1]
+    assert diag.rows[1]["larger_side_below_tau"] == 1
+    assert (later["larger_side_below_tau_historical"], later["larger_side_below_tau_not_historical"]) == (0, 1)
+    assert later["condition1_attribution"] == "no historical-tail" and later["counterfactual"] is None
+
+
+def test_later_merge_blocked_by_a_historical_tail_on_the_larger_side() -> None:
+    _, _, (to_group, _, checks), diag = lock_run(LOCK_T)
+    assert to_group == {0: 0, 1: 0, 2: 1} and checks["rejected_similarity"] == 1
+    r, e = diag.rows[1], diag.lock[1]
+    assert (r["outcome"], r["larger_side_boards"], r["larger_side_below_tau"], r["smaller_side_below_tau"]) == ("rejected_similarity", 330, 3, 0)
+    assert e["failed_conditions"] == ["larger side: no board below tau"]
+    assert (e["larger_side_historical_tails"], e["larger_side_below_tau_historical"], e["larger_side_below_tau_not_historical"]) == (3, 3, 0)
+    assert e["condition1_attribution"] == "all historical-tail"
+    attribution = ar.recursive_lock_in_summary(diag)["similarity_rejection_attribution"]
+    assert attribution["s2_similarity_rejections"] == 1
+    assert attribution["condition1_attribution"]["all historical-tail"] == 1
+    assert attribution["categories"]["condition 1 failed: all failing larger-side boards are historical tails"] == 1
+    assert attribution["categories"]["only condition 1 failed"] == 1
+    assert attribution["failing_larger_side_boards_historical_tails"] == 3
+
+
+def test_tail_removal_counterfactual_recomputes_the_merged_profile_and_passes() -> None:
+    boards, _, _, diag = lock_run(LOCK_T)
+    cf = diag.lock[1]["counterfactual"]
+    assert cf["evaluable"] and cf["passes"] and cf["removed_boards"] == 3
+    assert cf["removed_share_of_larger_side"] == 3 / 330
+    assert cf["before"]["merged_boards"] == 350 and cf["before"]["failed_conditions"] == ["larger side: no board below tau"]
+    after = cf["after"]
+    assert (after["merged_boards"], after["larger_side_boards"], after["smaller_side_boards"]) == (347, 327, 20)
+    assert (after["larger_side_below_tau"], after["smaller_side_below_tau"], after["merged_below_tau"]) == (0, 0, 0)
+    assert after["failed_conditions"] == [] and not after["sides_flipped"]
+    # independently recompute the profile of the remaining boards
+    champions = load_roster().champions
+    kept = [b for b in boards if b.obs not in diag.provenance]
+    vecs = [ar.board_vectors(b, B_S2, ar.ArchetypeConfig(), champions) for b in kept]
+    profile = ar.mean_profile(vecs)
+    assert after["min_similarity"] == min(ar.similarity(v, profile, B_S2) for v in vecs) >= TAU
+    c = ar.recursive_lock_in_summary(diag)["historical_tail_removal_counterfactual"]
+    assert (c["eligible_rejections"], c["would_pass_all_unchanged_s2_conditions"], c["would_still_fail"]) == (1, 1, 0)
+    assert c["failure_transitions"] == {"larger side: no board below tau -> passes": 1}
+
+
+def test_counterfactual_removes_only_historical_tails_never_other_weak_boards() -> None:
+    boards, _, _, diag = lock_run(PARTIAL)
+    weak = next(b.obs for b in boards if b.identity == frozenset(IDS[i] for i in WEAK_X))
+    assert weak not in diag.provenance  # below tau at the later attempt, but never admitted below tau
+    cf = diag.lock[1]["counterfactual"]
+    assert cf["removed_boards"] == 3 == len(diag.provenance)  # the three tails, not X
+    assert not cf["passes"]
+    assert cf["after"]["larger_side_below_tau"] == 1 and cf["after"]["failed_conditions"] == ["larger side: no board below tau"]
+    assert cf["after"]["merged_boards"] == diag.rows[1]["merged_boards"] - 3
+
+
+def test_condition1_rejection_by_a_non_tail_board_is_no_historical_tail() -> None:
+    """knife_edge: the only failing board X sits on the larger side and comes from its original variant."""
+    boards, variant = knife_edge([[11]])
+    diag = ar.MergeDiagnostics(TAU)
+    ar.merge_variants(boards, variant, B_S2, ar.ArchetypeConfig(), diagnostics=diag)
+    [e] = diag.lock
+    assert e["outcome"] == "rejected_similarity" and "larger side: no board below tau" in e["failed_conditions"]
+    assert e["condition1_attribution"] == "no historical-tail" and e["counterfactual"] is None and diag.provenance == {}
+    cats = ar.recursive_lock_in_summary(diag)["similarity_rejection_attribution"]["categories"]
+    assert cats["condition 1 failed: no failing larger-side board is a historical tail"] == 1
+
+
+def test_partial_historical_tail_attribution() -> None:
+    _, _, _, diag = lock_run(PARTIAL)
+    e = diag.lock[1]
+    assert (e["larger_side_below_tau_historical"], e["larger_side_below_tau_not_historical"]) == (3, 1)
+    assert e["condition1_attribution"] == "partial historical-tail"
+    s = ar.recursive_lock_in_summary(diag)
+    assert s["similarity_rejection_attribution"]["condition1_attribution"]["partial historical-tail"] == 1
+    assert s["historical_tail_removal_counterfactual"]["by_condition1_attribution"]["partial historical-tail"] == {"eligible": 1, "would_pass": 0}
+    assert [c["reason"] for c in s["deterministic_review_samples"]] == ["condition 1 failed: PARTIAL historical-tail attribution"]
+
+
+def test_smaller_side_failure_is_not_recursive_lock_in() -> None:
+    _, _, _, diag = lock_run(([SHELL8] * 200, [SHELL8 + list(range(20, 26)), SHELL8 + list(range(26, 32))]))
+    [e] = diag.lock
+    assert e["failed_conditions"] == ["smaller side: <= 10% below tau"]
+    assert e["condition1_attribution"] == "condition 1 did not fail" and e["counterfactual"] is None
+    a = ar.recursive_lock_in_summary(diag)["similarity_rejection_attribution"]
+    assert a["categories"]["only the smaller-side tail condition failed"] == 1
+    assert sum(a["categories"][c] for c in ar.REJECTION_CATEGORIES[:4]) == 0
+
+
+def test_core_rule_rejections_are_outside_the_similarity_rejection_denominator() -> None:
+    config = ar.ArchetypeConfig(tau=0.0, **PAIRWISE_OFF)
+    _, _, (_, _, checks), diag = lock_run(([list(range(7))] * 4, [[0, 1, 2, 3, 7, 8, 9]] * 4), config=config)
+    assert checks["rejected_core"] == 1 and checks["rejected_similarity"] == 0
+    assert diag.lock == [] and ar.recursive_lock_in_summary(diag)["similarity_rejection_attribution"]["s2_similarity_rejections"] == 0
+
+
+def test_historical_tail_back_at_or_above_tau_is_not_a_current_blocker() -> None:
+    """The tails share 5 extra units; a later 100-board variant with two of them lifts the tails back above tau.
+    They stay historical, but they are not blockers and the merge is accepted."""
+    extras = list(range(20, 25))
+    _, _, (to_group, _, _), diag = lock_run(([SHELL8] * 300, [SHELL8 + [8]] * 27 + [SHELL8 + [8] + extras] * 3,
+                                             [SHELL8 + [20, 21]] * 100))
+    assert to_group == {0: 0, 1: 0, 2: 0} and len(diag.provenance) == 3
+    later = diag.lock[1]
+    assert later["outcome"] == "accepted" and later["larger_side_historical_tails"] == 3
+    assert later["larger_side_historical_tails_at_or_above_tau"] == 3 and later["larger_side_below_tau_historical"] == 0
+    assert later["condition1_attribution"] == "condition 1 did not fail" and later["counterfactual"] is None
+    trajectory = ar.recursive_lock_in_summary(diag)["tail_trajectory"]
+    assert trajectory["later_attempts_with_historical_tails_on_larger_side"] == 1
+    assert trajectory["later_s2_rejections_with_historical_tails_on_larger_side"] == 0
+
+
+@pytest.mark.parametrize("strategy", [B_S2, C_S2], ids=lambda s: s.name)
+def test_lock_in_diagnostics_never_change_the_s2_partition(strategy: ar.Strategy, store: Path) -> None:
+    cases = [boards_by_variant(*LOCK_T), boards_by_variant(*PARTIAL), knife_edge([[11]])] + [random_variants(s) for s in range(12)]
+    for boards, variant in cases:
+        plain = ar.merge_variants(boards, variant, strategy, ar.ArchetypeConfig())
+        diag = ar.MergeDiagnostics(TAU)
+        assert ar.merge_variants(boards, variant, strategy, ar.ArchetypeConfig(), diagnostics=diag) == plain
+        assert len(diag.lock) == len(diag.rows) == plain[2]["rejected_similarity"] + len(plain[1])
+        assert diag.summary("S2")["decision_rule_mismatches"] == 0
+    with Database.open_existing(store) as db:
+        boards = ar.load_inputs(db, WINDOW).boards
+    control = ar.cluster(boards, next(s for s in ar.STRATEGIES if s.name == strategy.variants_from), ar.ArchetypeConfig())
+    grouping = ar.cluster_reusing_variants(boards, strategy, ar.ArchetypeConfig(), control)
+    members = [b for b in boards if b.obs in grouping.variant]
+    to_group, log, checks = ar.merge_variants(members, grouping.variant, strategy, ar.ArchetypeConfig())  # no diagnostics
+    assert grouping.group == {k: to_group[v] for k, v in grouping.variant.items()}
+    assert (grouping.merges, grouping.merge_checks) == (len(log), checks)
+    assert grouping.lock_in["counts"]["accepted_merges"] == len(log)
+    assert [r["replay"] for r in grouping.order_replays] == [o.label for o in ar.ORDER_REPLAYS]
+
+
+def test_controls_get_no_lock_in_or_replays_and_stay_unchanged(store: Path) -> None:
+    with Database.open_existing(store) as db:
+        boards = ar.load_inputs(db, WINDOW).boards
+    for strategy in ar.STRATEGIES[:3]:
+        grouping = ar.cluster(boards, strategy, ar.ArchetypeConfig())
+        assert grouping.lock_in == {} and grouping.order_replays == []
+        if strategy.merge:
+            members = [b for b in boards if b.obs in grouping.variant]
+            to_group, log, checks = ar.merge_variants(members, grouping.variant, strategy, ar.ArchetypeConfig())
+            assert grouping.group == {k: to_group[v] for k, v in grouping.variant.items()} and grouping.merges == len(log)
+            assert "recursive_lock_in" not in grouping.merge_diagnostics and "trajectory" not in grouping.merge_diagnostics
+    for boards_, variant in [boards_by_variant(*LOCK_T)] + [random_variants(s) for s in range(6)]:
+        for strategy in (B_STRATEGY, C_STRATEGY):  # an S0 merge never admits a below-tau board
+            diag = ar.MergeDiagnostics(TAU)
+            ar.merge_variants(boards_, variant, strategy, ar.ArchetypeConfig(), diagnostics=diag)
+            assert diag.provenance == {} and all(e["counterfactual"] is None for e in diag.lock)
+
+
+@pytest.mark.parametrize("strategy", [B_STRATEGY, C_STRATEGY, B_S2, C_S2], ids=lambda s: s.name)
+def test_baseline_order_replay_reproduces_the_real_merge(strategy: ar.Strategy) -> None:
+    for boards, variant in [boards_by_variant(*LOCK_T), boards_by_variant(*PARTIAL)] + [random_variants(s) for s in range(25)]:
+        real_diag, replay_diag = ar.MergeDiagnostics(TAU), ar.MergeDiagnostics(TAU)
+        real = ar.merge_variants(boards, variant, strategy, ar.ArchetypeConfig(), diagnostics=real_diag)
+        replay = ar.merge_variants(boards, variant, strategy, ar.ArchetypeConfig(), diagnostics=replay_diag,
+                                   tie_order=ar.TieOrder("baseline"))
+        assert replay == real
+        assert replay_diag.rows == real_diag.rows and replay_diag.lock == real_diag.lock
+
+
+def test_tie_replays_never_judge_a_lower_overlap_candidate_first() -> None:
+    differed = 0
+    for seed in range(25):
+        boards, variant = random_variants(seed)
+        baseline = ar.merge_variants(boards, variant, B_S2, ar.ArchetypeConfig())
+        for order in ar.ORDER_REPLAYS:
+            trace: list = []
+            result = ar.merge_variants(boards, variant, B_S2, ar.ArchetypeConfig(), tie_order=order, trace=trace)
+            for chosen, best, tied in trace:  # brute force over every current pair: nothing valid scores higher
+                assert best is not None and chosen == best and tied >= 1
+            differed += result[0] != baseline[0]
+    assert differed  # the random cases do contain real tie-order sensitivity
+    # two pairs at different overlap: the reversed order still judges the higher one first
+    boards, variant = variants((SHELL8, 5), (SHELL8, 5), (SHELL8[:6] + [8, 9], 5), (SHELL8[:6] + [8, 10], 5))
+    for order in ar.ORDER_REPLAYS:
+        diag = ar.MergeDiagnostics(TAU)
+        ar.merge_variants(boards, variant, B_S2, ar.ArchetypeConfig(), diagnostics=diag, tie_order=order)
+        assert diag.rows[0]["core_overlap"] == 1.0 and (diag.rows[0]["a_root_variant"], diag.rows[0]["b_root_variant"]) == (0, 1)
+
+
+def test_order_replays_are_deterministic() -> None:
+    assert ar.TieOrder("seeded", 1).key(3, 9, 0, 2) == ar.TieOrder("seeded", 1).key(3, 9, 0, 2) != ar.TieOrder("seeded", 2).key(3, 9, 0, 2)
+    assert ar.TieOrder("reversed").key(1, 2, 0, 0) > ar.TieOrder("reversed").key(1, 3, 0, 0)
+    with pytest.raises(ValueError):
+        ar.TieOrder("best-placement").key(0, 1, 0, 0)
+    for seed in range(8):
+        boards, variant = random_variants(seed)
+        champions = load_roster().champions
+        vecs = {b.obs: ar.board_vectors(b, B_S2, ar.ArchetypeConfig(), champions) for b in boards}
+        first = ar.order_replays(boards, vecs, variant, B_S2, ar.ArchetypeConfig())
+        again = ar.order_replays(list(reversed(boards)), vecs, variant, B_S2, ar.ArchetypeConfig())
+        assert first == again
+        assert all(r["decision_rule_mismatches"] == 0 for r in first)
+
+
+def test_partition_disagreement_on_a_hand_checkable_example() -> None:
+    """Baseline {1,2,3} {4,5} {6}; replay {1,2} {3,4,5} {6}. Together in baseline: 12 13 23 45 (4); in replay:
+    12 34 35 45 (4); in both: 12 45 (2). Disagreeing: 13 23 (baseline only) + 34 35 (replay only) = 4 of 15 pairs."""
+    baseline = {1: 0, 2: 0, 3: 0, 4: 1, 5: 1}
+    replay = {1: 7, 2: 7, 3: 8, 4: 8, 5: 8}
+    d = ar.partition_disagreement(range(1, 7), baseline, replay)
+    assert (d["board_pairs"], d["pairs_together_in_baseline"], d["pairs_together_in_replay"], d["pairs_together_in_both"]) == (15, 4, 4, 2)
+    assert (d["together_in_baseline_apart_in_replay"], d["together_in_replay_apart_in_baseline"], d["disagreeing_pairs"]) == (2, 2, 4)
+    assert d["disagreement_share_of_all_pairs"] == 4 / 15 and d["disagreement_share_of_pairs_together_in_either"] == 4 / 6
+    assert (d["boards_with_identical_group_membership"], d["boards_with_changed_group_membership"]) == (1, 5)  # only 6
+    same = ar.partition_disagreement(range(1, 7), baseline, {k: g + 10 for k, g in baseline.items()})
+    assert same["disagreeing_pairs"] == 0 and same["boards_with_changed_group_membership"] == 0
+
+
+@pytest.mark.parametrize("anchors", ["FAMILY_ANCHORS", "REGRESSION_ANCHORS"])
+def test_family_and_regression_anchors_are_report_only(anchors: str, store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, _, membership = run(store)
+    monkeypatch.setattr(ar, anchors, (("anything", frozenset({"DA_18_Leona", "DA_18_Kayle"})),))
+    report, _, changed = run(store)
+    assert changed == membership  # every strategy's groups, variants and order are unchanged
+    lock = report["strategies"]["B_S2_experimental"]["experimental_s2"]["recursive_lock_in"]["order_sensitivity"]
+    key = "family_anchors" if anchors == "FAMILY_ANCHORS" else "regression_anchors"
+    assert [f["label"] for f in lock["baseline"][key]] == ["anything"]
+
+
+def test_report_carries_the_recursive_lock_in_section_without_identifiers(store: Path) -> None:
+    report, markdown, _ = run(store)
+    for name in ("B_S2_experimental", "C_S2_experimental"):
+        e = report["strategies"][name]["experimental_s2"]
+        assert e["decision_rule_mismatches"] == 0
+        lock = e["recursive_lock_in"]
+        assert set(lock) == {"definitions", "tau", "counts", "accepted_tail_provenance_summary", "similarity_rejection_attribution",
+                             "historical_tail_removal_counterfactual", "tail_trajectory", "deterministic_review_samples",
+                             "order_sensitivity"}
+        for word in ("historically admitted tail", "order_sensitivity", "evidence", "historical_tail_removal_counterfactual"):
+            assert word in lock["definitions"]
+        o = lock["order_sensitivity"]
+        assert o["baseline_replay_identical_to_real_grouping"] is True
+        assert [r["replay"] for r in o["replays"]] == [t.label for t in ar.ORDER_REPLAYS]
+        assert all(r["decision_rule_mismatches"] == 0 for r in o["replays"])
+        assert [f["label"] for f in o["baseline"]["family_anchors"]] == [label for label, _ in ar.FAMILY_ANCHORS]
+        # the replays' light core lookup agrees with the full family review on the real grouping
+        assert [(f["groups"], f["largest_sizes"]) for f in o["baseline"]["family_anchors"]] == \
+            [(f["experimental_groups"], f["experimental_sizes"]) for f in e["family_review"]]
+        assert [(f["groups"], f["largest_sizes"]) for f in o["baseline"]["regression_anchors"]] == \
+            [(f["experimental_groups"], f["experimental_sizes"]) for f in e["regression_review"]]
+        assert [f["label"] for f in o["baseline"]["regression_anchors"]] == [label for label, _ in ar.REGRESSION_ANCHORS]
+        text = json.dumps(lock, default=str)
+        for secret in ("PUUID", "SecretName", "M000", "M011", "NORMAL1", "EMPTYR", "match_id", "puuid"):
+            assert secret not in text, (name, secret)
+    for name in ("A_structural_baseline", "B_flex_tolerant", "C_structure_aware"):
+        assert "experimental_s2" not in report["strategies"][name]
+    assert sum(line.startswith("#### Recursive lock-in diagnostics (REPORT ONLY") for line in markdown) == 2
+    assert sum(line.startswith("##### Merge-order sensitivity") for line in markdown) == 2
+    text = "\n".join(markdown)
+    for secret in ("PUUID-SECRET", "SecretName", "M000", "M011"):
+        assert secret not in text
+
+
+
 # ---------------------------------------------------------------- population / names / outputs
 
 
