@@ -1116,8 +1116,8 @@ def test_tie_replays_never_judge_a_lower_overlap_candidate_first() -> None:
         for order in ar.ORDER_REPLAYS:
             trace: list = []
             result = ar.merge_variants(boards, variant, B_S2, ar.ArchetypeConfig(), tie_order=order, trace=trace)
-            for chosen, best, tied in trace:  # brute force over every current pair: nothing valid scores higher
-                assert best is not None and chosen == best and tied >= 1
+            for chosen, best, _ in trace:  # brute force over every current pair: nothing valid scores higher
+                assert best is not None and chosen == best
             differed += result[0] != baseline[0]
     assert differed  # the random cases do contain real tie-order sensitivity
     # two pairs at different overlap: the reversed order still judges the higher one first

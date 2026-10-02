@@ -1607,7 +1607,7 @@ def order_replays(boards: Sequence[Board], vecs, assign: Mapping[int, int], stra
     for order in orders:
         progress(f"{strategy.name}: order replay '{order.label}' started")
         diag = MergeDiagnostics(config.tau)
-        stats = {"judged_steps": 0, "steps_with_tied_candidates": 0, "max_tied_candidates": 0}
+        stats = {"judged_steps": 0, "steps_with_tied_candidates": 0}
         to_group, log, checks = merge_variants(members, assign, strategy, config, vecs=vecs, diagnostics=diag,
                                                tie_order=order, tie_stats=stats)
         out.append({"replay": order.label, "mode": order.mode, "seed": order.seed if order.mode == "seeded" else None,
@@ -1671,13 +1671,14 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
 
     `tie_order` (REPORT-ONLY order replays; None for every real grouping)
     changes only which of several candidates tied at the SAME highest core
-    overlap is judged first: each step takes every valid candidate at the
-    current top score off the queue, picks one by `tie_order.key`, and puts
-    the others back. A lower-overlap candidate is never judged while a valid
-    higher-overlap one exists, and every check and threshold is unchanged.
-    `TieOrder("baseline")` reproduces the real order exactly. `tie_stats`
-    receives tie counts on that path; `trace` (tests only) receives, per
-    judged step, (chosen score, brute-force best valid score, tied count)."""
+    overlap is judged first: queue entries are ranked by score and then by
+    `tie_order.key`, so the next judged candidate is the lowest-key valid one
+    at the current top score. A lower-overlap candidate is never judged while
+    a valid higher-overlap one exists, and every check and threshold is
+    unchanged. `TieOrder("baseline")` reproduces the real order exactly.
+    `tie_stats` receives tie counts on that path; `trace` (tests only)
+    receives, per judged step, (chosen score, brute-force best valid score,
+    whether another valid candidate shared the top score)."""
     if vecs is None:
         champions = load_roster().champions
         vecs = {b.obs: board_vectors(b, strategy, config, champions) for b in boards}
@@ -1808,7 +1809,7 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
         return idx
 
     idx = core_index()
-    heap: list[tuple[float, int, int, int, int]] = []
+    heap: list[tuple] = []
 
     def push_pairs(a: int) -> None:
         near = Counter(h for u in core(a) for h in idx.get(u, ()) if h != a)
@@ -1818,39 +1819,44 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
             s = score(min(a, h), max(a, h))
             if s is not None:
                 lo, hi = min(a, h), max(a, h)
-                heapq.heappush(heap, (-s, lo, hi, version[lo], version[hi]))
+                if tie_order is None:  # every real grouping
+                    heapq.heappush(heap, (-s, lo, hi, version[lo], version[hi]))
+                else:  # replay: the (static) tie key ranks entries only within an equal score
+                    heapq.heappush(heap, (-s, tie_order.key(lo, hi, version[lo], version[hi]), lo, hi, version[lo], version[hi]))
 
     rejected: set[tuple[int, int, int, int]] = set()
 
-    def pop_tied() -> tuple[float, int, int, int, int] | None:
-        """Replay path only: every valid candidate at the current top score
-        (stale, already-rejected and duplicate entries dropped exactly as the
-        real loop drops them), one chosen by the tie key, the rest re-queued."""
-        top, tied, seen = heap[0][0], [], set()
-        while heap and heap[0][0] == top:
+    def junk(entry: tuple) -> bool:
+        """A queued entry the real loop would skip: a stale version or a pair already rejected at these versions."""
+        _, _, a, b, va, vb = entry
+        return a not in groups or b not in groups or version[a] != va or version[b] != vb or entry[2:] in rejected
+
+    def pop_replay() -> tuple[float, int, int, int, int] | None:
+        """Replay path only. Entries carry the tie key right after the score,
+        so the heap yields, among the valid candidates at the current top
+        score, the one with the lowest key; stale and rejected entries are
+        skipped exactly as the real loop skips them (the key never ranks
+        across different scores)."""
+        while heap:
             entry = heapq.heappop(heap)
-            _, a, b, va, vb = entry
-            if a not in groups or b not in groups or version[a] != va or version[b] != vb:
+            if junk(entry):
                 continue
-            if entry[1:] in rejected or entry[1:] in seen:
-                continue
-            seen.add(entry[1:])
-            tied.append(entry)
-        if not tied:
-            return None
-        tied.sort(key=lambda e: tie_order.key(*e[1:]))
-        for entry in tied[1:]:
-            heapq.heappush(heap, entry)
-        if tie_stats is not None:
-            tie_stats["judged_steps"] = tie_stats.get("judged_steps", 0) + 1
-            tie_stats["steps_with_tied_candidates"] = tie_stats.get("steps_with_tied_candidates", 0) + (len(tied) > 1)
-            tie_stats["max_tied_candidates"] = max(tie_stats.get("max_tied_candidates", 0), len(tied))
-        if trace is not None:  # tests only: the best valid score over ALL current pairs, by brute force
-            ids = sorted(groups)
-            scores = [score(g, h) for i, g in enumerate(ids) for h in ids[i + 1:]
-                      if (g, h, version[g], version[h]) not in rejected]
-            trace.append((-tied[0][0], max((s for s in scores if s is not None), default=None), len(tied)))
-        return tied[0]
+            neg, chosen = entry[0], entry[2:]
+            # tie statistic: drop junk (and queued duplicates of the chosen pair, which the real loop would skip
+            # once it is judged) from the top, then see whether another valid candidate shares the top score
+            while heap and (junk(heap[0]) or heap[0][2:] == chosen):
+                heapq.heappop(heap)
+            tied = bool(heap) and heap[0][0] == neg
+            if tie_stats is not None:
+                tie_stats["judged_steps"] = tie_stats.get("judged_steps", 0) + 1
+                tie_stats["steps_with_tied_candidates"] = tie_stats.get("steps_with_tied_candidates", 0) + tied
+            if trace is not None:  # tests only: the best valid score over ALL current pairs, by brute force
+                ids = sorted(groups)
+                scores = [score(g, h) for i, g in enumerate(ids) for h in ids[i + 1:]
+                          if (g, h, version[g], version[h]) not in rejected]
+                trace.append((-neg, max((x for x in scores if x is not None), default=None), tied))
+            return (neg, *chosen)
+        return None
 
     for g in sorted(groups):
         push_pairs(g)
@@ -1864,9 +1870,9 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
             if (a, b, va, vb) in rejected:  # the same pair can be queued from both sides
                 continue
         else:  # report-only order replay
-            picked = pop_tied()
+            picked = pop_replay()
             if picked is None:
-                continue
+                break
             neg, a, b, va, vb = picked
             if score(a, b) is None:
                 continue
@@ -2916,8 +2922,7 @@ def render_recursive_lock_in(lock: Mapping[str, Any], names: Names) -> list[str]
     lines += ["| metric | " + " | ".join(r["replay"] for r in rows) + " |", "|---|" + "---|" * len(rows)]
     lines += [f"| {k} | " + " | ".join(f(r[k]) for r in rows) + " |" for k in (*ORDER_METRICS, "decision_rule_mismatches")]
     lines.append("| tied steps / judged steps | - | " + " | ".join(
-        f"{r['tie_stats']['steps_with_tied_candidates']}/{r['tie_stats']['judged_steps']} (max {r['tie_stats']['max_tied_candidates']})"
-        for r in o["replays"]) + " |")
+        f"{r['tie_stats']['steps_with_tied_candidates']}/{r['tie_stats']['judged_steps']}" for r in o["replays"]) + " |")
     lines.append("| pairs together in baseline -> apart / apart -> together | - | " + " | ".join(
         f"{r['partition_vs_baseline']['together_in_baseline_apart_in_replay']} / "
         f"{r['partition_vs_baseline']['together_in_replay_apart_in_baseline']}" for r in o["replays"]) + " |")
