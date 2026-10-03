@@ -23,6 +23,11 @@ name: Read-only archetype research report
 # computed only as the variant sources and comparison baselines of B_S2 and
 # C_S2, and B_S2 / C_S2 run unchanged with every diagnostic. Refinement passes
 # use every runner CPU (identical results to a single process).
+# "s2-stability-b" / "s2-stability-c" are REPORT-ONLY stability research runs
+# (one S2 strategy each, so they fit the budget separately): tie-order replays
+# of the canonical S2 merge, the current tie behaviour and research tie rules
+# on one variant partition; C also runs a refinement convergence study past the
+# production cap. Canonical S2 is unchanged and nothing is promoted.
 on:
   workflow_dispatch:
     inputs:
@@ -31,13 +36,15 @@ on:
         required: true
         default: "18.3"
       report_mode:
-        description: "full = complete A/B/C/S2 report; s2-diagnostics = focused B_S2/C_S2 research run"
+        description: "full = complete report; s2-diagnostics = focused B_S2/C_S2 run; s2-stability-b / s2-stability-c = tie-order stability research"
         required: true
         type: choice
         default: full
         options:
           - full
           - s2-diagnostics
+          - s2-stability-b
+          - s2-stability-c
 
 permissions:
   contents: read
@@ -81,9 +88,9 @@ jobs:
             exit 1
           fi
           case "${REPORT_MODE}" in
-            full|s2-diagnostics) ;;
+            full|s2-diagnostics|s2-stability-b|s2-stability-c) ;;
             *)
-              echo "::error::report_mode must be full or s2-diagnostics." >&2
+              echo "::error::report_mode must be full, s2-diagnostics, s2-stability-b or s2-stability-c." >&2
               exit 1
               ;;
           esac
