@@ -3390,16 +3390,28 @@ def _anchor_stability(lookups: Sequence[Mapping[str, Mapping[str, Any]]], anchor
     return out
 
 
+def stability_phases(strategy_name: str, converge: bool, rules: Sequence[str | None] = STUDY_RULES) -> tuple[str, ...]:
+    """Checkpoint phase names of one stability study, in run order (each is
+    saved as a labelled partial file as soon as it finishes)."""
+    tags = [r or "current" for r in rules]
+    bases = ["canonical", "refined"] if converge else ["canonical"]
+    return (f"{strategy_name}-variants", *(f"{strategy_name}-{b}-{t}" for b in bases for t in tags))
+
+
 def stability_study(boards: Sequence[Board], control: Strategy, strategy: Strategy, config: ArchetypeConfig,
                     progress: Callable[[str], None], workers: int = 1, converge: bool = False,
                     research_cap: int = RESEARCH_MAX_REFINE_ITERATIONS,
                     rules: Sequence[str | None] = STUDY_RULES,
-                    orders: Sequence[TieOrder] = ORDER_REPLAYS) -> dict[str, Any]:
+                    orders: Sequence[TieOrder] = ORDER_REPLAYS,
+                    checkpoint: SectionCallback | None = None) -> dict[str, Any]:
     """REPORT-ONLY: how much the S2 partition depends on tie order, under the
     current tie behaviour and each research tie rule, on one variant base (and,
     with `converge`, also the C convergence study). The variant partition is
     computed ONCE (the control's leader pass + refinement, which S2 reuses) and
-    reused by every merge; nothing reads the database or any outcome."""
+    reused by every merge; nothing reads the database or any outcome.
+    `checkpoint(phase, data, lines)` receives each finished part
+    (`stability_phases`) so a timeout keeps what was computed."""
+    checkpoint = checkpoint or (lambda phase, data, lines: None)
     by_obs = {b.obs: b for b in boards}
     v = _variants(boards, control, config, progress, workers,
                   research_cap if converge else config.max_refine_iterations,
@@ -3420,9 +3432,20 @@ def stability_study(boards: Sequence[Board], control: Strategy, strategy: Strate
     canonical_group = {k: to_group[g] for k, g in canonical_assign.items()}
     progress(f"{strategy.name}: canonical S2 merge on the canonical variants: {len(log)} merges, "
              f"{len(set(canonical_group.values()))} groups")
+    variants_part = {"canonical_variants": _size_summary(canonical_assign), "canonical_s2_merges": len(log),
+                     "canonical_s2_groups": len(set(canonical_group.values()))}
+    if converge:
+        variants_part.update({"research_cap": research_cap, "canonical_moves": v["snapshot"]["moves"],
+                              "research_moves": v["moves"], "research_converged": v["converged"], "cycle": v["cycle"],
+                              "research_variants": _size_summary(v["assign"]),
+                              "canonical_vs_research_variants": partition_disagreement(universe, canonical_assign,
+                                                                                       v["assign"])})
+    checkpoint(f"{strategy.name}-variants", variants_part,
+               [f"## {strategy.name}: variants ({STABILITY_DEFINITIONS['scope']})",
+                *(f"- {k}: {json.dumps(val, default=_json_default)}" for k, val in variants_part.items())])
 
     def evaluate(base_label: str, assign: Mapping[int, int], base_rules: Sequence[str | None],
-                 base_orders: Sequence[TieOrder]) -> dict[str, Any]:
+                 base_orders: Sequence[TieOrder], tag: str, with_nearest: bool = True) -> dict[str, Any]:
         members = members_of(assign)
         rows = []
         for rule in base_rules:
@@ -3435,7 +3458,7 @@ def stability_study(boards: Sequence[Board], control: Strategy, strategy: Strate
                 run["families"] = {label: _anchor_lookup(light, a) for label, a in FAMILY_ANCHORS}
                 run["regressions"] = {label: _anchor_lookup(light, a) for label, a in REGRESSION_ANCHORS}
                 nearest = None
-                if i == 0:  # nearest-other-group similarity: first order only (the costliest metric)
+                if i == 0 and with_nearest:  # nearest-other-group similarity: first order only (the costliest metric)
                     m = global_metrics(boards, Grouping(variant=dict(assign), group=run["group"], log=[], converged=True,
                                                         refine_moves=[], merges=run["merges"],
                                                         merge_checks=run["merge_checks"]), strategy, config)
@@ -3460,12 +3483,20 @@ def stability_study(boards: Sequence[Board], control: Strategy, strategy: Strate
                 "regression_anchor_stability": _anchor_stability([r["regressions"] for r in runs], REGRESSION_ANCHORS),
                 "_first_group": groups[0],
             })
+            public = {k: val for k, val in rows[-1].items() if k != "_first_group"}
+            p = public["pairwise_stability"]
+            checkpoint(f"{strategy.name}-{tag}-{rule or 'current'}", {"base": base_label, **public},
+                       [f"## {strategy.name} [{base_label}] rule {public['rule']}: {p['distinct_partitions']} distinct "
+                        f"partition(s) over {p['replays']} replay order(s); max pair disagreement "
+                        f"{p['disagreement_share_of_pairs_together_in_either']['max']} of pairs together in either; "
+                        f"merges {[r['accepted_merges'] for r in public['replays']]}"])
         return {"base": base_label, "variants": _size_summary(assign), "rules": rows}
 
     bases = []
     if converge:
-        bases.append(evaluate("canonical variants (production refinement cap)", canonical_assign, rules, orders[:1]))
-        bases.append(evaluate("research-refined variants", v["assign"], rules, orders))
+        bases.append(evaluate("canonical variants (production refinement cap)", canonical_assign, rules, orders[:1],
+                              "canonical", with_nearest=False))
+        bases.append(evaluate("research-refined variants", v["assign"], rules, orders, "refined"))
         snapshot_moves = v["snapshot"]["moves"]
         conv = {
             "production_cap": config.max_refine_iterations, "research_cap": research_cap,
@@ -3485,7 +3516,7 @@ def stability_study(boards: Sequence[Board], control: Strategy, strategy: Strate
         }
         out["convergence"] = conv
     else:
-        bases.append(evaluate("canonical variants", canonical_assign, rules, orders))
+        bases.append(evaluate("canonical variants", canonical_assign, rules, orders, "canonical"))
     first = bases[0]["rules"][0]
     out["canonical_s2_reproduced_by_current_rule_first_order"] = first["_first_group"] == canonical_group
     out["canonical_s2"] = {"accepted_merges": len(log), "merge_checks": checks,
@@ -3657,8 +3688,9 @@ def strategy_plan(mode: str = "full") -> list[tuple[Strategy, str]]:
 
 
 def report_phases(mode: str = "full") -> tuple[str, ...]:
-    if mode in STABILITY_MODES:  # one section: the study (its variant source is computed inside it)
-        return ("population", STABILITY_MODES[mode], "closing")
+    if mode in STABILITY_MODES:  # the study's checkpoints, then its full section (variants are computed inside it)
+        name = STABILITY_MODES[mode]
+        return ("population", *stability_phases(name, mode == "s2-stability-c"), name, "closing")
     return ("population", *(s.name for s, _ in strategy_plan(mode)), "closing")
 
 
@@ -3725,7 +3757,7 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
         (control, _), (exp, _) = plan
         progress(f"{exp.name}: stability study started (variants from {control.name})")
         study = stability_study(boards, control, exp, config, progress, workers=workers,
-                                converge=mode == "s2-stability-c", research_cap=research_cap)
+                                converge=mode == "s2-stability-c", research_cap=research_cap, checkpoint=emit)
         report["strategies"][exp.name] = {"stability_study": study}
         lines = render_stability_study(exp, study, names)
         md += lines
