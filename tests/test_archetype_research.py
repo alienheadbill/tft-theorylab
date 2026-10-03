@@ -1261,6 +1261,189 @@ def test_report_carries_the_recursive_lock_in_section_without_identifiers(store:
 
 
 
+# ---------------------------------------------------------------- report modes, exact speedups (run #8 follow-up)
+
+S2_NAMES = ("B_S2_experimental", "C_S2_experimental")
+
+
+def run_mode(store: Path, mode: str, workers: int = 1, events: list | None = None):
+    """(report, markdown, membership, sections) of one in-memory analysis in `mode`."""
+    with Database.open_existing(store) as db:
+        inputs = ar.load_inputs(db, WINDOW)
+    sections: dict[str, list[str]] = {}
+    progress = ar.Progress(emit=events.append if events is not None else None)
+    report, markdown, membership = ar.analyze(inputs.boards, inputs.population, inputs.access, ar.ArchetypeConfig(),
+                                              progress=progress, workers=workers, mode=mode,
+                                              on_section=lambda phase, data, lines: sections.__setitem__(phase, list(lines)))
+    return report, markdown, membership, sections
+
+
+def test_full_mode_keeps_the_existing_strategy_set_and_output(store: Path) -> None:
+    assert ar.REPORT_MODES == ("full", "s2-diagnostics")
+    assert ar.strategy_plan() == ar.strategy_plan("full") == [(s, "report") for s in ar.STRATEGIES]
+    assert ar.PHASES == ar.report_phases("full") == ("population", *(s.name for s in ar.STRATEGIES), "closing")
+    report, markdown, membership = run(store)  # build_report: the full report, as before
+    explicit, explicit_md, explicit_members, _ = run_mode(store, "full")
+    assert json.dumps(report, sort_keys=True, default=str) == json.dumps(explicit, sort_keys=True, default=str)
+    assert markdown == explicit_md and membership == explicit_members
+    assert "report_mode" not in report and "strategies_computed" not in report  # full output carries no mode fields
+    assert list(report["strategies"]) == [s.name for s in ar.STRATEGIES]
+    with pytest.raises(ValueError):
+        ar.strategy_plan("s3-everything")
+
+
+def test_s2_mode_skips_a_and_runs_b_s2_and_c_s2_with_their_variant_sources(store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    clustered, reused = [], []
+    original_cluster, original_reuse = ar.cluster, ar.cluster_reusing_variants
+
+    def cluster(boards, strategy, config, progress=None, **kwargs):
+        clustered.append(strategy.name)
+        return original_cluster(boards, strategy, config, progress, **kwargs)
+
+    def reuse(boards, strategy, config, base, progress=None):
+        reused.append(strategy.name)
+        return original_reuse(boards, strategy, config, base, progress)
+
+    monkeypatch.setattr(ar, "cluster", cluster)
+    monkeypatch.setattr(ar, "cluster_reusing_variants", reuse)
+    events: list[str] = []
+    report, markdown, membership, _ = run_mode(store, "s2-diagnostics", events=events)
+    assert clustered == ["B_flex_tolerant", "C_structure_aware"]  # A is never computed
+    assert reused == list(S2_NAMES)
+    assert not any("A_structural_baseline" in line for line in events)
+    assert [(s.name, role) for s, role in ar.strategy_plan("s2-diagnostics")] == [
+        ("B_flex_tolerant", "variant_source"), ("B_S2_experimental", "report"),
+        ("C_structure_aware", "variant_source"), ("C_S2_experimental", "report")]
+    assert report["report_mode"] == "s2-diagnostics" and "NOT the full A/B/C/S2 report" in report["report_mode_note"]
+    assert report["strategies_computed"] == [{"strategy": s.name, "role": role} for s, role in ar.strategy_plan("s2-diagnostics")]
+    assert list(report["strategies"]) == ["B_flex_tolerant", "B_S2_experimental", "C_structure_aware", "C_S2_experimental"]
+    for control in ("B_flex_tolerant", "C_structure_aware"):  # compact: what S2 needs, not the full control section
+        section = report["strategies"][control]
+        assert section["role"].startswith("variant source and comparison baseline only")
+        assert "groups" in section and "validation_sample" not in section and "merge_diagnostics" not in section
+    assert {m["strategy"] for m in membership} == set(S2_NAMES)
+    assert markdown[1].startswith("**FOCUSED S2 RESEARCH RUN (report mode s2-diagnostics) -- NOT the full A/B/C/S2 report")
+    assert not any(line.startswith("## Strategy A.") or line.startswith("## Strategy B. ") for line in markdown)
+
+
+def test_s2_mode_uses_the_same_s2_rules_and_keeps_every_s2_diagnostic(store: Path) -> None:
+    plan = dict((s.name, s) for s, _ in ar.strategy_plan("s2-diagnostics"))
+    for name in S2_NAMES:  # the very same Strategy objects (rule, weights, merge mode, variant source)
+        assert plan[name] is next(s for s in ar.STRATEGIES if s.name == name)
+        assert plan[name].similarity_rule == "s2" and plan[plan[name].variants_from].similarity_rule == "all_boards"
+    report, _, _, _ = run_mode(store, "s2-diagnostics")
+    for name in S2_NAMES:
+        e = report["strategies"][name]["experimental_s2"]
+        assert e["decision_rule_mismatches"] == 0
+        lock = e["recursive_lock_in"]
+        assert {"accepted_tail_provenance_summary", "similarity_rejection_attribution",
+                "historical_tail_removal_counterfactual", "tail_trajectory", "order_sensitivity"} <= set(lock)
+        o = lock["order_sensitivity"]
+        assert [r["replay"] for r in o["replays"]] == [t.label for t in ar.ORDER_REPLAYS]
+        assert o["baseline_replay_identical_to_real_grouping"] is True
+        assert [f["label"] for f in e["family_review"]] == [label for label, _ in ar.FAMILY_ANCHORS]
+        assert [r["label"] for r in e["regression_review"]] == [label for label, _ in ar.REGRESSION_ANCHORS]
+        assert [f["label"] for f in o["baseline"]["family_anchors"]] == [label for label, _ in ar.FAMILY_ANCHORS]
+        assert [f["label"] for f in o["baseline"]["regression_anchors"]] == [label for label, _ in ar.REGRESSION_ANCHORS]
+        assert {r["metric"] for r in e["comparison"]} >= {"groups", "accepted merges"}  # vs its control, computed here
+
+
+def test_s2_mode_and_full_mode_give_identical_s2_results(store: Path) -> None:
+    full, _, full_members, full_sections = run_mode(store, "full")
+    focused, _, focused_members, focused_sections = run_mode(store, "s2-diagnostics")
+    for name in S2_NAMES:
+        assert json.dumps(full["strategies"][name], sort_keys=True, default=str) == \
+            json.dumps(focused["strategies"][name], sort_keys=True, default=str), name
+        assert full_sections[name] == focused_sections[name], name  # the S2 Markdown section, line for line
+        assert [m for m in full_members if m["strategy"] == name] == [m for m in focused_members if m["strategy"] == name]
+    for control in ("B_flex_tolerant", "C_structure_aware"):  # the controls' metrics are the same computation
+        compact = {k: v for k, v in focused["strategies"][control].items() if k not in ("role", "groups")}
+        assert all(full["strategies"][control][k] == v for k, v in compact.items()), control
+        # in the full section "groups" holds the group summaries; the compact section keeps the metric (a count)
+        assert focused["strategies"][control]["groups"] == len(full["strategies"][control]["groups"])
+    assert full["population"] == focused["population"]  # the same complete population, never a sample
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_sorted_similarity_is_bit_identical_to_similarity(seed: int) -> None:
+    rng = random.Random(seed)
+    keys = [f"K{i:02d}" for i in range(40)]
+
+    def vec(n: int) -> dict[str, float]:
+        return {k: rng.choice([0.5, 1.0, 2.0, rng.random() * 3]) for k in rng.sample(keys, n)}
+
+    for _ in range(400):
+        a = (vec(rng.randint(0, 12)), vec(rng.randint(0, 6)))
+        members = [(vec(rng.randint(1, 12)), vec(rng.randint(0, 6))) for _ in range(rng.randint(1, 30))]
+        b = ar.mean_profile(members)
+        for strategy in ar.STRATEGIES:
+            fast = ar.similarity_sorted(ar.sorted_vector(a), ar.sorted_vector(b), strategy)
+            assert fast == ar.similarity(a, b, strategy) and repr(fast) == repr(ar.similarity(a, b, strategy))
+        assert ar.ruzicka_sorted(ar.sorted_vector(a)[0], ar.sorted_vector(b)[0]) == ar.ruzicka(a[0], b[0])
+    assert ar.ruzicka_sorted((), ()) == ar.ruzicka({}, {}) == 0.0
+
+
+def test_parallel_refinement_gives_identical_groupings(store: Path) -> None:
+    with Database.open_existing(store) as db:
+        boards = ar.load_inputs(db, WINDOW).boards
+    for strategy in ar.STRATEGIES[:3]:
+        one = ar.cluster(boards, strategy, ar.ArchetypeConfig(), workers=1)
+        many = ar.cluster(boards, strategy, ar.ArchetypeConfig(), workers=3)
+        assert (one.variant, one.group, one.log, one.refine_moves, one.converged, one.merges, one.merge_checks,
+                one.prune_audit, one.merge_diagnostics) == \
+               (many.variant, many.group, many.log, many.refine_moves, many.converged, many.merges, many.merge_checks,
+                many.prune_audit, many.merge_diagnostics), strategy.name
+    single, single_md, single_members, _ = run_mode(store, "full", workers=1)
+    multi, multi_md, multi_members, _ = run_mode(store, "full", workers=2)
+    assert json.dumps(single, sort_keys=True, default=str) == json.dumps(multi, sort_keys=True, default=str)
+    assert single_md == multi_md and single_members == multi_members
+    assert ar.resolve_workers(3) == 3 and ar.resolve_workers(0) >= 1
+
+
+def test_cli_s2_mode_writes_labelled_focused_outputs_and_rejects_unknown_modes(store: Path, tmp_path: Path) -> None:
+    out = tmp_path / "s2"
+    result = CliRunner().invoke(app, ["archetype-report", "--db", str(store), "--balance-window", WINDOW, "--out-dir",
+                                      str(out), "--report-mode", "s2-diagnostics", "--workers", "2"])
+    assert result.exit_code == 0, result.output
+    assert sorted(p.name for p in out.iterdir()) == [
+        f"archetypes_{WINDOW}_s2-diagnostics_membership.csv", f"archetypes_{WINDOW}_s2-diagnostics_progress.log",
+        f"archetypes_{WINDOW}_s2-diagnostics_report.json", f"archetypes_{WINDOW}_s2-diagnostics_report.md"]
+    report = json.loads((out / f"archetypes_{WINDOW}_s2-diagnostics_report.json").read_text())
+    assert report["report_mode"] == "s2-diagnostics" and report["read_only_connection"] == "sqlite mode=ro"
+    assert "report mode s2-diagnostics; refinement workers 2" in result.output
+    assert "RESEARCH REPORT COMPLETE" in result.output
+    bad = CliRunner().invoke(app, ["archetype-report", "--db", str(store), "--balance-window", WINDOW, "--out-dir",
+                                   str(tmp_path / "bad"), "--report-mode", "everything"])
+    assert bad.exit_code != 0 and not (tmp_path / "bad").exists()  # rejected before opening the database
+
+
+def test_s2_mode_keeps_finished_s2_results_when_a_later_phase_fails(store: Path, tmp_path: Path,
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    _fail_at(monkeypatch, "C_structure_aware")
+    out = tmp_path / "o"
+    result = CliRunner().invoke(app, ["archetype-report", "--db", str(store), "--balance-window", WINDOW, "--out-dir",
+                                      str(out), "--report-mode", "s2-diagnostics"])
+    assert result.exit_code != 0
+    status = _status(out)
+    assert status["report_mode"] == "s2-diagnostics"
+    assert status["completed_phases"] == ["population", "B_flex_tolerant", "B_S2_experimental"]
+    assert status["pending_phases"] == ["C_structure_aware", "C_S2_experimental", "closing"]
+    data = json.loads((out / "partial" / "03_B_S2_experimental.json").read_text())["data"]
+    assert data["experimental_s2"]["recursive_lock_in"]["order_sensitivity"]["replays"]  # B_S2 evidence survives
+
+
+def test_workflow_offers_the_s2_mode_as_a_validated_choice_defaulting_to_full() -> None:
+    text = _text()
+    block = text[text.index("      report_mode:"):text.index("permissions:")]
+    assert "type: choice" in block and "default: full" in block
+    assert [line.strip()[2:] for line in block.splitlines() if line.strip().startswith("- ")] == list(ar.REPORT_MODES)
+    preflight = text.index("Validate production configuration")
+    assert preflight < text.index("full|s2-diagnostics) ;;") < text.index("actions/checkout")
+    assert text.index("refs/heads/main") < text.index("actions/checkout")  # the main-branch guard is unchanged
+    run_line = next(line for line in text.splitlines() if line.strip().startswith("run: tftlab archetype-report"))
+    assert '--report-mode "$REPORT_MODE"' in run_line and "${{" not in run_line
+
+
 # ---------------------------------------------------------------- population / names / outputs
 
 
@@ -1580,10 +1763,10 @@ def test_success_leaves_only_the_final_report_and_no_partial_label(store: Path, 
 def _fail_at(monkeypatch: pytest.MonkeyPatch, strategy_name: str) -> None:
     original = ar.cluster
 
-    def cluster(boards, strategy, config, progress=None):
+    def cluster(boards, strategy, config, progress=None, **kwargs):
         if strategy.name == strategy_name:
             raise RuntimeError(f"simulated failure in {strategy_name}")
-        return original(boards, strategy, config, progress)
+        return original(boards, strategy, config, progress, **kwargs)
 
     monkeypatch.setattr(ar, "cluster", cluster)
 

@@ -16,6 +16,13 @@ name: Read-only archetype research report
 # phase finished. Everything in archetype-report/ is uploaded as a workflow
 # artifact even if the analysis fails or times out (the job still fails);
 # nothing is committed or written to Postgres.
+#
+# report_mode: "full" (default) is the complete A/B/C/S2 report.
+# "s2-diagnostics" is the focused research run for the experimental S2
+# strategies on the same complete population: A is skipped, B and C are
+# computed only as the variant sources and comparison baselines of B_S2 and
+# C_S2, and B_S2 / C_S2 run unchanged with every diagnostic. Refinement passes
+# use every runner CPU (identical results to a single process).
 on:
   workflow_dispatch:
     inputs:
@@ -23,6 +30,14 @@ on:
         description: "Balance window to analyze"
         required: true
         default: "18.3"
+      report_mode:
+        description: "full = complete A/B/C/S2 report; s2-diagnostics = focused B_S2/C_S2 research run"
+        required: true
+        type: choice
+        default: full
+        options:
+          - full
+          - s2-diagnostics
 
 permissions:
   contents: read
@@ -44,6 +59,7 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           BALANCE_WINDOW: ${{ github.event.inputs.balance_window }}
+          REPORT_MODE: ${{ github.event.inputs.report_mode }}
         run: |
           if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
             echo "::error::This workflow must be run with 'main' explicitly selected as the branch (got ${GITHUB_REF})." >&2
@@ -64,6 +80,13 @@ jobs:
             echo "::error::balance_window must look like 18.3 or 18.2b." >&2
             exit 1
           fi
+          case "${REPORT_MODE}" in
+            full|s2-diagnostics) ;;
+            *)
+              echo "::error::report_mode must be full or s2-diagnostics." >&2
+              exit 1
+              ;;
+          esac
           echo "Production configuration looks valid."
 
       - uses: actions/checkout@v4
@@ -80,7 +103,8 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           BALANCE_WINDOW: ${{ github.event.inputs.balance_window }}
-        run: tftlab archetype-report --out-dir archetype-report --balance-window "$BALANCE_WINDOW"
+          REPORT_MODE: ${{ github.event.inputs.report_mode }}
+        run: tftlab archetype-report --out-dir archetype-report --balance-window "$BALANCE_WINDOW" --report-mode "$REPORT_MODE"
 
       # Runs even when the analysis step fails or times out, so labelled
       # partial results (archetype-report/partial/) and the progress log are

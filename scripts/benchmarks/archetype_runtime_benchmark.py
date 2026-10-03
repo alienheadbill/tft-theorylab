@@ -13,6 +13,7 @@ timings. The model and its parameters are used exactly as shipped.
 Usage:
     python scripts/benchmarks/archetype_runtime_benchmark.py --boards 4000 --diversity high
     python scripts/benchmarks/archetype_runtime_benchmark.py --boards 4000 --diversity high --strategies A_structural_baseline
+    python scripts/benchmarks/archetype_runtime_benchmark.py --boards 10000 --diversity medium --mode s2-diagnostics --workers 4
 """
 
 from __future__ import annotations
@@ -108,7 +109,7 @@ def diversity_stats(boards: list[ar.Board], seed: int = 7) -> dict:
     }
 
 
-def run(n: int, level: str, strategies: list[str] | None) -> dict:
+def run(n: int, level: str, strategies: list[str] | None, mode: str = "full", workers: int = 1) -> dict:
     boards = build_boards(n, level)
     stats = diversity_stats(boards)
     selected = [s for s in ar.STRATEGIES if not strategies or s.name in strategies]
@@ -118,7 +119,7 @@ def run(n: int, level: str, strategies: list[str] | None) -> dict:
     started = time.monotonic()
     try:
         report, _, _ = ar.analyze(boards, {"balance_window": "BENCH"}, "benchmark (no database)", ar.ArchetypeConfig(),
-                                  progress=progress)
+                                  progress=progress, mode=mode, workers=workers)
     finally:
         ar.STRATEGIES = original
     total = time.monotonic() - started
@@ -131,11 +132,13 @@ def run(n: int, level: str, strategies: list[str] | None) -> dict:
             if what.startswith("leader pass completed"):
                 phases.setdefault(name, {})["leader_pass_s"] = elapsed - marks[f"{name}:start"]
                 marks[f"{name}:leader"] = elapsed
-            if what.startswith("completed,"):
+            if what.startswith("completed"):
                 phases.setdefault(name, {})["total_s"] = elapsed - marks[f"{name}:start"]
     result = {"diversity_level": level, "params": DIVERSITY[level], "diversity": stats, "analysis_total_s": total,
-              "strategies": {}}
+              "report_mode": mode, "workers": workers, "strategies": {}}
     for s in selected:
+        if s.name not in report["strategies"]:  # not computed in this report mode (e.g. A in s2-diagnostics)
+            continue
         m = report["strategies"][s.name]
         result["strategies"][s.name] = {**phases.get(s.name, {}), "leader_pass_groups": int(m["log"][0].split()[2]),
                                         "variants": m["variants_before_merge"], "groups": m["groups"],
@@ -149,12 +152,14 @@ def main() -> None:
     ap.add_argument("--boards", type=int, default=4000)
     ap.add_argument("--diversity", choices=sorted(DIVERSITY), default="high")
     ap.add_argument("--strategies", nargs="*")
+    ap.add_argument("--mode", choices=ar.REPORT_MODES, default="full")
+    ap.add_argument("--workers", type=int, default=1, help="refinement processes (results are identical)")
     ap.add_argument("--stats-only", action="store_true", help="print diversity statistics without clustering")
     args = ap.parse_args()
     if args.stats_only:
         print(json.dumps(diversity_stats(build_boards(args.boards, args.diversity)), indent=1))
         return
-    print(json.dumps(run(args.boards, args.diversity, args.strategies), indent=1))
+    print(json.dumps(run(args.boards, args.diversity, args.strategies, args.mode, args.workers), indent=1))
 
 
 if __name__ == "__main__":

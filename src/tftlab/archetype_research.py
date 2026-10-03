@@ -56,6 +56,7 @@ import heapq
 import io
 import json
 import math
+import multiprocessing
 import os
 import shutil
 import statistics
@@ -454,6 +455,61 @@ def similarity(board_vec, profile, strategy: Strategy) -> float:
     return s
 
 
+# Exact fast path for the grouping hot loops (leader pass, refinement, prune
+# audit), where ~90% of the time is `ruzicka` and each vector / profile is
+# compared thousands of times. A "sorted vector" holds the same entries as
+# tuples sorted by key, built once. `ruzicka_sorted` then walks both in the
+# same sorted-key order as `ruzicka` and performs the SAME additions in the
+# SAME order (a key on one side only adds min = 0.0 to the numerator, which
+# leaves it unchanged, and its own value to the denominator), so the result is
+# bit-for-bit identical: same floats, same ties, same threshold comparisons.
+# It only drops the per-call set union, sort and dict lookups.
+
+
+def sorted_vector(vec: tuple[Mapping[str, float], Mapping[str, float]]) -> tuple[tuple, tuple]:
+    return (tuple(sorted(vec[0].items())), tuple(sorted(vec[1].items())))
+
+
+def ruzicka_sorted(a: Sequence[tuple[str, float]], b: Sequence[tuple[str, float]]) -> float:
+    """`ruzicka` on key-sorted (key, weight) sequences; bit-identical to it."""
+    num = den = 0.0
+    i = j = 0
+    na, nb = len(a), len(b)
+    while i < na and j < nb:
+        ka, x = a[i]
+        kb, y = b[j]
+        if ka == kb:
+            if x < y:
+                num += x
+                den += y
+            else:
+                num += y
+                den += x
+            i += 1
+            j += 1
+        elif ka < kb:
+            den += x
+            i += 1
+        else:
+            den += y
+            j += 1
+    while i < na:
+        den += a[i][1]
+        i += 1
+    while j < nb:
+        den += b[j][1]
+        j += 1
+    return num / den if den else 0.0
+
+
+def similarity_sorted(board_vec: tuple[tuple, tuple], profile: tuple[tuple, tuple], strategy: Strategy) -> float:
+    """`similarity` on `sorted_vector`s; bit-identical to it."""
+    s = ruzicka_sorted(board_vec[0], profile[0])
+    if strategy.trait_share:
+        s = (1 - strategy.trait_share) * s + strategy.trait_share * ruzicka_sorted(board_vec[1], profile[1])
+    return s
+
+
 def mean_profile(vectors: Sequence[tuple[dict[str, float], dict[str, float]]]) -> tuple[dict[str, float], dict[str, float]]:
     n = len(vectors)
     units: dict[str, float] = defaultdict(float)
@@ -496,9 +552,10 @@ def _candidates(uv: Mapping[str, float], index: Mapping[str, set[int]], min_shar
 
 
 def _best(vec, profiles, candidates: Iterable[int], strategy: Strategy) -> tuple[int | None, float]:
+    """`vec` and `profiles[g]` are `sorted_vector`s (see `similarity_sorted`)."""
     best, best_s = None, -1.0
     for g in candidates:
-        s = similarity(vec, profiles[g], strategy)
+        s = similarity_sorted(vec, profiles[g], strategy)
         if s > best_s:  # candidates are sorted: ties go to the lowest id
             best, best_s = g, s
     return best, best_s
@@ -553,8 +610,63 @@ def structural_order_key(board: Board, vec: tuple[Mapping[str, float], Mapping[s
     return (-len(board.identity), tuple(sorted(units.items())), tuple(sorted(traits)), board.obs)
 
 
+#: Refinement state shared with forked worker processes: set just before a
+#: pass's pool forks (the children inherit it), read-only there, cleared after.
+_REFINE_STATE: dict[str, Any] = {}
+
+
+def _refine_chunk(bounds: tuple[int, int]) -> list[int | None]:
+    """One slice of a refinement pass: each board's best profile (>= tau) or
+    None, from the pass's FIXED profiles -- exactly the sequential loop's
+    computation for those boards."""
+    st = _REFINE_STATE
+    out: list[int | None] = []
+    for obs in st["order"][bounds[0]:bounds[1]]:
+        g, s = _best(st["svecs"][obs], st["profiles"],
+                     _candidates(st["vecs"][obs][0], st["index"], st["min_shared"]), st["strategy"])
+        out.append(g if g is not None and s >= st["tau"] else None)
+    return out
+
+
+def _refine_assign(order: Sequence[int], vecs, svecs, profiles: Sequence[tuple[tuple, tuple]],
+                   index: Mapping[str, set[int]], strategy: Strategy, config: ArchetypeConfig,
+                   workers: int) -> dict[int, int]:
+    """One refinement pass: obs -> group for every board whose best profile is
+    >= tau, in `order` (the sequential loop's insertion order). Within a pass
+    the profiles and index are fixed, so each board's assignment depends only
+    on its own vector: with `workers` > 1 contiguous slices run in forked
+    processes and are concatenated back in order, giving exactly the
+    sequential result (same function, same inputs, same order)."""
+    global _REFINE_STATE
+    _REFINE_STATE = {"order": list(order), "vecs": vecs, "svecs": svecs, "profiles": profiles, "index": index,
+                     "strategy": strategy, "min_shared": config.prune_min_shared, "tau": config.tau}
+    try:
+        n = len(order)
+        if workers > 1 and n > 1 and "fork" in multiprocessing.get_all_start_methods():
+            size = max(1, math.ceil(n / (workers * 4)))
+            bounds = [(i, min(n, i + size)) for i in range(0, n, size)]
+            with multiprocessing.get_context("fork").Pool(workers) as pool:
+                results = [g for part in pool.map(_refine_chunk, bounds) for g in part]
+        else:
+            results = _refine_chunk((0, n))
+    finally:
+        _REFINE_STATE = {}
+    return {obs: g for obs, g in zip(order, results) if g is not None}
+
+
+def resolve_workers(workers: int | None) -> int:
+    """Refinement worker processes: `workers` if >= 1, else every CPU this
+    process may use (execution setting only -- it never changes a result)."""
+    if workers and workers >= 1:
+        return int(workers)
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:  # pragma: no cover - non-Linux
+        return max(1, os.cpu_count() or 1)
+
+
 def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig,
-            progress: Callable[[str], None] | None = None) -> Grouping:
+            progress: Callable[[str], None] | None = None, workers: int = 1) -> Grouping:
     """Deterministic leader pass + profile refinement (+ merge for B/C).
 
     Leader pass: boards are visited in a purely STRUCTURAL order
@@ -567,29 +679,36 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
     move or max_refine_iterations is reached (reported either way).
 
     `progress` only receives status lines (counts, phase names); it has no
-    influence on the grouping."""
+    influence on the grouping. `workers` (execution only) runs each
+    refinement pass in that many processes with an identical result
+    (`_refine_assign`); the leader pass is inherently sequential. Similarity
+    in these loops uses `similarity_sorted`, bit-identical to `similarity`."""
     progress = progress or _noop
     champions = load_roster().champions
     eligible = [b for b in boards if len(b.identity) >= config.min_identity_units]
     vecs = {b.obs: board_vectors(b, strategy, config, champions) for b in eligible}
+    svecs = {obs: sorted_vector(v) for obs, v in vecs.items()}
     order = sorted(eligible, key=lambda b: structural_order_key(b, vecs[b.obs]))
     log: list[str] = []
 
     members: list[list[int]] = []
     profiles: list[tuple[dict, dict]] = []
+    sprofiles: list[tuple[tuple, tuple]] = []  # sorted_vector(profiles[g]), kept in step
     index: dict[str, set[int]] = defaultdict(set)
     assign: dict[int, int] = {}
     progress(f"{strategy.name}: leader pass started over {len(eligible)} eligible boards")
     for i, b in enumerate(order):
         if i and i % LEADER_PROGRESS_EVERY == 0:
             progress(f"{strategy.name}: leader pass {i}/{len(order)} boards, {len(members)} groups so far")
-        g, s = _best(vecs[b.obs], profiles, _candidates(vecs[b.obs][0], index, config.prune_min_shared), strategy)
+        g, s = _best(svecs[b.obs], sprofiles, _candidates(vecs[b.obs][0], index, config.prune_min_shared), strategy)
         if g is None or s < config.tau:
             members.append([])
             profiles.append(({}, {}))
+            sprofiles.append(((), ()))
             g = len(members) - 1
         members[g].append(b.obs)
         profiles[g] = mean_profile([vecs[k] for k in members[g]])
+        sprofiles[g] = sorted_vector(profiles[g])
         for u, f in profiles[g][0].items():
             (index[u].add if f >= config.prune_presence else index[u].discard)(g)
         assign[b.obs] = g
@@ -598,6 +717,7 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
 
     converged, moves = False, []
     threshold = max(1, math.floor(config.convergence_moved_share * len(eligible)))
+    order_obs = [b.obs for b in order]
     for it in range(config.max_refine_iterations):
         grouped: dict[int, list[int]] = defaultdict(list)
         for k, g in assign.items():
@@ -605,11 +725,8 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
         kept = sorted(g for g, ks in grouped.items() if len(ks) >= config.min_group_size)
         profiles = [mean_profile([vecs[k] for k in grouped[g]]) for g in kept]
         index = _index(profiles, config.prune_presence)
-        new: dict[int, int] = {}
-        for b in order:
-            g, s = _best(vecs[b.obs], profiles, _candidates(vecs[b.obs][0], index, config.prune_min_shared), strategy)
-            if g is not None and s >= config.tau:
-                new[b.obs] = g
+        new = _refine_assign(order_obs, vecs, svecs, [sorted_vector(p) for p in profiles], index, strategy, config,
+                             workers)
         moved = _moves(assign, new)
         moves.append(moved)
         assign = _renumber(new, vecs)
@@ -681,6 +798,7 @@ def prune_audit(eligible: Sequence[Board], vecs, assign: Mapping[int, int], stra
         grouped[g].append(k)
     gids = sorted(grouped)
     profiles = {g: mean_profile([vecs[k] for k in grouped[g]]) for g in gids}
+    sprofiles = {g: sorted_vector(p) for g, p in profiles.items()}
     index: dict[str, set[int]] = defaultdict(set)
     for g in gids:
         for u, f in profiles[g][0].items():
@@ -690,8 +808,9 @@ def prune_audit(eligible: Sequence[Board], vecs, assign: Mapping[int, int], stra
     sample = [b for b in sorted(eligible, key=lambda b: b.obs)][::step][: config.prune_audit_boards]
     disagreements = 0
     for b in sample:
-        pruned = _best(vecs[b.obs], profiles, _candidates(vecs[b.obs][0], index, config.prune_min_shared), strategy)
-        brute = _best(vecs[b.obs], profiles, gids, strategy)
+        sv = sorted_vector(vecs[b.obs])
+        pruned = _best(sv, sprofiles, _candidates(vecs[b.obs][0], index, config.prune_min_shared), strategy)
+        brute = _best(sv, sprofiles, gids, strategy)
         p = pruned[0] if pruned[0] is not None and pruned[1] >= config.tau else None
         q = brute[0] if brute[0] is not None and brute[1] >= config.tau else None
         disagreements += p != q
@@ -1706,6 +1825,12 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
     version = {g: 0 for g in sizes}
     log: list[str] = []
     checks = {"rejected_core": 0, "rejected_similarity": 0, "variants_with_a_board_below_tau_before_merge": 0}
+    svecs = {b.obs: sorted_vector(vecs[b.obs]) for b in boards}  # bit-identical fast similarity (`similarity_sorted`)
+
+    def sims(obs: Sequence[int], profile) -> dict[int, float]:
+        """obs -> similarity to `profile` (the strategy's similarity)."""
+        sp = sorted_vector(profile)
+        return {k: similarity_sorted(svecs[k], sp, strategy) for k in obs}
 
     def core_of(c: Counter, n: int) -> set[str]:
         return {u for u, k in c.items() if k / n >= config.core_presence}
@@ -1715,7 +1840,7 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
 
     def below_tau(obs: Sequence[int]) -> bool:
         profile = mean_profile([vecs[k] for k in obs])
-        return any(similarity(vecs[k], profile, strategy) < config.tau for k in obs)
+        return any(x < config.tau for x in sims(obs, profile).values())
 
     checks["variants_with_a_board_below_tau_before_merge"] = sum(below_tau(sorted(members[g])) for g in sorted(groups))
 
@@ -1767,7 +1892,7 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
         """S2 against the tentative merged profile of a+b (sides by board count; tie: a, the lower id)."""
         obs = sorted(members[a] + members[b])
         profile = mean_profile([vecs[k] for k in obs])
-        post = {k: similarity(vecs[k], profile, strategy) for k in obs}
+        post = sims(obs, profile)
         larger, smaller = (a, b) if sizes[a] >= sizes[b] else (b, a)
         below = {g: sum(1 for k in members[g] if post[k] < config.tau) for g in (a, b)}
         return s2_conditions(larger_below=below[larger], smaller_below=below[smaller], smaller_boards=sizes[smaller],
@@ -1783,7 +1908,7 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
         if key not in pre_cache:
             obs = sorted(members[g])
             profile = mean_profile([vecs[k] for k in obs])
-            pre_cache[key] = {k: similarity(vecs[k], profile, strategy) for k in obs}
+            pre_cache[key] = sims(obs, profile)
         return pre_cache[key]
 
     def measure(a: int, b: int, overlap: float, accepted: bool) -> None:
@@ -1794,7 +1919,7 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
         merged_core = core_of(counts[a] + counts[b], sizes[a] + sizes[b])
         obs = sorted(members[a] + members[b])
         profile = mean_profile([vecs[k] for k in obs])
-        post = {k: similarity(vecs[k], profile, strategy) for k in obs}
+        post = sims(obs, profile)
         pre = {**pre_similarity(a), **pre_similarity(b)}
         side = {**{k: "a" for k in members[a]}, **{k: "b" for k in members[b]}}
         splash = (strategy.merge == "structure_aware"
@@ -1804,8 +1929,7 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
         def evaluate(subset: Sequence[int]) -> dict[int, float]:
             """Similarity of each board to the mean profile of `subset` (the
             lock-in counterfactual); reads vectors only."""
-            sub = mean_profile([vecs[k] for k in subset])
-            return {k: similarity(vecs[k], sub, strategy) for k in subset}
+            return sims(subset, mean_profile([vecs[k] for k in subset]))
 
         diagnostics.record(accepted=accepted, a=a, b=b, variants_a=len(groups[a]), variants_b=len(groups[b]),
                            core_a=ca, core_b=cb, merged_core=merged_core, overlap=overlap, splash=splash,
@@ -2072,7 +2196,9 @@ def global_metrics(boards: Sequence[Board], grouping: Grouping, strategy: Strate
     sizes = sorted((len(v) for v in members.values()), reverse=True)
     vecs = {b.obs: board_vectors(b, strategy, config, champions) for b in eligible}
     profiles = {g: mean_profile([vecs[b.obs] for b in bs]) for g, bs in sorted(members.items())}
-    within = [similarity(vecs[b.obs], profiles[g], strategy) for g, bs in sorted(members.items()) for b in bs]
+    sprofiles = {g: sorted_vector(p) for g, p in profiles.items()}
+    within = [similarity_sorted(sorted_vector(vecs[b.obs]), sprofiles[g], strategy)
+              for g, bs in sorted(members.items()) for b in bs]
     index: dict[str, set[int]] = defaultdict(set)
     for g, (units, _) in profiles.items():
         for u, f in units.items():
@@ -2081,7 +2207,7 @@ def global_metrics(boards: Sequence[Board], grouping: Grouping, strategy: Strate
     nearest = []
     for g, prof in profiles.items():
         near = [h for h in _candidates(prof[0], index, config.prune_min_shared) if h != g]
-        nearest.append(max((similarity(prof, profiles[h], strategy) for h in near), default=0.0))
+        nearest.append(max((similarity_sorted(sprofiles[g], sprofiles[h], strategy) for h in near), default=0.0))
     return {
         "strategy": strategy.name,
         "description": strategy.description,
@@ -2452,8 +2578,8 @@ def final_group_diagnostics(boards: Sequence[Board], grouping: Grouping, strateg
     groups = []
     for g, obs in sorted(members.items()):
         vecs = [board_vectors(by_obs[k], strategy, config, champions) for k in obs]
-        profile = mean_profile(vecs)
-        sims = sorted(similarity(v, profile, strategy) for v in vecs)
+        sprofile = sorted_vector(mean_profile(vecs))
+        sims = sorted(similarity_sorted(sorted_vector(v), sprofile, strategy) for v in vecs)
         below = sum(x < config.tau for x in sims)
 
         def core(ks: Sequence[int]) -> set[str]:
@@ -3022,6 +3148,42 @@ def build_report(db: Database, *, balance_window: str = DEFAULT_BALANCE_WINDOW,
     return analyze(inputs.boards, inputs.population, inputs.access, config or ArchetypeConfig())
 
 
+#: Report modes. "full" (the default) is the unchanged complete report: every
+#: strategy in STRATEGIES, each with its full section. "s2-diagnostics" is a
+#: FOCUSED research run for the experimental S2 strategies only: A is not
+#: computed (nothing S2 reports depends on it), and each S2 strategy's control
+#: (B for B_S2, C for C_S2) is computed only as what S2 needs from it -- its
+#: variants (the leader pass + refinement that S2 reuses) and its grouping,
+#: metrics and group summaries (the S2 section's comparison with its control
+#: and the control columns of the family/regression review). The controls'
+#: own report sections are omitted. Every S2 decision, threshold and diagnostic
+#: is computed by the same code as in "full", so the S2 sections are identical.
+REPORT_MODES: tuple[str, ...] = ("full", "s2-diagnostics")
+S2_MODE_NOTE = ("FOCUSED S2 RESEARCH RUN (report mode s2-diagnostics) -- NOT the full A/B/C/S2 report. Strategy A is "
+                "not computed. B and C are computed in this run only as the variant sources and comparison baselines "
+                "of B_S2 and C_S2; their own report sections are omitted. B_S2 and C_S2 (decisions, thresholds, "
+                "recursive lock-in diagnostics, order replays, family and regression anchors) are computed exactly as "
+                "in the full report, on the complete population below.")
+
+
+def strategy_plan(mode: str = "full") -> list[tuple[Strategy, str]]:
+    """(strategy, role) in run order. role "report": full section; role
+    "variant_source": computed only for the S2 strategy that reuses it."""
+    if mode == "full":
+        return [(s, "report") for s in STRATEGIES]
+    if mode == "s2-diagnostics":
+        by_name = {s.name: s for s in STRATEGIES}
+        plan: list[tuple[Strategy, str]] = []
+        for exp in (s for s in STRATEGIES if s.similarity_rule == "s2"):
+            plan += [(by_name[exp.variants_from], "variant_source"), (exp, "report")]
+        return plan
+    raise ValueError(f"unknown report mode {mode!r}; expected one of {REPORT_MODES}")
+
+
+def report_phases(mode: str = "full") -> tuple[str, ...]:
+    return ("population", *(s.name for s, _ in strategy_plan(mode)), "closing")
+
+
 #: `on_section(phase, data, markdown_lines)` receives each finished part of
 #: the report as soon as it exists: "population" first, then every strategy
 #: name, then "closing". Used to stream and persist partial results.
@@ -3030,9 +3192,12 @@ SectionCallback = Callable[[str, Mapping[str, Any], Sequence[str]], None]
 
 def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
             config: ArchetypeConfig, *, progress: Callable[[str], None] | None = None,
-            on_section: SectionCallback | None = None) -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
+            on_section: SectionCallback | None = None, workers: int = 1,
+            mode: str = "full") -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
     """Pure in-memory analysis (no database). Returns the same (report,
-    markdown, membership) whether or not `progress`/`on_section` are given."""
+    markdown, membership) whether or not `progress`/`on_section` are given,
+    and for any `workers` (execution only). `mode`: see REPORT_MODES."""
+    plan = strategy_plan(mode)
     progress = progress or _noop
     emit = on_section or (lambda phase, data, lines: None)
     names = Names()
@@ -3044,8 +3209,14 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
     report: dict[str, Any] = {"kind": "RESEARCH / VALIDATION -- experimental board-archetype analysis, not served to users",
                               "read_only_connection": access, "population": population, "config": asdict(config),
                               "strategies": {}, "statistical_warnings": list(STATISTICAL_WARNINGS)}
+    focused = mode != "full"  # the full report's output is unchanged (no mode fields)
+    if focused:
+        report["report_mode"] = mode
+        report["report_mode_note"] = S2_MODE_NOTE
+        report["strategies_computed"] = [{"strategy": s.name, "role": role} for s, role in plan]
     md: list[str] = [
         "# Board archetype research report (EXPERIMENTAL -- research/validation only)",
+        *([f"**{S2_MODE_NOTE}**", ""] if focused else []),
         f"Read-only connection: {access}",
         "",
         "## Population (all percentages below state their denominator)",
@@ -3056,19 +3227,23 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
         "",
     ]
     progress(f"normalization completed: {len(boards)} boards, {len(eligible)} eligible for grouping")
-    emit("population", {"read_only_connection": access, "population": population, "config": asdict(config)}, list(md))
+    progress(f"report mode {mode}: " + ", ".join(f"{s.name} ({role})" for s, role in plan))
+    header = {"read_only_connection": access, "population": population, "config": asdict(config)}
+    if focused:
+        header = {**header, **{k: report[k] for k in ("report_mode", "report_mode_note", "strategies_computed")}}
+    emit("population", header, list(md))
     membership: list[dict[str, Any]] = []
     by_obs = {b.obs: b for b in eligible}
     unit_presence_hist: dict[str, Counter] = {}
     # kept for the experimental strategies (variant reuse, comparison with their controls)
     done: dict[str, dict[str, Any]] = {}
-    for strategy in STRATEGIES:
+    for strategy, role in plan:
         progress(f"{strategy.name}: started")
         chunk_start = len(md)
         if strategy.variants_from:
             grouping = cluster_reusing_variants(boards, strategy, config, done[strategy.variants_from]["grouping"], progress)
         else:
-            grouping = cluster(boards, strategy, config, progress)
+            grouping = cluster(boards, strategy, config, progress, workers=workers)
         progress(f"{strategy.name}: global metrics started")
         metrics = global_metrics(boards, grouping, strategy, config)
         progress(f"{strategy.name}: global metrics completed")
@@ -3077,6 +3252,20 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
         for k, g in sorted(grouping.group.items()):
             members[g].append(by_obs[k])
         summaries = {g: group_summary(g, bs, config, eligible=len(eligible), observable=len(boards)) for g, bs in sorted(members.items())}
+        if role == "variant_source":  # s2-diagnostics: only what the S2 strategy reusing it needs
+            report["strategies"][strategy.name] = {
+                "role": "variant source and comparison baseline only (report mode s2-diagnostics; computed in this run, "
+                        "full control report omitted)", **metrics}
+            md += [f"## Variant source and comparison baseline: {strategy.label} (computed in this run; full control "
+                   "section omitted in report mode s2-diagnostics)",
+                   *(f"- {k}: {json.dumps(metrics[k], default=_json_default)}" for k in (
+                       "boards_considered", "boards_in_multi_board_groups", "boards_ungrouped", "groups",
+                       "variants_before_merge", "merges", "merge_checks", "converged", "refine_moves", "prune_audit")), ""]
+            done[strategy.name] = {"grouping": grouping, "metrics": metrics, "summaries": summaries, "strategy": strategy}
+            progress(f"{strategy.name}: completed as variant source, {len(set(grouping.variant.values()))} variants, "
+                     f"{metrics['groups']} groups")
+            emit(strategy.name, report["strategies"][strategy.name], md[chunk_start:])
+            continue
         sample = validation_sample(list(summaries.values()))
         shells = same_unit_different_shells(list(summaries.values()))
         swaps = similar_shell_different_unit(list(summaries.values()))
@@ -3189,8 +3378,8 @@ def _atomic_write_text(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def _output_paths(out_dir: Path, balance_window: str) -> dict[str, Path]:
-    tag = str(balance_window).replace("/", "_")
+def _output_paths(out_dir: Path, balance_window: str, mode: str = "full") -> dict[str, Path]:
+    tag = str(balance_window).replace("/", "_") + ("" if mode == "full" else f"_{mode}")
     return {
         "markdown": out_dir / f"archetypes_{tag}_report.md",
         "json": out_dir / f"archetypes_{tag}_report.json",
@@ -3203,7 +3392,7 @@ def _output_paths(out_dir: Path, balance_window: str) -> dict[str, Path]:
 def write_outputs(report: Mapping[str, Any], markdown: Sequence[str], membership: Sequence[Mapping[str, Any]],
                   out_dir: Path) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    paths = _output_paths(out_dir, report["population"]["balance_window"])
+    paths = _output_paths(out_dir, report["population"]["balance_window"], report.get("report_mode", "full"))
     _atomic_write_text(paths["markdown"], "\n".join(markdown) + "\n")
     _atomic_write_text(paths["json"], json.dumps(report, indent=1, sort_keys=True, ensure_ascii=False, default=_json_default))
     buffer = io.StringIO()
@@ -3215,7 +3404,7 @@ def write_outputs(report: Mapping[str, Any], markdown: Sequence[str], membership
 
 
 PARTIAL_LABEL = "PARTIAL / INCOMPLETE RESEARCH RESULT"
-PHASES = ("population", *(s.name for s in STRATEGIES), "closing")
+PHASES = report_phases("full")
 
 
 class ProgressiveWriter:
@@ -3236,10 +3425,12 @@ class ProgressiveWriter:
     Stale outputs of an earlier run in `out_dir` are removed first, so an
     old complete report can never sit next to a new run's partial one."""
 
-    def __init__(self, out_dir: Path, balance_window: str) -> None:
+    def __init__(self, out_dir: Path, balance_window: str, mode: str = "full") -> None:
         self.out_dir = out_dir
         self.balance_window = balance_window
-        self.paths = _output_paths(out_dir, balance_window)
+        self.mode = mode
+        self.phases = report_phases(mode)
+        self.paths = _output_paths(out_dir, balance_window, mode)
         self.completed: list[str] = []
         self._prepared = False
 
@@ -3272,10 +3463,12 @@ class ProgressiveWriter:
         self._write_status()
 
     def _write_status(self) -> None:
-        pending = [p for p in PHASES if p not in self.completed]
+        pending = [p for p in self.phases if p not in self.completed]
         status = {"status": PARTIAL_LABEL, "balance_window": self.balance_window,
                   "completed_phases": list(self.completed), "pending_phases": pending,
                   "note": f"The complete report is {self.paths['markdown'].name}; if it is absent this run did not finish."}
+        if self.mode != "full":
+            status["report_mode"] = self.mode
         _atomic_write_text(self.paths["partial"] / "00_STATUS.json", json.dumps(status, indent=1, sort_keys=True))
         _atomic_write_text(self.paths["partial"] / "00_STATUS.md", "\n".join([
             f"# {PARTIAL_LABEL}", f"Balance window: {self.balance_window}",
