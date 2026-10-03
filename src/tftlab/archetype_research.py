@@ -551,13 +551,73 @@ def _candidates(uv: Mapping[str, float], index: Mapping[str, set[int]], min_shar
     return sorted(g for g, shared in hits.items() if shared >= min_shared)
 
 
+#: Exact candidate screening for `_best` (see `profile_view`): a candidate
+#: whose screening value is more than this below the best screening value
+#: cannot be the most similar candidate. Floating-point error of the
+#: screening formula is ~1e-15 on similarities in [0, 1], so this margin is
+#: many orders of magnitude wider than any possible error.
+SCREEN_MARGIN = 1e-9
+
+
+def profile_view(profile: tuple[Mapping[str, float], Mapping[str, float]]) -> tuple:
+    """What `_best` needs about one profile: its `sorted_vector` (for the
+    exact similarity), its dicts and the sums of its weights (for screening)."""
+    return (sorted_vector(profile), profile, (sum(profile[0].values()), sum(profile[1].values())))
+
+
+def _screen_ruzicka(a: Sequence[tuple[str, float]], b: Mapping[str, float], b_sum: float) -> float:
+    """Ruzicka of a small sorted vector `a` against dict `b` (total `b_sum`),
+    via sum(max) = sum over a's keys of max + (b_sum - b's mass on a's keys).
+    Mathematically equal to `ruzicka`; the different summation order can
+    differ only in the last bits, so it is used ONLY to screen candidates."""
+    num = den_a = inter = 0.0
+    for k, x in a:
+        y = b.get(k)
+        if y is None:
+            den_a += x
+        else:
+            inter += y
+            if x < y:
+                num += x
+                den_a += y
+            else:
+                num += y
+                den_a += x
+    den = den_a + (b_sum - inter)
+    return num / den if den else 0.0
+
+
 def _best(vec, profiles, candidates: Iterable[int], strategy: Strategy) -> tuple[int | None, float]:
-    """`vec` and `profiles[g]` are `sorted_vector`s (see `similarity_sorted`)."""
-    best, best_s = None, -1.0
+    """The most similar candidate (ties: the lowest id) and its EXACT
+    similarity. `vec` is a `sorted_vector`, `profiles[g]` a `profile_view`.
+
+    Exact screening: a cheap, mathematically equal similarity is computed for
+    every candidate; only candidates within SCREEN_MARGIN of the best of those
+    are then evaluated with the exact `similarity_sorted` (bit-identical to
+    `similarity`), in sorted order with the original strict-improvement rule.
+    Every candidate that could be (or tie) the exact best survives -- its
+    screening value is within float error of its exact value -- and every
+    candidate screened out is strictly worse than the exact best, so the
+    result is exactly the original loop's."""
+    ts = strategy.trait_share
+    candidates = list(candidates)
+    screen: list[float] = []
+    top = -1.0
     for g in candidates:
-        s = similarity_sorted(vec, profiles[g], strategy)
-        if s > best_s:  # candidates are sorted: ties go to the lowest id
-            best, best_s = g, s
+        _, (pu, pt), (su, st) = profiles[g]
+        s = _screen_ruzicka(vec[0], pu, su)
+        if ts:
+            s = (1 - ts) * s + ts * _screen_ruzicka(vec[1], pt, st)
+        screen.append(s)
+        if s > top:
+            top = s
+    best, best_s = None, -1.0
+    cut = top - SCREEN_MARGIN
+    for g, s in zip(candidates, screen):
+        if s >= cut:
+            exact = similarity_sorted(vec, profiles[g][0], strategy)
+            if exact > best_s:  # candidates are sorted: ties go to the lowest id
+                best, best_s = g, exact
     return best, best_s
 
 
@@ -683,7 +743,27 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
     refinement pass in that many processes with an identical result
     (`_refine_assign`); the leader pass is inherently sequential. Similarity
     in these loops uses `similarity_sorted`, bit-identical to `similarity`."""
-    progress = progress or _noop
+    v = _variants(boards, strategy, config, progress or _noop, workers, config.max_refine_iterations)
+    return _merge_and_audit(v["eligible"], v["vecs"], v["assign"], v["log"], v["converged"], v["moves"], strategy, config,
+                            progress or _noop)
+
+
+def _partition_digest(assign: Mapping[int, int]) -> str:
+    """Fingerprint of a renumbered assignment (ids are a deterministic function
+    of the partition, see `_renumber`), to detect a refinement cycle."""
+    import hashlib
+    return hashlib.sha256(json.dumps(sorted(assign.items())).encode()).hexdigest()
+
+
+def _variants(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig, progress: Callable[[str], None],
+              workers: int, max_iterations: int, snapshot_after: int | None = None) -> dict[str, Any]:
+    """The leader pass and refinement of `cluster` (see there), run for at
+    most `max_iterations` refinement passes. `cluster` always passes
+    config.max_refine_iterations. REPORT-ONLY research (`refinement_study`)
+    may pass a larger cap with `snapshot_after` = config.max_refine_iterations:
+    the state after that many passes -- exactly what `cluster` returns -- is
+    kept as `snapshot`, and a repeated partition (a refinement cycle) stops the
+    run instead of forcing convergence."""
     champions = load_roster().champions
     eligible = [b for b in boards if len(b.identity) >= config.min_identity_units]
     vecs = {b.obs: board_vectors(b, strategy, config, champions) for b in eligible}
@@ -693,7 +773,7 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
 
     members: list[list[int]] = []
     profiles: list[tuple[dict, dict]] = []
-    sprofiles: list[tuple[tuple, tuple]] = []  # sorted_vector(profiles[g]), kept in step
+    sprofiles: list[tuple] = []  # profile_view(profiles[g]), kept in step
     index: dict[str, set[int]] = defaultdict(set)
     assign: dict[int, int] = {}
     progress(f"{strategy.name}: leader pass started over {len(eligible)} eligible boards")
@@ -704,11 +784,11 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
         if g is None or s < config.tau:
             members.append([])
             profiles.append(({}, {}))
-            sprofiles.append(((), ()))
+            sprofiles.append(profile_view(({}, {})))
             g = len(members) - 1
         members[g].append(b.obs)
         profiles[g] = mean_profile([vecs[k] for k in members[g]])
-        sprofiles[g] = sorted_vector(profiles[g])
+        sprofiles[g] = profile_view(profiles[g])
         for u, f in profiles[g][0].items():
             (index[u].add if f >= config.prune_presence else index[u].discard)(g)
         assign[b.obs] = g
@@ -718,14 +798,23 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
     converged, moves = False, []
     threshold = max(1, math.floor(config.convergence_moved_share * len(eligible)))
     order_obs = [b.obs for b in order]
-    for it in range(config.max_refine_iterations):
+    snapshot: dict[str, Any] | None = None
+    seen: dict[str, int] = {}
+    cycle: dict[str, int] | None = None
+
+    def finished(assign: Mapping[int, int]) -> dict[int, int]:
+        """The final pass: singleton groups (possible after the last reassignment) are ungrouped."""
+        sizes = Counter(assign.values())
+        return _renumber({k: g for k, g in assign.items() if sizes[g] >= config.min_group_size}, vecs)
+
+    for it in range(max_iterations):
         grouped: dict[int, list[int]] = defaultdict(list)
         for k, g in assign.items():
             grouped[g].append(k)
         kept = sorted(g for g, ks in grouped.items() if len(ks) >= config.min_group_size)
         profiles = [mean_profile([vecs[k] for k in grouped[g]]) for g in kept]
         index = _index(profiles, config.prune_presence)
-        new = _refine_assign(order_obs, vecs, svecs, [sorted_vector(p) for p in profiles], index, strategy, config,
+        new = _refine_assign(order_obs, vecs, svecs, [profile_view(p) for p in profiles], index, strategy, config,
                              workers)
         moved = _moves(assign, new)
         moves.append(moved)
@@ -736,10 +825,22 @@ def cluster(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig
         if moved <= threshold:
             converged = True
             break
-    # final pass: singleton groups (possible after the last reassignment) are ungrouped
-    sizes = Counter(assign.values())
-    assign = _renumber({k: g for k, g in assign.items() if sizes[g] >= config.min_group_size}, vecs)
-    return _merge_and_audit(eligible, vecs, assign, log, converged, moves, strategy, config, progress)
+        if snapshot_after is not None:  # research only
+            if it + 1 == snapshot_after:
+                snapshot = {"assign": finished(assign), "log": list(log), "moves": list(moves), "converged": False}
+            digest = _partition_digest(assign)
+            if digest in seen:  # the same partition again: refinement is cycling, stop (never forced)
+                cycle = {"first_iteration": seen[digest], "repeated_at_iteration": it + 1,
+                         "cycle_length": it + 1 - seen[digest]}
+                progress(f"{strategy.name}: refinement cycle detected (partition of iteration {seen[digest]} repeated "
+                         f"at iteration {it + 1}); research refinement stopped")
+                break
+            seen[digest] = it + 1
+    final = finished(assign)
+    if snapshot_after is not None and snapshot is None:  # converged (or stopped) at or before the snapshot point
+        snapshot = {"assign": final, "log": list(log), "moves": list(moves), "converged": converged}
+    return {"eligible": eligible, "vecs": vecs, "assign": final, "log": log, "converged": converged, "moves": moves,
+            "snapshot": snapshot, "cycle": cycle, "threshold": threshold}
 
 
 def cluster_reusing_variants(boards: Sequence[Board], strategy: Strategy, config: ArchetypeConfig, base: Grouping,
@@ -798,7 +899,7 @@ def prune_audit(eligible: Sequence[Board], vecs, assign: Mapping[int, int], stra
         grouped[g].append(k)
     gids = sorted(grouped)
     profiles = {g: mean_profile([vecs[k] for k in grouped[g]]) for g in gids}
-    sprofiles = {g: sorted_vector(p) for g, p in profiles.items()}
+    sprofiles = {g: profile_view(p) for g, p in profiles.items()}
     index: dict[str, set[int]] = defaultdict(set)
     for g in gids:
         for u, f in profiles[g][0].items():
@@ -1784,7 +1885,8 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
                    config: ArchetypeConfig, *, vecs: Mapping[int, tuple[dict[str, float], dict[str, float]]] | None = None,
                    diagnostics: MergeDiagnostics | None = None, tie_order: TieOrder | None = None,
                    tie_stats: dict[str, int] | None = None,
-                   trace: list[tuple[float, float | None, int]] | None = None) -> tuple[dict[int, int], list[str], dict[str, int]]:
+                   trace: list[tuple[float, float | None, int]] | None = None,
+                   tie_rule: str | None = None) -> tuple[dict[int, int], list[str], dict[str, int]]:
     """Variant -> group. Greedy: the highest core-overlap mergeable pair first
     (ties: lowest ids), every candidate re-checked against the merged group's
     recomputed statistics. Pairwise checks alone let a merged core shrink
@@ -1807,7 +1909,19 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
     unchanged. `TieOrder("baseline")` reproduces the real order exactly.
     `tie_stats` receives tie counts on that path; `trace` (tests only)
     receives, per judged step, (chosen score, brute-force best valid score,
-    whether another valid candidate shared the top score)."""
+    whether another valid candidate shared the top score).
+
+    `tie_rule` (REPORT-ONLY research, `TIE_RULES`; never used by a real
+    grouping) inserts a structural secondary key between the core-overlap
+    score and the tie order: among candidates tied at the same highest core
+    overlap, the one ranked best by the rule is judged first, and `tie_order`
+    then orders only what the rule leaves tied. The key is computed when the
+    entry is queued, from the two groups' members at those versions (board
+    vectors only)."""
+    if tie_rule is not None:
+        if tie_rule not in TIE_RULES:
+            raise ValueError(f"unknown tie rule {tie_rule!r}")
+        tie_order = tie_order or TieOrder("baseline")
     if vecs is None:
         champions = load_roster().champions
         vecs = {b.obs: board_vectors(b, strategy, config, champions) for b in boards}
@@ -1945,6 +2059,32 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
     idx = core_index()
     heap: list[tuple] = []
 
+    profile_cache: dict[tuple[int, int], tuple] = {}
+
+    def group_profile(g: int) -> tuple:
+        """sorted_vector of group g's CURRENT mean profile (cached per version)."""
+        key = (g, version[g])
+        if key not in profile_cache:
+            profile_cache[key] = sorted_vector(mean_profile([vecs[k] for k in sorted(members[g])]))
+        return profile_cache[key]
+
+    rule_cache: dict[tuple[int, int, int, int], tuple[float, ...]] = {}
+
+    def rule_key(lo: int, hi: int) -> tuple[float, ...]:
+        """The research tie rule's key for merging lo+hi now (smaller = judged
+        first). Structure only: board vectors of the two groups' members."""
+        cache_key = (lo, hi, version[lo], version[hi])
+        if cache_key not in rule_cache:
+            if tie_rule == "centroid_similarity":
+                value = similarity_sorted(group_profile(lo), group_profile(hi), strategy)
+            else:
+                obs = sorted(members[lo] + members[hi])
+                post = sims(obs, mean_profile([vecs[k] for k in obs]))
+                values = [post[k] for k in obs]
+                value = min(values) if tie_rule == "min_member_similarity" else sum(values) / len(values)
+            rule_cache[cache_key] = (-value,)
+        return rule_cache[cache_key]
+
     def push_pairs(a: int) -> None:
         near = Counter(h for u in core(a) for h in idx.get(u, ()) if h != a)
         for h, shared in near.items():
@@ -1955,15 +2095,19 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
                 lo, hi = min(a, h), max(a, h)
                 if tie_order is None:  # every real grouping
                     heapq.heappush(heap, (-s, lo, hi, version[lo], version[hi]))
-                else:  # replay: the (static) tie key ranks entries only within an equal score
+                elif tie_rule is None:  # replay: the (static) tie key ranks entries only within an equal score
                     heapq.heappush(heap, (-s, tie_order.key(lo, hi, version[lo], version[hi]), lo, hi, version[lo], version[hi]))
+                else:  # research tie rule: score, then the rule's key, then the tie order
+                    heapq.heappush(heap, (-s, rule_key(lo, hi), tie_order.key(lo, hi, version[lo], version[hi]),
+                                          lo, hi, version[lo], version[hi]))
 
     rejected: set[tuple[int, int, int, int]] = set()
 
     def junk(entry: tuple) -> bool:
-        """A queued entry the real loop would skip: a stale version or a pair already rejected at these versions."""
-        _, _, a, b, va, vb = entry
-        return a not in groups or b not in groups or version[a] != va or version[b] != vb or entry[2:] in rejected
+        """A queued entry the real loop would skip: a stale version or a pair already rejected at these versions.
+        The pair (lo, hi, va, vb) is always the entry's last four fields."""
+        a, b, va, vb = entry[-4:]
+        return a not in groups or b not in groups or version[a] != va or version[b] != vb or entry[-4:] in rejected
 
     def pop_replay() -> tuple[float, int, int, int, int] | None:
         """Replay path only. Entries carry the tie key right after the score,
@@ -1975,15 +2119,18 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
             entry = heapq.heappop(heap)
             if junk(entry):
                 continue
-            neg, chosen = entry[0], entry[2:]
+            neg, chosen = entry[0], entry[-4:]
             # tie statistic: drop junk (and queued duplicates of the chosen pair, which the real loop would skip
             # once it is judged) from the top, then see whether another valid candidate shares the top score
-            while heap and (junk(heap[0]) or heap[0][2:] == chosen):
+            while heap and (junk(heap[0]) or heap[0][-4:] == chosen):
                 heapq.heappop(heap)
             tied = bool(heap) and heap[0][0] == neg
             if tie_stats is not None:
                 tie_stats["judged_steps"] = tie_stats.get("judged_steps", 0) + 1
                 tie_stats["steps_with_tied_candidates"] = tie_stats.get("steps_with_tied_candidates", 0) + tied
+                if tie_rule is not None:  # still tied after the research rule (same score AND same rule key)
+                    tie_stats["steps_still_tied_after_rule"] = (tie_stats.get("steps_still_tied_after_rule", 0)
+                                                                + (tied and heap[0][1] == entry[1]))
             if trace is not None:  # tests only: the best valid score over ALL current pairs, by brute force
                 ids = sorted(groups)
                 scores = [score(g, h) for i, g in enumerate(ids) for h in ids[i + 1:]
@@ -2196,8 +2343,8 @@ def global_metrics(boards: Sequence[Board], grouping: Grouping, strategy: Strate
     sizes = sorted((len(v) for v in members.values()), reverse=True)
     vecs = {b.obs: board_vectors(b, strategy, config, champions) for b in eligible}
     profiles = {g: mean_profile([vecs[b.obs] for b in bs]) for g, bs in sorted(members.items())}
-    sprofiles = {g: sorted_vector(p) for g, p in profiles.items()}
-    within = [similarity_sorted(sorted_vector(vecs[b.obs]), sprofiles[g], strategy)
+    sprofiles = {g: profile_view(p) for g, p in profiles.items()}
+    within = [similarity_sorted(sorted_vector(vecs[b.obs]), sprofiles[g][0], strategy)
               for g, bs in sorted(members.items()) for b in bs]
     index: dict[str, set[int]] = defaultdict(set)
     for g, (units, _) in profiles.items():
@@ -2207,7 +2354,8 @@ def global_metrics(boards: Sequence[Board], grouping: Grouping, strategy: Strate
     nearest = []
     for g, prof in profiles.items():
         near = [h for h in _candidates(prof[0], index, config.prune_min_shared) if h != g]
-        nearest.append(max((similarity_sorted(sprofiles[g], sprofiles[h], strategy) for h in near), default=0.0))
+        # the exact max over `near` (empty: 0.0), via the same exact screening as `_best`
+        nearest.append(_best(sprofiles[g][0], sprofiles, near, strategy)[1] if near else 0.0)
     return {
         "strategy": strategy.name,
         "description": strategy.description,
@@ -3116,6 +3264,323 @@ def _member_lines(boards: Sequence[Board], names: Names, n: int = 3) -> list[str
     return out
 
 
+# ---------------------------------------------------------------- S2 stability research (run #9 follow-up; report only)
+
+#: REPORT-ONLY research tie rules for `merge_variants(tie_rule=...)`, fixed
+#: before any production run. Each ranks ONLY candidates already tied at the
+#: same highest core overlap, from the structure of the tentative merge at that
+#: moment (board vectors of the two groups' current members). None reads
+#: placement, Top 4, wins, items' performance, carry performance, popularity,
+#: later merges, or the family/regression anchors.
+TIE_RULES: dict[str, str] = {
+    "centroid_similarity": "merge first the tied pair whose two current group mean profiles are most similar to each other "
+                           "(the strategy's own similarity between the two profiles; centroid linkage). Rationale: among "
+                           "equally overlapping cores, the pair that is most alike as a whole is the least ambiguous merge.",
+    "min_member_similarity": "merge first the tied pair whose tentative merged group has the highest MINIMUM member "
+                             "similarity to its tentative merged profile. Rationale: S2's acceptance is about the weakest "
+                             "members, so the merge whose weakest member fits best is the most coherent one.",
+    "mean_member_similarity": "merge first the tied pair whose tentative merged group has the highest MEAN member similarity "
+                              "to its tentative merged profile. Rationale: overall cohesion of the merged group.",
+}
+CURRENT_TIE_RULE = "current (lowest group ids)"
+#: Rules compared by the stability study: the current tie behaviour (None) first.
+STUDY_RULES: tuple[str | None, ...] = (None, *TIE_RULES)
+#: Research-only refinement cap for the C convergence study (the production
+#: cap, ArchetypeConfig.max_refine_iterations, is unchanged). Chosen so the C
+#: study fits the workflow budget (see the PR / README runtime estimate).
+RESEARCH_MAX_REFINE_ITERATIONS = 20
+STABILITY_DEFINITIONS: dict[str, str] = {
+    "scope": "REPORT-ONLY stability research (report modes s2-stability-b / s2-stability-c). The canonical S2 strategies, "
+             "their thresholds, Condition 1, tau, tail rules, core and merge restrictions are unchanged; nothing here is "
+             "served or promoted. Patch-window results are development evidence, not independent validation.",
+    "current tie behaviour": "the S2 merge queue judges the valid candidate with the highest core-overlap score "
+                             "(|shared core| / |core union|, an exact ratio of small integers, so equal ratios tie "
+                             "exactly); among tied candidates the lowest (lo, hi) group-id pair goes first. Group ids come "
+                             "from `_renumber` (size descending, then frequent units, then lowest observation) and a "
+                             "merged group keeps the lower id, so ties currently favour pairs involving the largest "
+                             "original variants.",
+    "tie rules": "a research rule ranks only candidates tied at the same highest core overlap (it never lets a "
+                 "lower-overlap candidate go first); what the rule leaves tied is ordered by the replay order. "
+                 "Definitions: see `tie_rules`.",
+    "replay orders": "for each rule, the same merge is replayed under each ORDER_REPLAYS order (baseline ids, reversed "
+                     "ids, three fixed seeds), which permute only candidates still tied after the rule. A rule that "
+                     "removes order dependence gives the same partition under every order.",
+    "pairwise_stability": "every pair of a rule's replays compared with `partition_disagreement` over the strategy's "
+                          "eligible boards (ungrouped = singletons); summarised as mean and max over the pairs.",
+    "anchors": "family and regression anchors are evaluation diagnostics only; no rule reads them.",
+    "convergence": "C only: the same refinement continued past the production cap up to a research cap; the state "
+                   "after the production cap is the canonical variant partition. A repeated partition (cycle) stops "
+                   "the research run and is reported; convergence is never forced.",
+}
+
+
+def _size_summary(assign: Mapping[int, int]) -> dict[str, Any]:
+    sizes = sorted(Counter(assign.values()).values(), reverse=True)
+    return {"groups": len(sizes), "boards": sum(sizes), "size_quantiles": quantiles(sizes), "largest": sizes[:10],
+            "size_bands": {label: sum(1 for x in sizes if size_band(x) == label) for label, _, _ in SIZE_BANDS}}
+
+
+def partition_quality(group: Mapping[int, int], vecs, by_obs: Mapping[int, Board], strategy: Strategy,
+                      config: ArchetypeConfig) -> dict[str, Any]:
+    """Structural quality of one final partition (every grouped board vs its
+    final group profile), computed directly -- the light counterpart of
+    `final_group_diagnostics` plus the within-group similarity distribution."""
+    members: dict[int, list[int]] = defaultdict(list)
+    for k, g in sorted(group.items()):
+        members[g].append(k)
+    within: list[float] = []
+    below = over1 = over5 = over10 = tiny = any_below = 0
+    for g, obs in sorted(members.items()):
+        sp = sorted_vector(mean_profile([vecs[k] for k in obs]))
+        sims = [similarity_sorted(sorted_vector(vecs[k]), sp, strategy) for k in obs]
+        within += sims
+        b = sum(x < config.tau for x in sims)
+        below += b
+        any_below += b > 0
+        over1 += 100 * b > len(obs)
+        over5 += 20 * b > len(obs)
+        over10 += 10 * b > len(obs)
+        presence = Counter(u for k in obs for u in by_obs[k].identity)
+        core = sum(1 for c in presence.values() if c / len(obs) >= config.core_presence)
+        tiny += core <= TINY_CORE_UNITS and len(obs) >= TINY_CORE_MIN_BOARDS
+    return {"groups": len(members), "grouped_boards": len(group), "final_boards_below_tau": below,
+            "groups_with_any_board_below_tau": any_below, "groups_over_1pct_below_tau": over1,
+            "groups_over_5pct_below_tau": over5, "groups_over_10pct_below_tau": over10,
+            "tiny_core_large_groups": tiny, "within_group_similarity": quantiles(within)}
+
+
+def _merge_config(members: Sequence[Board], assign: Mapping[int, int], vecs, strategy: Strategy, config: ArchetypeConfig,
+                  rule: str | None, order: TieOrder) -> dict[str, Any]:
+    diag = MergeDiagnostics(config.tau, lock_in=True)
+    stats = {"judged_steps": 0, "steps_with_tied_candidates": 0}
+    to_group, log, checks = merge_variants(members, assign, strategy, config, vecs=vecs, diagnostics=diag, tie_order=order,
+                                           tie_rule=rule, tie_stats=stats)
+    return {"group": {k: to_group[v] for k, v in assign.items()}, "merges": len(log), "merge_checks": checks,
+            "counts": _counts(diag.lock), "tie_stats": stats,
+            "decision_rule_mismatches": sum(all(shadow_conditions(r, config.tau)["S2"].values()) != (r["outcome"] == "accepted")
+                                            for r in diag.rows)}
+
+
+def _pairwise(universe: Sequence[int], groups: Sequence[Mapping[int, int]]) -> dict[str, Any]:
+    pairs = [partition_disagreement(universe, groups[i], groups[j]) for i in range(len(groups)) for j in range(i + 1, len(groups))]
+
+    def stat(key: str) -> dict[str, Any]:
+        xs = [p[key] for p in pairs]
+        return {"mean": statistics.fmean(xs) if xs else None, "max": max(xs) if xs else None}
+
+    distinct = len({tuple(sorted(g.items())) for g in groups})
+    return {"replays": len(groups), "pairs": len(pairs), "identical_pairs": sum(p["disagreeing_pairs"] == 0 for p in pairs),
+            "distinct_partitions": distinct,
+            "disagreement_share_of_all_pairs": stat("disagreement_share_of_all_pairs"),
+            "disagreement_share_of_pairs_together_in_either": stat("disagreement_share_of_pairs_together_in_either"),
+            "boards_with_changed_group_membership": stat("boards_with_changed_group_membership")}
+
+
+def _anchor_stability(lookups: Sequence[Mapping[str, Mapping[str, Any]]], anchors) -> list[dict[str, Any]]:
+    out = []
+    for label, anchor_units in anchors:
+        rows = [lk[label] for lk in lookups]
+        out.append({"label": label, "anchors": sorted(anchor_units),
+                    "distinct_outcomes": len({r["members"] for r in rows}),
+                    "groups_range": [min(r["groups"] for r in rows), max(r["groups"] for r in rows)],
+                    "boards_range": [min(r["boards"] for r in rows), max(r["boards"] for r in rows)],
+                    "largest_size_range": [min((r["largest_sizes"] or [0])[0] for r in rows),
+                                           max((r["largest_sizes"] or [0])[0] for r in rows)],
+                    "first_replay_largest_cores": rows[0]["largest_cores"] if rows else []})
+    return out
+
+
+def stability_study(boards: Sequence[Board], control: Strategy, strategy: Strategy, config: ArchetypeConfig,
+                    progress: Callable[[str], None], workers: int = 1, converge: bool = False,
+                    research_cap: int = RESEARCH_MAX_REFINE_ITERATIONS,
+                    rules: Sequence[str | None] = STUDY_RULES,
+                    orders: Sequence[TieOrder] = ORDER_REPLAYS) -> dict[str, Any]:
+    """REPORT-ONLY: how much the S2 partition depends on tie order, under the
+    current tie behaviour and each research tie rule, on one variant base (and,
+    with `converge`, also the C convergence study). The variant partition is
+    computed ONCE (the control's leader pass + refinement, which S2 reuses) and
+    reused by every merge; nothing reads the database or any outcome."""
+    by_obs = {b.obs: b for b in boards}
+    v = _variants(boards, control, config, progress, workers,
+                  research_cap if converge else config.max_refine_iterations,
+                  snapshot_after=config.max_refine_iterations if converge else None)
+    eligible = v["eligible"]
+    universe = [b.obs for b in eligible]
+    champions = load_roster().champions
+    vecs = {b.obs: board_vectors(b, strategy, config, champions) for b in eligible}  # == the control's (same weighting)
+    canonical_assign = v["snapshot"]["assign"] if converge else v["assign"]
+    out: dict[str, Any] = {"definitions": STABILITY_DEFINITIONS, "tie_rules": TIE_RULES, "control": control.name,
+                           "orders": [o.label for o in orders], "rules": [r or CURRENT_TIE_RULE for r in rules]}
+
+    def members_of(assign: Mapping[int, int]) -> list[Board]:
+        return [b for b in eligible if b.obs in assign]
+
+    # the canonical S2 partition on the canonical variants (real merge path, no replay machinery)
+    to_group, log, checks = merge_variants(members_of(canonical_assign), canonical_assign, strategy, config, vecs=vecs)
+    canonical_group = {k: to_group[g] for k, g in canonical_assign.items()}
+    progress(f"{strategy.name}: canonical S2 merge on the canonical variants: {len(log)} merges, "
+             f"{len(set(canonical_group.values()))} groups")
+
+    def evaluate(base_label: str, assign: Mapping[int, int], base_rules: Sequence[str | None],
+                 base_orders: Sequence[TieOrder]) -> dict[str, Any]:
+        members = members_of(assign)
+        rows = []
+        for rule in base_rules:
+            runs = []
+            for i, order in enumerate(base_orders):
+                started = time.monotonic()
+                run = _merge_config(members, assign, vecs, strategy, config, rule, order)
+                quality = partition_quality(run["group"], vecs, by_obs, strategy, config)
+                light = light_group_cores(run["group"], by_obs, config)
+                run["families"] = {label: _anchor_lookup(light, a) for label, a in FAMILY_ANCHORS}
+                run["regressions"] = {label: _anchor_lookup(light, a) for label, a in REGRESSION_ANCHORS}
+                nearest = None
+                if i == 0:  # nearest-other-group similarity: first order only (the costliest metric)
+                    m = global_metrics(boards, Grouping(variant=dict(assign), group=run["group"], log=[], converged=True,
+                                                        refine_moves=[], merges=run["merges"],
+                                                        merge_checks=run["merge_checks"]), strategy, config)
+                    nearest = {"nearest_other_group_similarity": m["nearest_other_group_similarity"],
+                               "groups_with_nearest_other_at_or_above_tau": m["groups_with_nearest_other_at_or_above_tau"]}
+                runs.append({**run, "order": order.label, "quality": quality, "nearest": nearest})
+                progress(f"{strategy.name}: stability [{base_label}] rule {rule or CURRENT_TIE_RULE}, order {order.label}: "
+                         f"{run['merges']} merges, {quality['groups']} groups, {time.monotonic() - started:.1f}s")
+            groups = [r["group"] for r in runs]
+            rows.append({
+                "rule": rule or CURRENT_TIE_RULE,
+                "definition": TIE_RULES.get(rule, STABILITY_DEFINITIONS["current tie behaviour"]),
+                "replays": [{"order": r["order"], "accepted_merges": r["merges"],
+                             "ungrouped_boards": len(universe) - r["quality"]["grouped_boards"], **r["quality"],
+                             "lock_in": r["counts"], "tie_stats": r["tie_stats"],
+                             "decision_rule_mismatches": r["decision_rule_mismatches"],
+                             **({"nearest": r["nearest"]} if r["nearest"] else {})} for r in runs],
+                "pairwise_stability": _pairwise(universe, groups),
+                "first_replay_vs_canonical_s2": partition_disagreement(universe, canonical_group, groups[0])
+                if base_label.startswith("canonical") else None,
+                "family_anchor_stability": _anchor_stability([r["families"] for r in runs], FAMILY_ANCHORS),
+                "regression_anchor_stability": _anchor_stability([r["regressions"] for r in runs], REGRESSION_ANCHORS),
+                "_first_group": groups[0],
+            })
+        return {"base": base_label, "variants": _size_summary(assign), "rules": rows}
+
+    bases = []
+    if converge:
+        bases.append(evaluate("canonical variants (production refinement cap)", canonical_assign, rules, orders[:1]))
+        bases.append(evaluate("research-refined variants", v["assign"], rules, orders))
+        snapshot_moves = v["snapshot"]["moves"]
+        conv = {
+            "production_cap": config.max_refine_iterations, "research_cap": research_cap,
+            "convergence_threshold_moved_boards": v["threshold"],
+            "canonical_converged": v["snapshot"]["converged"], "canonical_moves": snapshot_moves,
+            "research_iterations_run": len(v["moves"]), "research_moves": v["moves"],
+            "research_converged": v["converged"], "cycle": v["cycle"],
+            "extra_iterations": len(v["moves"]) - len(snapshot_moves),
+            "canonical_vs_research_variants": partition_disagreement(universe, canonical_assign, v["assign"]),
+            "canonical_variants": _size_summary(canonical_assign), "research_variants": _size_summary(v["assign"]),
+            "s2_current_rule_canonical_vs_research_base": partition_disagreement(
+                universe, bases[0]["rules"][0]["_first_group"], bases[1]["rules"][0]["_first_group"]),
+            # robustness to the upstream variant change: each rule's first-order S2 partition on both bases
+            "s2_by_rule_canonical_vs_research_base": [
+                {"rule": r0["rule"], **partition_disagreement(universe, r0["_first_group"], r1["_first_group"])}
+                for r0, r1 in zip(bases[0]["rules"], bases[1]["rules"])],
+        }
+        out["convergence"] = conv
+    else:
+        bases.append(evaluate("canonical variants", canonical_assign, rules, orders))
+    first = bases[0]["rules"][0]
+    out["canonical_s2_reproduced_by_current_rule_first_order"] = first["_first_group"] == canonical_group
+    out["canonical_s2"] = {"accepted_merges": len(log), "merge_checks": checks,
+                           **partition_quality(canonical_group, vecs, by_obs, strategy, config)}
+    for base in bases:
+        for row in base["rules"]:
+            row.pop("_first_group")
+    out["bases"] = bases
+    return out
+
+
+def render_stability_study(strategy: Strategy, study: Mapping[str, Any], names: Names) -> list[str]:
+    """Markdown for `stability_study`; every decision-relevant number is printed."""
+    def f(x: Any) -> str:
+        return "n/a" if x is None else f"{x:.4f}" if isinstance(x, float) else str(x)
+
+    def units(ids: Sequence[str]) -> str:
+        return ", ".join(names.champion(u) for u in ids) or "-"
+
+    lines = ["", f"## S2 stability research: {strategy.label} (REPORT ONLY; canonical S2 unchanged)",
+             *(f"- {k}: {v}" for k, v in study["definitions"].items()),
+             *(f"- tie rule `{k}`: {v}" for k, v in study["tie_rules"].items()),
+             f"- canonical S2 (real merge path) reproduced by the current rule's first order: "
+             f"{study['canonical_s2_reproduced_by_current_rule_first_order']}",
+             f"- canonical S2: {study['canonical_s2']['accepted_merges']} merges, {study['canonical_s2']['groups']} groups, "
+             f"{study['canonical_s2']['final_boards_below_tau']} grouped boards below tau"]
+    conv = study.get("convergence")
+    if conv:
+        d = conv["canonical_vs_research_variants"]
+        lines += ["", "### C refinement convergence (research cap; the production cap is unchanged)",
+                  f"- production cap {conv['production_cap']}: converged {conv['canonical_converged']}, moves "
+                  f"{conv['canonical_moves']}",
+                  f"- research cap {conv['research_cap']}: iterations run {conv['research_iterations_run']} "
+                  f"(+{conv['extra_iterations']}), converged {conv['research_converged']}, cycle {conv['cycle']}, "
+                  f"threshold {conv['convergence_threshold_moved_boards']} moved boards",
+                  f"- research moves per iteration: {conv['research_moves']}",
+                  f"- canonical vs research variants: {d['boards_with_changed_group_membership']} boards changed variant "
+                  f"membership; disagreement {f(d['disagreement_share_of_all_pairs'])} of all pairs, "
+                  f"{f(d['disagreement_share_of_pairs_together_in_either'])} of pairs together in either",
+                  f"- variants: canonical {conv['canonical_variants']['groups']} (boards {conv['canonical_variants']['boards']}, "
+                  f"largest {conv['canonical_variants']['largest'][:5]}) vs research {conv['research_variants']['groups']} "
+                  f"(boards {conv['research_variants']['boards']}, largest {conv['research_variants']['largest'][:5]})",
+                  "- S2 partition on canonical vs research variants (first order; robustness of each rule to the "
+                  "upstream variant change):",
+                  *(f"  - {r['rule']}: {r['boards_with_changed_group_membership']} boards changed group; disagreement "
+                    f"{f(r['disagreement_share_of_pairs_together_in_either'])} of pairs together in either, "
+                    f"{f(r['disagreement_share_of_all_pairs'])} of all pairs"
+                    for r in conv["s2_by_rule_canonical_vs_research_base"])]
+    for base in study["bases"]:
+        lines += ["", f"### Base: {base['base']} ({base['variants']['groups']} variants, {base['variants']['boards']} boards)",
+                  "| rule | replays | distinct partitions | identical pairs | pair disagreement (together-in-either) mean / max "
+                  "| (all pairs) max | boards changed mean / max | merges range | groups range | below tau range |",
+                  "|---|---|---|---|---|---|---|---|---|---|"]
+        for row in base["rules"]:
+            p, reps = row["pairwise_stability"], row["replays"]
+            rng = lambda key: f"{min(r[key] for r in reps)}-{max(r[key] for r in reps)}"  # noqa: E731
+            lines.append(f"| {row['rule']} | {p['replays']} | {p['distinct_partitions']} | {p['identical_pairs']}/{p['pairs']} | "
+                         f"{f(p['disagreement_share_of_pairs_together_in_either']['mean'])} / "
+                         f"{f(p['disagreement_share_of_pairs_together_in_either']['max'])} | "
+                         f"{f(p['disagreement_share_of_all_pairs']['max'])} | "
+                         f"{f(p['boards_with_changed_group_membership']['mean'])} / "
+                         f"{f(p['boards_with_changed_group_membership']['max'])} | {rng('accepted_merges')} | "
+                         f"{rng('groups')} | {rng('final_boards_below_tau')} |")
+        for row in base["rules"]:
+            first = row["replays"][0]
+            w = first["within_group_similarity"] or {}
+            n = (first.get("nearest") or {}).get("nearest_other_group_similarity") or {}
+            lines += [f"- **{row['rule']}** (first order): {first['accepted_merges']} merges, {first['groups']} groups, "
+                      f"{first['grouped_boards']} grouped / {first['ungrouped_boards']} ungrouped; below tau "
+                      f"{first['final_boards_below_tau']} (groups > 1% {first['groups_over_1pct_below_tau']}, > 5% "
+                      f"{first['groups_over_5pct_below_tau']}, > 10% {first['groups_over_10pct_below_tau']}); tiny-core "
+                      f"large groups {first['tiny_core_large_groups']}; within-group similarity p10 {f(w.get('p10'))} / "
+                      f"median {f(w.get('median'))}; nearest other group median {f(n.get('median'))}, near-duplicates "
+                      f"{(first.get('nearest') or {}).get('groups_with_nearest_other_at_or_above_tau')}; lock-in: "
+                      f"Condition-1 rejections {first['lock_in']['condition1_rejections']}, historical-tail attributed "
+                      f"{first['lock_in']['historical_tail_attributed_condition1_rejections']}, counterfactual recoveries "
+                      f"{first['lock_in']['counterfactual_recoveries']}; tied steps "
+                      f"{first['tie_stats']['steps_with_tied_candidates']}/{first['tie_stats']['judged_steps']}"
+                      + (f" (still tied after the rule: {first['tie_stats']['steps_still_tied_after_rule']})"
+                         if "steps_still_tied_after_rule" in first["tie_stats"] else "") + "; decision "
+                      f"mismatches {sum(r['decision_rule_mismatches'] for r in row['replays'])}"]
+            if row.get("first_replay_vs_canonical_s2"):
+                c = row["first_replay_vs_canonical_s2"]
+                lines.append(f"  - first order vs canonical S2: {c['boards_with_changed_group_membership']} boards changed "
+                             f"group; disagreement {f(c['disagreement_share_of_pairs_together_in_either'])} of pairs "
+                             "together in either")
+            for a in row["family_anchor_stability"]:
+                lines.append(f"  - family {a['label']}: {a['distinct_outcomes']} distinct outcome(s) over replays; groups "
+                             f"{a['groups_range']}, boards {a['boards_range']}, largest {a['largest_size_range']}; first "
+                             f"largest core: {units((a['first_replay_largest_cores'] or [[]])[0])}")
+            for a in row["regression_anchor_stability"]:
+                lines.append(f"  - regression {a['label']}: groups {a['groups_range']}, boards {a['boards_range']}")
+    return lines + [""]
+
+
 @dataclass(frozen=True)
 class LoadedInputs:
     """Everything the analysis needs, fully materialized in memory (plain
@@ -3158,7 +3623,14 @@ def build_report(db: Database, *, balance_window: str = DEFAULT_BALANCE_WINDOW,
 #: and the control columns of the family/regression review). The controls'
 #: own report sections are omitted. Every S2 decision, threshold and diagnostic
 #: is computed by the same code as in "full", so the S2 sections are identical.
-REPORT_MODES: tuple[str, ...] = ("full", "s2-diagnostics")
+REPORT_MODES: tuple[str, ...] = ("full", "s2-diagnostics", "s2-stability-b", "s2-stability-c")
+#: REPORT-ONLY stability research modes (run #9 follow-up): one S2 strategy
+#: each, so B and C can run as separate production jobs within the budget.
+STABILITY_MODES: dict[str, str] = {"s2-stability-b": "B_S2_experimental", "s2-stability-c": "C_S2_experimental"}
+STABILITY_MODE_NOTE = ("S2 STABILITY RESEARCH RUN (report mode {mode}) -- NOT the full report and NOT a production rule. "
+                       "{strategy}'s variants are computed once (its control's leader pass and refinement{conv}); the "
+                       "canonical S2 merge, the current tie behaviour and the research tie rules are then replayed under "
+                       "several tie orders on those variants. Canonical S2 is unchanged; nothing is promoted.")
 S2_MODE_NOTE = ("FOCUSED S2 RESEARCH RUN (report mode s2-diagnostics) -- NOT the full A/B/C/S2 report. Strategy A is "
                 "not computed. B and C are computed in this run only as the variant sources and comparison baselines "
                 "of B_S2 and C_S2; their own report sections are omitted. B_S2 and C_S2 (decisions, thresholds, "
@@ -3177,10 +3649,16 @@ def strategy_plan(mode: str = "full") -> list[tuple[Strategy, str]]:
         for exp in (s for s in STRATEGIES if s.similarity_rule == "s2"):
             plan += [(by_name[exp.variants_from], "variant_source"), (exp, "report")]
         return plan
+    if mode in STABILITY_MODES:
+        by_name = {s.name: s for s in STRATEGIES}
+        exp = by_name[STABILITY_MODES[mode]]
+        return [(by_name[exp.variants_from], "variant_source"), (exp, "stability")]
     raise ValueError(f"unknown report mode {mode!r}; expected one of {REPORT_MODES}")
 
 
 def report_phases(mode: str = "full") -> tuple[str, ...]:
+    if mode in STABILITY_MODES:  # one section: the study (its variant source is computed inside it)
+        return ("population", STABILITY_MODES[mode], "closing")
     return ("population", *(s.name for s, _ in strategy_plan(mode)), "closing")
 
 
@@ -3193,7 +3671,8 @@ SectionCallback = Callable[[str, Mapping[str, Any], Sequence[str]], None]
 def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
             config: ArchetypeConfig, *, progress: Callable[[str], None] | None = None,
             on_section: SectionCallback | None = None, workers: int = 1,
-            mode: str = "full") -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
+            mode: str = "full",
+            research_cap: int = RESEARCH_MAX_REFINE_ITERATIONS) -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
     """Pure in-memory analysis (no database). Returns the same (report,
     markdown, membership) whether or not `progress`/`on_section` are given,
     and for any `workers` (execution only). `mode`: see REPORT_MODES."""
@@ -3210,13 +3689,18 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
                               "read_only_connection": access, "population": population, "config": asdict(config),
                               "strategies": {}, "statistical_warnings": list(STATISTICAL_WARNINGS)}
     focused = mode != "full"  # the full report's output is unchanged (no mode fields)
+    note = S2_MODE_NOTE
+    if mode in STABILITY_MODES:
+        note = STABILITY_MODE_NOTE.format(
+            mode=mode, strategy=STABILITY_MODES[mode],
+            conv=f", continued up to {research_cap} refinement passes for the convergence study" if mode == "s2-stability-c" else "")
     if focused:
         report["report_mode"] = mode
-        report["report_mode_note"] = S2_MODE_NOTE
+        report["report_mode_note"] = note
         report["strategies_computed"] = [{"strategy": s.name, "role": role} for s, role in plan]
     md: list[str] = [
         "# Board archetype research report (EXPERIMENTAL -- research/validation only)",
-        *([f"**{S2_MODE_NOTE}**", ""] if focused else []),
+        *([f"**{note}**", ""] if focused else []),
         f"Read-only connection: {access}",
         "",
         "## Population (all percentages below state their denominator)",
@@ -3237,6 +3721,17 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
     unit_presence_hist: dict[str, Counter] = {}
     # kept for the experimental strategies (variant reuse, comparison with their controls)
     done: dict[str, dict[str, Any]] = {}
+    if mode in STABILITY_MODES:
+        (control, _), (exp, _) = plan
+        progress(f"{exp.name}: stability study started (variants from {control.name})")
+        study = stability_study(boards, control, exp, config, progress, workers=workers,
+                                converge=mode == "s2-stability-c", research_cap=research_cap)
+        report["strategies"][exp.name] = {"stability_study": study}
+        lines = render_stability_study(exp, study, names)
+        md += lines
+        progress(f"{exp.name}: stability study completed")
+        emit(exp.name, report["strategies"][exp.name], lines)
+        plan = []  # nothing else runs in a stability mode
     for strategy, role in plan:
         progress(f"{strategy.name}: started")
         chunk_start = len(md)

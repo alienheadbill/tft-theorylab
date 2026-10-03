@@ -1279,7 +1279,7 @@ def run_mode(store: Path, mode: str, workers: int = 1, events: list | None = Non
 
 
 def test_full_mode_keeps_the_existing_strategy_set_and_output(store: Path) -> None:
-    assert ar.REPORT_MODES == ("full", "s2-diagnostics")
+    assert ar.REPORT_MODES == ("full", "s2-diagnostics", "s2-stability-b", "s2-stability-c")
     assert ar.strategy_plan() == ar.strategy_plan("full") == [(s, "report") for s in ar.STRATEGIES]
     assert ar.PHASES == ar.report_phases("full") == ("population", *(s.name for s in ar.STRATEGIES), "closing")
     report, markdown, membership = run(store)  # build_report: the full report, as before
@@ -1438,7 +1438,7 @@ def test_workflow_offers_the_s2_mode_as_a_validated_choice_defaulting_to_full() 
     assert "type: choice" in block and "default: full" in block
     assert [line.strip()[2:] for line in block.splitlines() if line.strip().startswith("- ")] == list(ar.REPORT_MODES)
     preflight = text.index("Validate production configuration")
-    assert preflight < text.index("full|s2-diagnostics) ;;") < text.index("actions/checkout")
+    assert preflight < text.index("full|s2-diagnostics|s2-stability-b|s2-stability-c) ;;") < text.index("actions/checkout")
     assert text.index("refs/heads/main") < text.index("actions/checkout")  # the main-branch guard is unchanged
     run_line = next(line for line in text.splitlines() if line.strip().startswith("run: tftlab archetype-report"))
     assert '--report-mode "$REPORT_MODE"' in run_line and "${{" not in run_line

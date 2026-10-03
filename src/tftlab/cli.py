@@ -1055,11 +1055,16 @@ def archetype_report_command(
         "full", "--report-mode",
         help="full (default): every strategy with its full section. s2-diagnostics: focused S2 research run -- "
              "B_S2 and C_S2 with all their diagnostics; A skipped; B and C computed only as their variant sources "
-             "and comparison baselines.",
+             "and comparison baselines. s2-stability-b / s2-stability-c: REPORT-ONLY tie-order stability research "
+             "for B_S2 / C_S2 (C also with the refinement convergence study).",
     ),
     workers: int = typer.Option(
         0, "--workers", min=0,
         help="Processes for each refinement pass (0 = every available CPU). Execution only: results are identical.",
+    ),
+    research_max_refine_iterations: int = typer.Option(
+        20, "--research-max-refine-iterations", min=1,
+        help="s2-stability-c only: research cap for the C refinement convergence study (production cap unchanged).",
     ),
 ) -> None:
     """EXPERIMENTAL board-archetype research report (research/validation
@@ -1110,7 +1115,7 @@ def archetype_report_command(
 
     report, markdown, membership = analyze(
         inputs.boards, inputs.population, inputs.access, ArchetypeConfig(), progress=progress, on_section=on_section,
-        workers=workers, mode=report_mode,
+        workers=workers, mode=report_mode, research_cap=research_max_refine_iterations,
     )
     paths = writer.complete(report, markdown, membership)
     progress("final report written; partial files removed")
