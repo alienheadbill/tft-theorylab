@@ -1279,7 +1279,7 @@ def run_mode(store: Path, mode: str, workers: int = 1, events: list | None = Non
 
 
 def test_full_mode_keeps_the_existing_strategy_set_and_output(store: Path) -> None:
-    assert ar.REPORT_MODES == ("full", "s2-diagnostics")
+    assert ar.REPORT_MODES == ("full", "s2-diagnostics", "s2-stability-b", "s2-stability-c")
     assert ar.strategy_plan() == ar.strategy_plan("full") == [(s, "report") for s in ar.STRATEGIES]
     assert ar.PHASES == ar.report_phases("full") == ("population", *(s.name for s in ar.STRATEGIES), "closing")
     report, markdown, membership = run(store)  # build_report: the full report, as before
@@ -1438,10 +1438,196 @@ def test_workflow_offers_the_s2_mode_as_a_validated_choice_defaulting_to_full() 
     assert "type: choice" in block and "default: full" in block
     assert [line.strip()[2:] for line in block.splitlines() if line.strip().startswith("- ")] == list(ar.REPORT_MODES)
     preflight = text.index("Validate production configuration")
-    assert preflight < text.index("full|s2-diagnostics) ;;") < text.index("actions/checkout")
+    assert preflight < text.index("full|s2-diagnostics|s2-stability-b|s2-stability-c) ;;") < text.index("actions/checkout")
     assert text.index("refs/heads/main") < text.index("actions/checkout")  # the main-branch guard is unchanged
     run_line = next(line for line in text.splitlines() if line.strip().startswith("run: tftlab archetype-report"))
     assert '--report-mode "$REPORT_MODE"' in run_line and "${{" not in run_line
+
+
+# ---------------------------------------------------------------- S2 stability research (run #9 follow-up; report only)
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_screened_best_is_exactly_the_plain_argmax(seed: int) -> None:
+    """`_best` screens with a mathematically equal formula and re-checks survivors exactly: same group, same exact
+    similarity, same lowest-id tie-break as the plain loop over `similarity_sorted`."""
+    rng = random.Random(seed)
+    keys = [f"K{i:02d}" for i in range(30)]
+
+    def vec(n: int, m: int) -> tuple[dict, dict]:
+        return ({k: rng.choice([0.5, 1.0, 2.0]) for k in rng.sample(keys, n)}, {k: 1.0 for k in rng.sample(keys, m)})
+
+    profiles = [ar.mean_profile([vec(rng.randint(4, 9), rng.randint(0, 4)) for _ in range(rng.randint(1, 12))]) for _ in range(60)]
+    profiles += profiles[:10]  # exact duplicates: genuine ties, which must go to the lowest id
+    views = [ar.profile_view(p) for p in profiles]
+    for _ in range(300):
+        board = ar.sorted_vector(vec(rng.randint(4, 9), rng.randint(0, 4)))
+        candidates = sorted(rng.sample(range(len(views)), rng.randint(0, len(views))))
+        for strategy in ar.STRATEGIES:
+            best, best_s = None, -1.0
+            for g in candidates:
+                s = ar.similarity_sorted(board, views[g][0], strategy)
+                if s > best_s:
+                    best, best_s = g, s
+            assert ar._best(board, views, candidates, strategy) == (best, best_s)
+
+
+def test_canonical_cluster_and_production_cap_are_unchanged(store: Path) -> None:
+    assert ar.ArchetypeConfig().max_refine_iterations == 10  # the production cap
+    assert ar.RESEARCH_MAX_REFINE_ITERATIONS == 20
+    import inspect
+    from tftlab import cli
+    assert inspect.signature(cli.archetype_report_command).parameters["research_max_refine_iterations"].default.default == \
+        ar.RESEARCH_MAX_REFINE_ITERATIONS
+    with Database.open_existing(store) as db:
+        boards = ar.load_inputs(db, WINDOW).boards
+    for strategy in ar.STRATEGIES[:3]:
+        canonical = ar.cluster(boards, strategy, ar.ArchetypeConfig())
+        research = ar._variants(boards, strategy, ar.ArchetypeConfig(), lambda m: None, 1, 30, snapshot_after=10)
+        assert research["snapshot"]["assign"] == canonical.variant  # the research path's production-cap state
+        assert research["snapshot"]["moves"] == canonical.refine_moves
+        assert research["snapshot"]["converged"] == canonical.converged
+
+
+def test_research_refinement_continues_past_the_cap_and_reports_cycles(store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with Database.open_existing(store) as db:
+        boards = ar.load_inputs(db, WINDOW).boards
+    tight = ar.ArchetypeConfig(max_refine_iterations=1)  # production cap 1, so the research path has room to continue
+    canonical = ar.cluster(boards, C_STRATEGY, tight)
+    research = ar._variants(boards, C_STRATEGY, tight, lambda m: None, 1, 10, snapshot_after=1)
+    assert research["snapshot"]["assign"] == canonical.variant
+    assert len(research["moves"]) >= len(canonical.refine_moves)
+    # a refinement that alternates between two partitions is reported as a cycle, never forced to converge
+    calls = {"n": 0}
+    original = ar._refine_assign
+
+    def alternating(order, vecs, svecs, profiles, index, strategy, config, workers):
+        base = original(order, vecs, svecs, profiles, index, strategy, config, workers)
+        calls["n"] += 1
+        obs = sorted(base)
+        if calls["n"] % 2:  # odd passes: move half of the boards into one extra group
+            return {k: (g if i % 2 else max(base.values()) + 1) for i, (k, g) in enumerate(sorted(base.items()))}
+        return {k: base[k] for k in obs}
+
+    monkeypatch.setattr(ar, "_refine_assign", alternating)
+    cyc = ar._variants(boards, B_STRATEGY, ar.ArchetypeConfig(), lambda m: None, 1, 12, snapshot_after=2)
+    assert cyc["cycle"] is not None and not cyc["converged"]
+    assert cyc["cycle"]["cycle_length"] >= 1 and len(cyc["moves"]) < 12
+
+
+@pytest.mark.parametrize("rule", sorted(ar.TIE_RULES))
+def test_tie_rules_only_reorder_candidates_tied_at_the_highest_core_overlap(rule: str) -> None:
+    for seed in range(15):
+        boards, variant = random_variants(seed)
+        for order in ar.ORDER_REPLAYS[:3]:
+            trace: list = []
+            ar.merge_variants(boards, variant, B_S2, ar.ArchetypeConfig(), tie_order=order, tie_rule=rule, trace=trace)
+            for chosen, best, _ in trace:  # brute force over all current pairs: never a lower-overlap candidate first
+                assert best is not None and chosen == best
+    with pytest.raises(ValueError):
+        ar.merge_variants(boards, variant, B_S2, ar.ArchetypeConfig(), tie_rule="best_top4")
+
+
+def test_tie_rules_are_deterministic_and_never_read_outcomes() -> None:
+    for seed in range(8):
+        boards, variant = random_variants(seed)
+        shuffled = [dataclasses.replace(b, placement=1 + (b.obs * 7 + seed) % 8) for b in boards]  # outcomes changed
+        for rule in ar.TIE_RULES:
+            for order in (ar.ORDER_REPLAYS[0], ar.ORDER_REPLAYS[3]):
+                first = ar.merge_variants(boards, variant, C_S2, ar.ArchetypeConfig(), tie_order=order, tie_rule=rule)
+                again = ar.merge_variants(boards, variant, C_S2, ar.ArchetypeConfig(), tie_order=order, tie_rule=rule)
+                other = ar.merge_variants(shuffled, variant, C_S2, ar.ArchetypeConfig(), tie_order=order, tie_rule=rule)
+                assert first == again == other, (rule, order.label)
+
+
+def test_order_perturbations_genuinely_exercise_ties() -> None:
+    """The current tie behaviour really depends on order in these cases, and the replay orders really reach tied
+    candidates; under a research rule the residual ties are counted separately."""
+    differs = 0
+    for seed in range(40):
+        boards, variant = random_variants(seed)
+        results = set()
+        for order in ar.ORDER_REPLAYS:
+            stats: dict = {}
+            results.add(repr(ar.merge_variants(boards, variant, B_S2, ar.ArchetypeConfig(), tie_order=order, tie_stats=stats)[0]))
+            assert stats["judged_steps"] >= stats["steps_with_tied_candidates"]
+        differs += len(results) > 1
+        stats = {}
+        ar.merge_variants(boards, variant, B_S2, ar.ArchetypeConfig(), tie_rule="min_member_similarity", tie_stats=stats)
+        assert stats.get("steps_still_tied_after_rule", 0) <= stats["steps_with_tied_candidates"]
+    assert differs >= 3  # seeds 21, 22, 24, 29 and 38 are order-dependent under the current tie behaviour
+
+
+def stability(store: Path, mode_strategy: str, converge: bool, monkeypatch: pytest.MonkeyPatch | None = None, **kw):
+    with Database.open_existing(store) as db:
+        boards = ar.load_inputs(db, WINDOW).boards
+    by_name = {s.name: s for s in ar.STRATEGIES}
+    exp = by_name[mode_strategy]
+    return boards, ar.stability_study(boards, by_name[exp.variants_from], exp, ar.ArchetypeConfig(), lambda m: None,
+                                      converge=converge, **kw)
+
+
+@pytest.mark.parametrize(("name", "converge"), [("B_S2_experimental", False), ("C_S2_experimental", True)])
+def test_stability_study_reuses_the_variant_partition_and_reproduces_canonical_s2(store: Path, name: str, converge: bool) -> None:
+    boards, study = stability(store, name, converge)
+    exp = next(s for s in ar.STRATEGIES if s.name == name)
+    control = ar.cluster(boards, next(s for s in ar.STRATEGIES if s.name == exp.variants_from), ar.ArchetypeConfig())
+    canonical = ar.cluster_reusing_variants(boards, exp, ar.ArchetypeConfig(), control)
+    assert study["canonical_s2_reproduced_by_current_rule_first_order"] is True
+    assert study["canonical_s2"]["accepted_merges"] == canonical.merges
+    assert study["canonical_s2"]["groups"] == len(set(canonical.group.values()))
+    base = study["bases"][0]
+    assert base["variants"]["groups"] == len(set(control.variant.values()))  # the same variants, computed once
+    assert [r["rule"] for r in study["bases"][-1]["rules"]] == [ar.CURRENT_TIE_RULE, *ar.TIE_RULES]
+    for b in study["bases"]:
+        for row in b["rules"]:
+            assert all(r["decision_rule_mismatches"] == 0 for r in row["replays"])
+            assert row["pairwise_stability"]["replays"] == len(row["replays"])
+            assert [f["label"] for f in row["family_anchor_stability"]] == [label for label, _ in ar.FAMILY_ANCHORS]
+            assert [f["label"] for f in row["regression_anchor_stability"]] == [label for label, _ in ar.REGRESSION_ANCHORS]
+    if converge:
+        c = study["convergence"]
+        assert c["production_cap"] == 10 and c["research_cap"] == ar.RESEARCH_MAX_REFINE_ITERATIONS
+        assert c["canonical_moves"] == control.refine_moves
+        assert len(c["s2_by_rule_canonical_vs_research_base"]) == len(ar.STUDY_RULES)
+    text = json.dumps(study, default=str)
+    for secret in ("PUUID", "SecretName", "M000", "M011", "NORMAL1", "EMPTYR", "match_id", "puuid", "placement"):
+        assert secret not in text, secret
+
+
+def test_stability_anchors_are_diagnostics_only(store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, study = stability(store, "B_S2_experimental", False)
+    monkeypatch.setattr(ar, "FAMILY_ANCHORS", (("anything", frozenset({"DA_18_Leona"})),))
+    monkeypatch.setattr(ar, "REGRESSION_ANCHORS", ())
+    _, changed = stability(store, "B_S2_experimental", False)
+    strip = lambda s: [[{k: v for k, v in r.items() if k not in ("family_anchor_stability", "regression_anchor_stability")}  # noqa: E731
+                        for r in b["rules"]] for b in s["bases"]]
+    assert strip(study) == strip(changed)  # every partition, metric and stability number is unchanged
+    assert [f["label"] for f in changed["bases"][0]["rules"][0]["family_anchor_stability"]] == ["anything"]
+
+
+def test_cli_stability_modes_are_read_only_and_labelled(store: Path, tmp_path: Path) -> None:
+    assert ar.report_phases("s2-stability-b") == ("population", "B_S2_experimental-variants",
+                                                  *(f"B_S2_experimental-canonical-{t}" for t in ("current", *ar.TIE_RULES)),
+                                                  "B_S2_experimental", "closing")
+    assert ar.report_phases("s2-stability-c") == ("population", "C_S2_experimental-variants",
+                                                  *(f"C_S2_experimental-{b}-{t}" for b in ("canonical", "refined")
+                                                    for t in ("current", *ar.TIE_RULES)),
+                                                  "C_S2_experimental", "closing")
+    for mode in ("s2-stability-b", "s2-stability-c"):
+        out = tmp_path / mode
+        result = CliRunner().invoke(app, ["archetype-report", "--db", str(store), "--balance-window", WINDOW, "--out-dir",
+                                          str(out), "--report-mode", mode, "--workers", "2"])
+        assert result.exit_code == 0, result.output
+        report = json.loads((out / f"archetypes_{WINDOW}_{mode}_report.json").read_text())
+        assert report["read_only_connection"] == "sqlite mode=ro" and report["report_mode"] == mode
+        assert "NOT a production rule" in report["report_mode_note"]
+        name = ar.STABILITY_MODES[mode]
+        assert list(report["strategies"]) == [name] and "stability_study" in report["strategies"][name]
+        md = (out / f"archetypes_{WINDOW}_{mode}_report.md").read_text()
+        assert "## S2 stability research: " in md and "RESEARCH REPORT COMPLETE" in result.output
+        for secret in ("PUUID-SECRET", "SecretName", "M000", "M011"):
+            assert secret not in md
 
 
 # ---------------------------------------------------------------- population / names / outputs

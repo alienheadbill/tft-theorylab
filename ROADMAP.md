@@ -107,7 +107,17 @@ Riot access currently uses a **development key that must be regenerated regularl
   - **Run #8 (full report, Patch 18.3, 66,682 eligible boards) timed out.** Strategy A alone took about 137 minutes, and B was recomputing A's identical variants when the 170-minute limit hit, so the S2 strategies were never reached.
   - **The focused `s2-diagnostics` report mode is IMPLEMENTED.** It skips A and computes B and C only as the S2 variant sources and baselines.
   - **Exact speedups are IMPLEMENTED:** bit-identical sorted-vector similarity and multi-process refinement.
-  - The production S2 run itself is still **PENDING**.
+  - **Run #9 (`s2-diagnostics`, Patch 18.3, run `37087299036`, 72,068 eligible boards) COMPLETED** in about 150 of the 170 minutes. B_S2 made 571 merges and C_S2 1,097. It raised two structural concerns:
+    - **C refinement did not converge.** It stopped at the 10-pass cap, with moves still falling: 18,255 → … → 338 → 205. B converged at pass 7.
+    - **S2 membership is sensitive to tie order.** Core overlap is an exact small-integer ratio, so ties are the norm: 26,600 of B_S2's 27,027 judged steps had one. The current rule (lowest group ids) is arbitrary, and the five deterministic replays gave B 560–571 and C 1,097–1,104 merges.
+  - **Stability research modes are IMPLEMENTED (report-only).** `s2-stability-b` and `s2-stability-c` compare the current tie behaviour with three structural, outcome-free tie rules (`centroid_similarity`, `min_member_similarity`, `mean_member_similarity`), each under five tie orders, on variants computed once. `s2-stability-c` also continues C's refinement past the production cap up to a research cap of 20; the production cap is unchanged. Canonical S2 and the default report are unchanged, byte for byte.
+  - **Synthetic results so far** (development evidence on generated boards, not production evidence):
+    - Every research rule cut the order dependence sharply, to one or two distinct partitions against the current rule's five.
+    - Any continuous tie key does that by construction. A rule must therefore also be judged on quality, anchors and robustness to the upstream variant change, which needs the production runs.
+  - **Next (PENDING, owner dispatch):** run `s2-stability-b`, then `s2-stability-c`, from `main` on Patch 18.3, as two separate runs that each fit the budget. Until those runs are reviewed:
+    - adopt no tie rule;
+    - make no change to the production refinement cap;
+    - keep S2 research-only.
 
   The instrumentation measures:
   - how many later merge rejections are caused by tails S2 admitted earlier;
@@ -250,9 +260,11 @@ Riot access currently uses a **development key that must be regenerated regularl
 5. **In parallel, run the instrumented (unchanged) S2 report** from `main` on Patch 18.3 with `report_mode: s2-diagnostics` to quantify recursive lock-in and order dependence. Status:
    - instrumentation IMPLEMENTED;
    - full run #8 timed out before S2;
-   - focused mode and exact speedups IMPLEMENTED.
+   - focused mode and exact speedups IMPLEMENTED;
+   - run #9 (`s2-diagnostics`) COMPLETED. It showed C non-convergence and tie-order sensitivity;
+   - stability research modes (`s2-stability-b` / `s2-stability-c`) IMPLEMENTED, production runs PENDING.
 
-   Do not change Condition 1 before that measurement is reviewed (Track 2).
+   Do not change Condition 1, the tie behaviour or the refinement cap before those measurements are reviewed (Track 2).
 6. Keep set-transition readiness in new work and move toward Riot production access as the product matures (Tracks 6/7).
 7. Build the **Reference / game knowledge** tab incrementally after the current Champion Investigation cleanup/redesign, starting only with subsections whose sources and refresh requirements are verified (Track 9).
 8. After cores and trustworthy family evidence are ready, connect Champion Investigation to composition boards/families and practical alternatives—the bridge into TheoryLabs' long-term composition discovery/theorycrafting differentiator (Track 8).
