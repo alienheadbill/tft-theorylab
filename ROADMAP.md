@@ -114,10 +114,17 @@ Riot access currently uses a **development key that must be regenerated regularl
   - **Synthetic results so far** (development evidence on generated boards, not production evidence):
     - Every research rule cut the order dependence sharply, to one or two distinct partitions against the current rule's five.
     - Any continuous tie key does that by construction. A rule must therefore also be judged on quality, anchors and robustness to the upstream variant change, which needs the production runs.
-  - **Next (PENDING, owner dispatch):** run `s2-stability-b`, then `s2-stability-c`, from `main` on Patch 18.3, as two separate runs that each fit the budget. Until those runs are reviewed:
-    - adopt no tie rule;
-    - make no change to the production refinement cap;
-    - keep S2 research-only.
+  - **Run #10 (`s2-stability-b`, run `37218019474`, 87,210 eligible boards) COMPLETED.** The current tie rule gave 5 distinct partitions over 5 replay orders: up to 27,723 boards changed group, with a maximum disagreement of 0.183 of pairs together in either.
+    - `centroid_similarity`: at most 17 boards changed between orders (3 distinct partitions), with structural quality and every named anchor stable.
+  - **Run #11 (`s2-stability-c`, run `37224559749`, 87,210 eligible boards) COMPLETED** in about 168 of the 170 minutes.
+    - **Convergence:** C's refinement did not cycle and converged after **14** passes (threshold 87 moved boards); the 10-pass cap stops 4 passes early. Iteration-10 and converged variants differ for 17,268 boards (0.0112 of pairs together in either).
+    - **Current tie rule on the converged base:** still 5 distinct partitions, with up to 27,702 boards changed (0.2905).
+    - **Structural rules:** all three gave 1 partition on the converged base. `centroid_similarity` gave 0 boards changed, stable anchors, no large tiny-core group and no group over the tail thresholds.
+  - **Candidate v1 IMPLEMENTED (EXPERIMENTAL, not user-facing):** `C_S2_centroid_candidate_v1` combines C variants refined to convergence (hard cap 20) with S2 using `centroid_similarity` as the tie-break among equal core overlaps. It is evaluated by report mode `s2-candidate-c-centroid-v1`. Canonical S2, C's production cap and every existing mode are unchanged.
+  - **Next (PENDING, owner dispatch):** run `s2-candidate-c-centroid-v1` from `main` on Patch 18.3 and review it. Patch 18.3 chose the candidate, so that run is development evidence. After that:
+    - freeze v1;
+    - test it on a held-out patch/window before any family is shown to users;
+    - until then, keep families research-only: no site, API, Discover or Champion Investigation use, and no Established/Off-meta labels.
 
   The instrumentation measures:
   - how many later merge rejections are caused by tails S2 admitted earlier;
@@ -262,9 +269,10 @@ Riot access currently uses a **development key that must be regenerated regularl
    - full run #8 timed out before S2;
    - focused mode and exact speedups IMPLEMENTED;
    - run #9 (`s2-diagnostics`) COMPLETED. It showed C non-convergence and tie-order sensitivity;
-   - stability research modes (`s2-stability-b` / `s2-stability-c`) IMPLEMENTED, production runs PENDING.
+   - stability research modes COMPLETED (runs #10 and #11);
+   - versioned candidate `C_S2_centroid_candidate_v1` IMPLEMENTED, with its production evaluation run (`s2-candidate-c-centroid-v1`) PENDING.
 
-   Do not change Condition 1, the tie behaviour or the refinement cap before those measurements are reviewed (Track 2).
+   Canonical S2, Condition 1 and C's production cap stay unchanged. The candidate is not user-facing until it is frozen and checked on a held-out window (Track 2).
 6. Keep set-transition readiness in new work and move toward Riot production access as the product matures (Tracks 6/7).
 7. Build the **Reference / game knowledge** tab incrementally after the current Champion Investigation cleanup/redesign, starting only with subsections whose sources and refresh requirements are verified (Track 9).
 8. After cores and trustworthy family evidence are ready, connect Champion Investigation to composition boards/families and practical alternatives—the bridge into TheoryLabs' long-term composition discovery/theorycrafting differentiator (Track 8).
