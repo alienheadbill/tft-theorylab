@@ -1279,7 +1279,7 @@ def run_mode(store: Path, mode: str, workers: int = 1, events: list | None = Non
 
 
 def test_full_mode_keeps_the_existing_strategy_set_and_output(store: Path) -> None:
-    assert ar.REPORT_MODES == ("full", "s2-diagnostics", "s2-stability-b", "s2-stability-c")
+    assert ar.REPORT_MODES == ("full", "s2-diagnostics", "s2-stability-b", "s2-stability-c", "s2-candidate-c-centroid-v1")
     assert ar.strategy_plan() == ar.strategy_plan("full") == [(s, "report") for s in ar.STRATEGIES]
     assert ar.PHASES == ar.report_phases("full") == ("population", *(s.name for s in ar.STRATEGIES), "closing")
     report, markdown, membership = run(store)  # build_report: the full report, as before
@@ -1438,7 +1438,8 @@ def test_workflow_offers_the_s2_mode_as_a_validated_choice_defaulting_to_full() 
     assert "type: choice" in block and "default: full" in block
     assert [line.strip()[2:] for line in block.splitlines() if line.strip().startswith("- ")] == list(ar.REPORT_MODES)
     preflight = text.index("Validate production configuration")
-    assert preflight < text.index("full|s2-diagnostics|s2-stability-b|s2-stability-c) ;;") < text.index("actions/checkout")
+    assert preflight < text.index("full|s2-diagnostics|s2-stability-b|s2-stability-c|s2-candidate-c-centroid-v1) ;;") \
+        < text.index("actions/checkout")
     assert text.index("refs/heads/main") < text.index("actions/checkout")  # the main-branch guard is unchanged
     run_line = next(line for line in text.splitlines() if line.strip().startswith("run: tftlab archetype-report"))
     assert '--report-mode "$REPORT_MODE"' in run_line and "${{" not in run_line
@@ -1628,6 +1629,274 @@ def test_cli_stability_modes_are_read_only_and_labelled(store: Path, tmp_path: P
         assert "## S2 stability research: " in md and "RESEARCH REPORT COMPLETE" in result.output
         for secret in ("PUUID-SECRET", "SecretName", "M000", "M011"):
             assert secret not in md
+
+
+# ---------------------------------------------------------------- versioned family candidate (EXPERIMENTAL; not user-facing)
+
+CANDIDATE = ar.C_S2_CENTROID_CANDIDATE_V1
+CANDIDATE_MODE = "s2-candidate-c-centroid-v1"
+#: Every existing report mode on the test fixture, recorded from main @ 248b854 (before the candidate existed):
+#: report JSON + Markdown + membership. Update only for an INTENDED change to one of those modes.
+EXISTING_MODE_HASHES = {
+    "full": "c349c1e54839fb22f692c1e4988d893ca00c5a6cb1cc36f16b420eaa883d03ed",
+    "s2-diagnostics": "829648e64a141839d62ef437791797451f45dd9d2754830549632341addb6f6a",
+    "s2-stability-b": "d3e9be920d15a05464ebee8b04d193c42d864b121b25cf55947ccaead18b0573",
+    "s2-stability-c": "d0f7705b8cb4b7fa16838d478dd1c42b2454f927b6128ff391cddb12f0115bd5",
+}
+
+
+def _fixture_boards(store: Path) -> list[ar.Board]:
+    with Database.open_existing(store) as db:
+        return ar.load_inputs(db, WINDOW).boards
+
+
+def _candidate(boards, candidate=CANDIDATE, config=None, **kw) -> dict:
+    return ar.build_candidate(boards, candidate, config or ar.ArchetypeConfig(), lambda m: None, **kw)
+
+
+def _population(seeds=range(3)) -> list[ar.Board]:
+    """Boards from several `random_variants` draws, renumbered: a population with genuine S2 merges and ties."""
+    out: list[ar.Board] = []
+    for seed in seeds:
+        for b in random_variants(seed)[0]:
+            out.append(dataclasses.replace(b, obs=len(out)))
+    return out
+
+
+@pytest.mark.parametrize("mode", sorted(EXISTING_MODE_HASHES))
+def test_existing_modes_and_canonical_s2_are_byte_identical_to_main(store: Path, mode: str) -> None:
+    with Database.open_existing(store) as db:
+        inputs = ar.load_inputs(db, WINDOW)
+    for workers in (1, 2):
+        report, md, membership = ar.analyze(inputs.boards, inputs.population, inputs.access, ar.ArchetypeConfig(),
+                                            mode=mode, workers=workers)
+        blob = (json.dumps(report, sort_keys=True, default=str) + "\n--\n" + "\n".join(md) + "\n--\n"
+                + json.dumps(membership, sort_keys=True))
+        assert hashlib.sha256(blob.encode()).hexdigest() == EXISTING_MODE_HASHES[mode], (mode, workers)
+        assert not any(CANDIDATE.name in line for line in md)
+
+
+def test_candidate_is_versioned_additive_and_identical_to_c_s2_except_its_two_changes() -> None:
+    assert CANDIDATE.name == "C_S2_centroid_candidate_v1" and CANDIDATE.version == 1
+    assert ar.CANDIDATES == (CANDIDATE,) and ar.CANDIDATE_MODES == {CANDIDATE_MODE: CANDIDATE}
+    assert CANDIDATE_MODE in ar.REPORT_MODES
+    assert CANDIDATE.name not in {s.name for s in ar.STRATEGIES}  # never one of the canonical strategies
+    base = next(s for s in ar.STRATEGIES if s.name == "C_S2_experimental")
+    assert CANDIDATE.base_s2 == base.name
+    assert dataclasses.replace(CANDIDATE.strategy, name=base.name, label=base.label, description=base.description) == base
+    assert CANDIDATE.strategy.variants_from == "C_structure_aware"
+    assert (CANDIDATE.tie_rule, CANDIDATE.residual_tie_order) == ("centroid_similarity", ar.TieOrder("baseline"))
+    assert CANDIDATE.refinement_hard_cap == 20 > ar.ArchetypeConfig().max_refine_iterations == 10
+    assert ar.strategy_plan(CANDIDATE_MODE) == [(next(s for s in ar.STRATEGIES if s.name == "C_structure_aware"),
+                                                 "variant_source"), (CANDIDATE.strategy, "candidate")]
+    assert ar.report_phases(CANDIDATE_MODE) == ("population", f"{CANDIDATE.name}-variants", CANDIDATE.name, "closing")
+
+
+def _drifting_refinement(monkeypatch: pytest.MonkeyPatch, perturbed_passes: int) -> None:
+    """Each of the first `perturbed_passes` refinement passes moves a different window of 3 boards into a new group
+    (a genuinely new partition every pass: > threshold moves, never a repeat); later passes are the real ones."""
+    original = ar._refine_assign
+    calls = {"n": 0}
+
+    def drifting(order, vecs, svecs, profiles, index, strategy, config, workers):
+        base = original(order, vecs, svecs, profiles, index, strategy, config, workers)
+        calls["n"] += 1
+        if calls["n"] > perturbed_passes:
+            return base
+        obs = sorted(base)
+        window = {obs[(3 * calls["n"] + i) % len(obs)] for i in range(3)}
+        return {k: (max(base.values()) + 1 if k in window else g) for k, g in base.items()}
+
+    monkeypatch.setattr(ar, "_refine_assign", drifting)
+
+
+def test_candidate_continues_refinement_past_ten_and_stops_at_the_convergence_criterion(
+        store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    boards = _fixture_boards(store)
+    _drifting_refinement(monkeypatch, 12)
+    result = _candidate(boards)
+    ref = result["refinement"]
+    threshold, moves = ref["convergence_threshold_moved_boards"], ref["moved_boards_per_iteration"]
+    assert result["status"] == ar.CANDIDATE_CONSTRUCTED and ref["converged"] and ref["cycle"] is None
+    assert ref["iterations_used"] == len(moves) > 10 and ref["iterations_beyond_production_cap"] == len(moves) - 10
+    assert all(m > threshold for m in moves[:-1]) and moves[-1] <= threshold  # stops at the FIRST converged pass
+    assert threshold == max(1, math.floor(ar.ArchetypeConfig().convergence_moved_share * ref["eligible_boards"]))
+    # the production cap is unchanged: canonical C stops at 10 passes on the same refinement
+    assert len(result["comparison"]["canonical_refinement_moves"]) == 10
+    assert result["comparison"]["canonical_variants_converged"] is False
+
+
+def test_candidate_hard_cap_bounds_refinement_and_reports_non_convergence(store: Path, tmp_path: Path,
+                                                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    boards = _fixture_boards(store)
+    _drifting_refinement(monkeypatch, 10_000)  # never converges
+    for cap in (12, CANDIDATE.refinement_hard_cap):
+        result = _candidate(boards, dataclasses.replace(CANDIDATE, refinement_hard_cap=cap))
+        assert result["refinement"]["iterations_used"] == cap and not result["refinement"]["converged"]
+        assert result["status"] == ar.CANDIDATE_NOT_CONSTRUCTED
+        assert result["failure"]["reason"] == "hard_cap_without_convergence"
+        assert result["families"] is None and result["comparison"] is None and "_group" not in result
+    with pytest.raises(ValueError):
+        _candidate(boards, dataclasses.replace(CANDIDATE, refinement_hard_cap=9))  # below the production cap
+
+
+def test_candidate_reports_a_refinement_cycle_as_not_constructed_and_the_cli_exits_3(
+        store: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    original = ar._refine_assign
+    calls = {"n": 0}
+
+    def alternating(order, vecs, svecs, profiles, index, strategy, config, workers):
+        base = original(order, vecs, svecs, profiles, index, strategy, config, workers)
+        calls["n"] += 1
+        if calls["n"] % 2:  # odd passes: half the boards into one extra group; even passes: the real result
+            return {k: (g if i % 2 else max(base.values()) + 1) for i, (k, g) in enumerate(sorted(base.items()))}
+        return base
+
+    monkeypatch.setattr(ar, "_refine_assign", alternating)
+    result = _candidate(_fixture_boards(store))
+    assert result["status"] == ar.CANDIDATE_NOT_CONSTRUCTED and result["failure"]["reason"] == "refinement_cycle"
+    assert result["refinement"]["cycle"] is not None and result["families"] is None
+    out = tmp_path / "o"
+    cli = CliRunner().invoke(app, ["archetype-report", "--db", str(store), "--balance-window", WINDOW, "--out-dir",
+                                   str(out), "--report-mode", CANDIDATE_MODE])
+    assert cli.exit_code == 3 and "CANDIDATE NOT CONSTRUCTED (refinement_cycle)" in cli.output
+    report = json.loads((out / f"archetypes_{WINDOW}_{CANDIDATE_MODE}_report.json").read_text())
+    assert report["candidate_status"] == ar.CANDIDATE_NOT_CONSTRUCTED
+    md = (out / f"archetypes_{WINDOW}_{CANDIDATE_MODE}_report.md").read_text()
+    assert "THE CANDIDATE WAS NOT SUCCESSFULLY CONSTRUCTED (refinement_cycle)" in md and "### Candidate families" not in md
+    rows = list(csv.DictReader((out / f"archetypes_{WINDOW}_{CANDIDATE_MODE}_membership.csv").open()))
+    assert rows == []  # no family membership from a failed construction
+
+
+def test_candidate_reports_an_invalid_merge_state_as_not_constructed(store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    original = ar._merge_config
+
+    def broken(members, assign, vecs, strategy, config, rule, order):
+        run = original(members, assign, vecs, strategy, config, rule, order)
+        return {**run, "decision_rule_mismatches": 1} if rule else run
+
+    monkeypatch.setattr(ar, "_merge_config", broken)
+    result = _candidate(_fixture_boards(store))
+    assert result["status"] == ar.CANDIDATE_NOT_CONSTRUCTED and result["failure"]["reason"] == "invalid_state"
+    assert "disagree with the S2 rule" in result["failure"]["detail"] and result["families"] is None
+
+
+def test_candidate_centroid_tie_break_reorders_only_tied_pairs() -> None:
+    # three variants whose cores overlap pairwise at exactly 7/9; the largest variant A (id 0) carries unit 9 as flex,
+    # so A+C are the most similar centroids, while the current lowest-id rule judges A+B (ids 0, 1) first
+    a = [SHELL8] * 5 + [SHELL8 + [9]] * 5
+    b = [SHELL8[:7] + [8]] * 6
+    c = [SHELL8[:7] + [9]] * 4
+    boards, variant = boards_by_variant(a, b, c)
+    config = ar.ArchetypeConfig()
+    vecs = {x.obs: ar.board_vectors(x, CANDIDATE.strategy, config, load_roster().champions) for x in boards}
+
+    def centroid(i: int, j: int) -> float:
+        profile = lambda v: ar.mean_profile([vecs[k] for k in sorted(vecs) if variant[k] == v])  # noqa: E731
+        return ar.similarity(profile(i), profile(j), CANDIDATE.strategy)
+
+    assert centroid(0, 2) > centroid(0, 1) and centroid(0, 2) > centroid(1, 2)
+    _, current_log, _ = ar.merge_variants(boards, variant, CANDIDATE.strategy, config)
+    _, candidate_log, _ = ar.merge_variants(boards, variant, CANDIDATE.strategy, config,
+                                            tie_order=CANDIDATE.residual_tie_order, tie_rule=CANDIDATE.tie_rule)
+    assert current_log[0].startswith("merge variant-group 1 ") and current_log[0].endswith("into 0 (10 boards), core overlap 0.78")
+    assert candidate_log[0].startswith("merge variant-group 2 ") and candidate_log[0].endswith("into 0 (10 boards), core overlap 0.78")
+
+
+def test_candidate_never_lets_a_lower_core_overlap_pair_jump_ahead() -> None:
+    changed = 0
+    for seed in range(40):
+        boards, variant = random_variants(seed)
+        trace: list = []
+        candidate = ar.merge_variants(boards, variant, CANDIDATE.strategy, ar.ArchetypeConfig(),
+                                      tie_order=CANDIDATE.residual_tie_order, tie_rule=CANDIDATE.tie_rule, trace=trace)
+        for chosen, best, _ in trace:  # brute force over every current pair: the judged pair always has the top overlap
+            assert best is not None and chosen == best
+        changed += candidate[0] != ar.merge_variants(boards, variant, CANDIDATE.strategy, ar.ArchetypeConfig())[0]
+    assert changed >= 1  # the tie-break really changes outcomes on some tied inputs
+
+
+def test_candidate_is_deterministic_and_ignores_outcomes_and_anchors(monkeypatch: pytest.MonkeyPatch) -> None:
+    boards = _population()
+    first = _candidate(boards, context={"balance_window": "x"})
+    assert first["status"] == ar.CANDIDATE_CONSTRUCTED and first["families"]["accepted_merges"] > 0
+    again = _candidate(boards, workers=2, context={"balance_window": "x"})
+    outcomes = _candidate([dataclasses.replace(b, placement=1 + (b.obs * 5) % 8) for b in boards],
+                          context={"balance_window": "x"})
+    monkeypatch.setattr(ar, "FAMILY_ANCHORS", (("anything", frozenset({ar.identity_champions().__iter__().__next__()})),))
+    monkeypatch.setattr(ar, "REGRESSION_ANCHORS", ())
+    anchors = _candidate(boards, context={"balance_window": "x"})
+    for other in (again, outcomes, anchors):
+        assert other["_group"] == first["_group"] and other["_variant"] == first["_variant"]
+        assert other["families"]["family_fingerprint"] == first["families"]["family_fingerprint"]
+        assert other["refinement"]["variant_fingerprint"] == first["refinement"]["variant_fingerprint"]
+    strip = lambda r: {k: v for k, v in r["families"].items() if k not in ("family_anchors", "regression_anchors")}  # noqa: E731
+    assert strip(first) == strip(again) == strip(outcomes) == strip(anchors)
+    assert list(anchors["families"]["family_anchors"]) == ["anything"]
+
+
+def test_candidate_variants_and_comparison_reuse_one_refinement_exactly(store: Path) -> None:
+    boards = _population()
+    result = _candidate(boards)
+    config = ar.ArchetypeConfig()
+    c = next(s for s in ar.STRATEGIES if s.name == "C_structure_aware")
+    research = ar._variants(boards, c, config, lambda m: None, 1, CANDIDATE.refinement_hard_cap, snapshot_after=10)
+    assert result["_variant"] == research["assign"]  # the candidate's variants: refined to convergence, computed once
+    canonical_c = ar.cluster(boards, c, config)
+    canonical_s2 = ar.cluster_reusing_variants(boards, next(s for s in ar.STRATEGIES if s.name == CANDIDATE.base_s2),
+                                               config, canonical_c)
+    cmp_ = {r["metric"]: r for r in result["comparison"]["metrics"]}
+    assert cmp_["accepted_merges"]["canonical"] == canonical_s2.merges  # the comparison base IS canonical C_S2
+    assert cmp_["groups"]["canonical"] == len(set(canonical_s2.group.values()))
+    assert result["comparison"]["canonical_summary"]["family_fingerprint"] == ar.partition_fingerprint(canonical_s2.group)
+    assert result["comparison"]["canonical_refinement_moves"] == canonical_c.refine_moves
+
+
+def test_candidate_provenance_is_explicit(store: Path) -> None:
+    result = _candidate(_fixture_boards(store), context={"balance_window": WINDOW, "code_version": {"git_sha": "abc"}})
+    prov = result["provenance"]
+    assert (prov["candidate"], prov["version"], prov["base_s2"], prov["source_strategy"]) == (
+        CANDIDATE.name, 1, "C_S2_experimental", "C_structure_aware")
+    assert prov["refinement"]["hard_cap"] == 20 and prov["refinement"]["canonical_production_cap"] == 10
+    assert prov["refinement"]["convergence_moved_share"] == ar.ArchetypeConfig().convergence_moved_share
+    assert prov["merge"]["secondary_tie_break"] == "centroid_similarity" and prov["merge"]["similarity_rule"] == "S2"
+    assert "core overlap" in prov["merge"]["primary_priority"] and prov["merge"]["s2_conditions"] == list(ar.S2_CONDITION_NAMES)
+    assert prov["config"]["tau"] == ar.ArchetypeConfig().tau and prov["merge"]["s2_thresholds"]["tau"] == prov["config"]["tau"]
+    assert "placement" in prov["inputs_not_used"] and "Top 4" in prov["inputs_not_used"]
+    assert prov["balance_window"] == WINDOW and prov["code_version"] == {"git_sha": "abc"}
+    assert result["refinement"]["iterations_used"] == len(result["refinement"]["moved_boards_per_iteration"])
+    for record in result["families"]["largest_families"]:
+        assert (record["candidate"], record["version"], record["balance_window"]) == (CANDIDATE.name, 1, WINDOW)
+
+
+def test_cli_candidate_mode_is_read_only_labelled_and_not_user_facing(store: Path, tmp_path: Path,
+                                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    before = hashlib.sha256(store.read_bytes()).hexdigest()
+    monkeypatch.setenv("GITHUB_SHA", "0123abc")
+    out = tmp_path / "o"
+    result = CliRunner().invoke(app, ["archetype-report", "--db", str(store), "--balance-window", WINDOW, "--out-dir",
+                                      str(out), "--report-mode", CANDIDATE_MODE, "--workers", "2"])
+    assert result.exit_code == 0, result.output
+    assert "RESEARCH REPORT COMPLETE" in result.output
+    assert hashlib.sha256(store.read_bytes()).hexdigest() == before  # nothing written
+    report = json.loads((out / f"archetypes_{WINDOW}_{CANDIDATE_MODE}_report.json").read_text())
+    assert report["read_only_connection"] == "sqlite mode=ro" and report["report_mode"] == CANDIDATE_MODE
+    assert "NOT user-facing" in report["report_mode_note"] and report["candidate_status"] == ar.CANDIDATE_CONSTRUCTED
+    assert list(report["strategies"]) == [CANDIDATE.name]
+    assert report["strategies"][CANDIDATE.name]["provenance"]["code_version"]["github_sha"] == "0123abc"
+    md = (out / f"archetypes_{WINDOW}_{CANDIDATE_MODE}_report.md").read_text()
+    assert "EXPERIMENTAL COMPOSITION-FAMILY CANDIDATE EVALUATION" in md and "not user-facing" in md.lower()
+    rows = list(csv.DictReader((out / f"archetypes_{WINDOW}_{CANDIDATE_MODE}_membership.csv").open()))
+    assert rows and {r["strategy"] for r in rows} == {CANDIDATE.name}
+    for secret in ("PUUID-SECRET", "SecretName", "M000", "M011"):
+        assert secret not in md
+    # nothing outside the research harness (site, APIs, Discover, Champion Investigation) reads the candidate
+    src = Path(ar.__file__).parent
+    for path in [*src.rglob("*.py"), *src.rglob("*.js"), *src.rglob("*.html")]:
+        if path.name in ("archetype_research.py", "cli.py"):
+            continue
+        text = path.read_text(errors="ignore")
+        assert "centroid_candidate" not in text and "archetype_research" not in text, path
 
 
 # ---------------------------------------------------------------- population / names / outputs

@@ -1056,7 +1056,9 @@ def archetype_report_command(
         help="full (default): every strategy with its full section. s2-diagnostics: focused S2 research run -- "
              "B_S2 and C_S2 with all their diagnostics; A skipped; B and C computed only as their variant sources "
              "and comparison baselines. s2-stability-b / s2-stability-c: REPORT-ONLY tie-order stability research "
-             "for B_S2 / C_S2 (C also with the refinement convergence study).",
+             "for B_S2 / C_S2 (C also with the refinement convergence study). s2-candidate-c-centroid-v1: the "
+             "EXPERIMENTAL versioned family candidate C_S2_centroid_candidate_v1 (never user-facing); exits with "
+             "code 3 after writing the report if the candidate could not be constructed.",
     ),
     workers: int = typer.Option(
         0, "--workers", min=0,
@@ -1084,8 +1086,8 @@ def archetype_report_command(
     section is printed and saved (as a labelled PARTIAL file) as soon as its
     phase finishes, so a timeout keeps the finished phases. The final report
     files exist only when every phase completed."""
-    from .archetype_research import (REPORT_MODES, ArchetypeConfig, Progress, ProgressiveWriter, analyze, load_inputs,
-                                     resolve_workers)
+    from .archetype_research import (CANDIDATE_CONSTRUCTED, REPORT_MODES, ArchetypeConfig, Progress, ProgressiveWriter,
+                                     analyze, load_inputs, resolve_workers)
 
     if report_mode not in REPORT_MODES:
         raise typer.BadParameter(f"--report-mode must be one of {', '.join(REPORT_MODES)}")
@@ -1113,9 +1115,13 @@ def archetype_report_command(
         if print_report:
             typer.echo("\n".join(lines))
 
+    # Candidate provenance: the commit/run that produced it (GitHub Actions' default variables; never secrets).
+    code_version = {key.lower(): os.environ[key] for key in ("GITHUB_SHA", "GITHUB_REF", "GITHUB_RUN_ID",
+                                                             "GITHUB_RUN_ATTEMPT") if os.environ.get(key)}
     report, markdown, membership = analyze(
         inputs.boards, inputs.population, inputs.access, ArchetypeConfig(), progress=progress, on_section=on_section,
         workers=workers, mode=report_mode, research_cap=research_max_refine_iterations,
+        code_version=code_version or {"available": False, "note": "not run in GitHub Actions"},
     )
     paths = writer.complete(report, markdown, membership)
     progress("final report written; partial files removed")
@@ -1123,6 +1129,10 @@ def archetype_report_command(
         typer.echo("RESEARCH REPORT COMPLETE")
     for path in paths:
         typer.echo(f"Wrote {path}")
+    if report.get("candidate_status", CANDIDATE_CONSTRUCTED) != CANDIDATE_CONSTRUCTED:
+        failure = next(iter(report["strategies"].values()))["failure"]
+        typer.echo(f"CANDIDATE NOT CONSTRUCTED ({failure['reason']}): {failure['detail']}", err=True)
+        raise typer.Exit(code=3)
 
 
 @app.command()
