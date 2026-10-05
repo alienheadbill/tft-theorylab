@@ -28,6 +28,12 @@ name: Read-only archetype research report
 # of the canonical S2 merge, the current tie behaviour and research tie rules
 # on one variant partition; C also runs a refinement convergence study past the
 # production cap. Canonical S2 is unchanged and nothing is promoted.
+# "s2-candidate-c-centroid-v1" evaluates the EXPERIMENTAL versioned family
+# candidate C_S2_centroid_candidate_v1 (C variants refined to convergence, hard
+# cap 20; S2 with centroid-similarity tie-break) once, against canonical C_S2.
+# Nothing user-facing reads it. If the candidate cannot be constructed (no
+# convergence, a refinement cycle, an invalid state) the report says so and
+# the step exits with code 3 after writing it.
 on:
   workflow_dispatch:
     inputs:
@@ -36,7 +42,7 @@ on:
         required: true
         default: "18.3"
       report_mode:
-        description: "full = complete report; s2-diagnostics = focused B_S2/C_S2 run; s2-stability-b / s2-stability-c = tie-order stability research"
+        description: "full = complete report; s2-diagnostics = focused B_S2/C_S2 run; s2-stability-b / s2-stability-c = tie-order stability research; s2-candidate-c-centroid-v1 = experimental family candidate v1"
         required: true
         type: choice
         default: full
@@ -45,6 +51,7 @@ on:
           - s2-diagnostics
           - s2-stability-b
           - s2-stability-c
+          - s2-candidate-c-centroid-v1
 
 permissions:
   contents: read
@@ -88,9 +95,9 @@ jobs:
             exit 1
           fi
           case "${REPORT_MODE}" in
-            full|s2-diagnostics|s2-stability-b|s2-stability-c) ;;
+            full|s2-diagnostics|s2-stability-b|s2-stability-c|s2-candidate-c-centroid-v1) ;;
             *)
-              echo "::error::report_mode must be full, s2-diagnostics, s2-stability-b or s2-stability-c." >&2
+              echo "::error::report_mode must be full, s2-diagnostics, s2-stability-b, s2-stability-c or s2-candidate-c-centroid-v1." >&2
               exit 1
               ;;
           esac

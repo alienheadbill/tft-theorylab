@@ -62,7 +62,7 @@ import shutil
 import statistics
 import time
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -1911,8 +1911,9 @@ def merge_variants(boards: Sequence[Board], variant: Mapping[int, int], strategy
     receives, per judged step, (chosen score, brute-force best valid score,
     whether another valid candidate shared the top score).
 
-    `tie_rule` (REPORT-ONLY research, `TIE_RULES`; never used by a real
-    grouping) inserts a structural secondary key between the core-overlap
+    `tie_rule` (`TIE_RULES`; used only by the REPORT-ONLY stability research
+    and by the versioned EXPERIMENTAL family candidates, `CANDIDATES` --
+    never by A/B/C or canonical S2) inserts a structural secondary key between the core-overlap
     score and the tie order: among candidates tied at the same highest core
     overlap, the one ranked best by the rule is judged first, and `tie_order`
     then orders only what the rule leaves tied. The key is computed when the
@@ -3612,6 +3613,450 @@ def render_stability_study(strategy: Strategy, study: Mapping[str, Any], names: 
     return lines + [""]
 
 
+# ---------------------------------------------------------------- versioned composition-family candidates (EXPERIMENTAL)
+
+
+def _strategy(name: str) -> Strategy:
+    return next(s for s in STRATEGIES if s.name == name)
+
+
+@dataclass(frozen=True)
+class FamilyCandidate:
+    """A named, VERSIONED composition-family candidate algorithm. Everything
+    that determines its partition is fixed here, so a result can be reproduced
+    later and is never confused with canonical S2 or the stability research.
+    EXPERIMENTAL: development evidence only; nothing serves or publishes it.
+
+    - `strategy`: the merge strategy, identical to `base_s2` (vectors, merge
+      restriction, merged-core check, S2 similarity rule) except its name,
+      label and description; its `variants_from` is the variant source.
+    - Refinement continues until the existing convergence criterion holds
+      (`ArchetypeConfig.convergence_moved_share`), at most
+      `refinement_hard_cap` passes; a cycle or the cap without convergence
+      means the candidate is NOT constructed.
+    - S2 merge priority unchanged (core overlap); `tie_rule` orders only the
+      pairs tied at the highest core overlap, `residual_tie_order` what the
+      rule leaves exactly tied."""
+
+    name: str
+    version: int
+    strategy: Strategy
+    base_s2: str
+    refinement_hard_cap: int
+    tie_rule: str
+    residual_tie_order: TieOrder = TieOrder("baseline")
+
+
+#: v1 (chosen after production runs #10 and #11 on Patch 18.3, which is
+#: therefore development data for it). Hard cap 20: run #11's C refinement
+#: converged after 14 passes (6 passes of margin), 20 is the research cap under
+#: which that convergence was observed, and 20 passes fit the workflow budget
+#: at run #11's population size (see README).
+C_S2_CENTROID_CANDIDATE_V1 = FamilyCandidate(
+    name="C_S2_centroid_candidate_v1",
+    version=1,
+    strategy=replace(
+        _strategy("C_S2_experimental"),
+        name="C_S2_centroid_candidate_v1",
+        label="C-S2 centroid candidate v1. EXPERIMENTAL CANDIDATE (development evidence only; not user-facing)",
+        description="EXPERIMENTAL CANDIDATE v1. C_S2_experimental unchanged (C's vectors, restricted merge, splash "
+                    "exception, merged-core check and S2 similarity rule) except: C's refinement runs until the existing "
+                    "convergence criterion holds (hard cap 20 passes; otherwise no candidate is constructed), and S2 "
+                    "pairs tied at the same highest core overlap are judged in order of centroid similarity (then the "
+                    "lowest group-id pair)."),
+    base_s2="C_S2_experimental",
+    refinement_hard_cap=20,
+    tie_rule="centroid_similarity",
+)
+CANDIDATES: tuple[FamilyCandidate, ...] = (C_S2_CENTROID_CANDIDATE_V1,)
+#: Report mode -> the candidate it evaluates (one focused mode per version).
+CANDIDATE_MODES: dict[str, FamilyCandidate] = {"s2-candidate-c-centroid-v1": C_S2_CENTROID_CANDIDATE_V1}
+CANDIDATE_CONSTRUCTED = "constructed"
+CANDIDATE_NOT_CONSTRUCTED = "NOT CONSTRUCTED"
+CANDIDATE_TOP_FAMILIES = 25
+CANDIDATE_INPUTS_NOT_USED: tuple[str, ...] = (
+    "placement", "Top 4", "win rate", "item performance", "carry performance", "popularity", "later/future merges",
+    "comp labels", "named family/regression anchors (diagnostics only)")
+CANDIDATE_DEFINITIONS: dict[str, str] = {
+    "status": "EXPERIMENTAL composition-family CANDIDATE -- development evidence only. Not served, not published, not "
+              "labelled (no Established/Off-meta), not used by Discover, Champion Investigation or any API.",
+    "evidence": "The candidate was chosen with production runs on this research population (Patch 18.3 runs #9-#11), "
+                "so results on Patch 18.3 are development evidence, not independent validation.",
+    "refinement": "the source strategy's leader pass and refinement (unchanged), continued until the EXISTING "
+                  "convergence criterion holds: a pass moves <= max(1, floor(convergence_moved_share x eligible boards)) "
+                  "boards. At most refinement_hard_cap passes. If the cap is reached first, or a partition repeats (a "
+                  "cycle), the candidate is NOT constructed and no families are reported.",
+    "merge_priority": "S2 merge queue, unchanged: the valid pair with the highest core overlap |shared core| / "
+                      "|core union| (an exact ratio) is judged first.",
+    "secondary_tie_break": "centroid_similarity: among pairs tied at the same highest core overlap ONLY, the pair whose "
+                           "two current group mean profiles are most similar (the strategy's own similarity) is judged "
+                           "first. A lower-overlap pair can never go first.",
+    "residual_tie_break": "pairs whose centroid similarity is also exactly equal: the lowest (lo, hi) group-id pair, as "
+                          "in canonical S2.",
+    "inputs": "board structure only (shop units, item counts, active traits); see inputs_not_used.",
+    "validity": "a constructed candidate passed these checks: refinement converged without a cycle; every board in a "
+                "variant is in exactly one family; every family is a union of whole variants; every S2 decision agrees "
+                "with the S2 rule (decision_rule_mismatches = 0). Any failure: NOT CONSTRUCTED.",
+    "comparison": "canonical = base_s2 as the existing reports compute it: the S2 merge (lowest-id ties) on the "
+                  "variants after the production cap (config.max_refine_iterations passes). Differences combine BOTH "
+                  "candidate changes (converged variants and the tie-break); this mode does not attribute them. "
+                  "Differences are stated as candidate minus canonical; neither direction is better by itself.",
+    "fingerprints": "sha256 of the partition as sorted member lists (independent of group ids); reproducible only "
+                    "on the identical population.",
+}
+
+
+def candidate_phases(candidate: FamilyCandidate) -> tuple[str, ...]:
+    """Checkpoint phases of one candidate evaluation, in run order."""
+    return (f"{candidate.name}-variants", candidate.name)
+
+
+def partition_fingerprint(assign: Mapping[int, int]) -> str:
+    """Group-id-independent fingerprint of a partition (sorted member lists)."""
+    import hashlib
+    members: dict[int, list[int]] = defaultdict(list)
+    for k, g in assign.items():
+        members[g].append(k)
+    parts = sorted(sorted(ks) for ks in members.values())
+    return hashlib.sha256(json.dumps(parts).encode()).hexdigest()
+
+
+def candidate_provenance(candidate: FamilyCandidate, config: ArchetypeConfig) -> dict[str, Any]:
+    """What fixes the candidate's partition (everything but the population)."""
+    source = _strategy(candidate.strategy.variants_from)
+    return {
+        "candidate": candidate.name, "version": candidate.version, "status": CANDIDATE_DEFINITIONS["status"],
+        "base_s2": candidate.base_s2, "source_strategy": source.name,
+        "vectors": {"weighted": candidate.strategy.weighted, "trait_share": candidate.strategy.trait_share,
+                    "definition": source.description},
+        "refinement": {"rule": CANDIDATE_DEFINITIONS["refinement"],
+                       "convergence_moved_share": config.convergence_moved_share,
+                       "hard_cap": candidate.refinement_hard_cap,
+                       "canonical_production_cap": config.max_refine_iterations},
+        "merge": {"restriction": candidate.strategy.merge, "similarity_rule": candidate.strategy.similarity_rule.upper(),
+                  "primary_priority": CANDIDATE_DEFINITIONS["merge_priority"],
+                  "secondary_tie_break": candidate.tie_rule,
+                  "secondary_tie_break_definition": CANDIDATE_DEFINITIONS["secondary_tie_break"],
+                  "residual_tie_break": CANDIDATE_DEFINITIONS["residual_tie_break"],
+                  "s2_conditions": list(S2_CONDITION_NAMES),
+                  "s2_thresholds": {"tau": config.tau, "floor_below_tau": SHADOW_FLOOR,
+                                    "merged_tail_max_share": 1 / SHADOW_MERGED_TAIL,
+                                    "smaller_side_tail_max_share": 1 / SHADOW_SMALLER_TAIL}},
+        "config": {k: getattr(config, k) for k in (
+            "tau", "min_identity_units", "min_group_size", "prune_presence", "prune_min_shared", "core_presence",
+            "merge_min_shared", "merge_shared_fraction", "max_swaps", "merge_min_result_core", "merge_core_retention",
+            "flex_presence", "itemized_share", "itemized_weight", "splash_weight", "trait_share")},
+        "inputs_not_used": list(CANDIDATE_INPUTS_NOT_USED),
+        "definitions": CANDIDATE_DEFINITIONS,
+    }
+
+
+def _public_lookup(lookup: Mapping[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in lookup.items() if k != "members"}
+
+
+def _partition_view(boards: Sequence[Board], eligible: Sequence[Board], variant: Mapping[int, int],
+                    run: Mapping[str, Any], strategy: Strategy, config: ArchetypeConfig,
+                    refine_moves: Sequence[int]) -> dict[str, Any]:
+    """The structural diagnostics of one final partition (same functions for
+    the candidate and the canonical comparison, so metrics are comparable)."""
+    by_obs = {b.obs: b for b in eligible}
+    grouping = Grouping(variant=dict(variant), group=run["group"], log=[], converged=True,
+                        refine_moves=list(refine_moves), merges=run["merges"], merge_checks=run["merge_checks"])
+    metrics = global_metrics(boards, grouping, strategy, config)
+    final = final_group_diagnostics(boards, grouping, strategy, config)
+    light = light_group_cores(run["group"], by_obs, config)
+    return {
+        "metrics": metrics, "final": final, "light": light,
+        "families": {label: _anchor_lookup(light, a) for label, a in FAMILY_ANCHORS},
+        "regressions": {label: _anchor_lookup(light, a) for label, a in REGRESSION_ANCHORS},
+    }
+
+
+def _family_summary(view: Mapping[str, Any], run: Mapping[str, Any], eligible: int) -> dict[str, Any]:
+    m, fin = view["metrics"], view["final"]
+    return {
+        "accepted_merges": run["merges"], "merge_checks": run["merge_checks"],
+        "variants_before_merge": m["variants_before_merge"], "groups": m["groups"],
+        "eligible_boards": eligible, "grouped_boards": m["boards_in_multi_board_groups"],
+        "ungrouped_boards": m["boards_ungrouped"],
+        "grouped_share_of_eligible": m["boards_in_multi_board_groups"] / eligible if eligible else None,
+        "group_size_quantiles": m["group_size_quantiles"], "largest_groups": m["largest_groups"],
+        "size_bands": m["size_bands"], "boards_by_size_band": m["boards_by_size_band"],
+        "final_boards_below_tau": fin["boards_below_tau"],
+        "final_boards_below_tau_share_of_grouped": fin["boards_below_tau_share"],
+        "groups_with_any_board_below_tau": fin["groups_with_any_board_below_tau"],
+        "groups_over_1pct_below_tau": fin["groups_over_1pct_below_tau"],
+        "groups_over_5pct_below_tau": fin["groups_over_5pct_below_tau"],
+        "groups_over_10pct_below_tau": fin["groups_over_10pct_below_tau"],
+        "tiny_core_large_groups": fin["tiny_core_large_groups"],
+        "groups_merged_from_2plus_variants": fin["groups_merged_from_2plus_variants"],
+        "group_min_similarity": fin["quantiles"]["group_min_similarity"], "core_drift": fin["quantiles"]["core_drift"],
+        "within_group_similarity": m["within_group_similarity"],
+        "nearest_other_group_similarity": m["nearest_other_group_similarity"],
+        "near_duplicate_groups_nearest_other_at_or_above_tau": m["groups_with_nearest_other_at_or_above_tau"],
+        "lock_in": run["counts"], "decision_rule_mismatches": run["decision_rule_mismatches"],
+    }
+
+
+#: Numeric metrics compared candidate vs canonical (difference = candidate - canonical).
+CANDIDATE_COMPARISON_METRICS: tuple[tuple[str, str], ...] = (
+    ("variants_before_merge", "variants (count)"), ("accepted_merges", "accepted S2 merges (count)"),
+    ("groups", "final groups (count)"), ("grouped_boards", "grouped boards (of eligible boards)"),
+    ("ungrouped_boards", "ungrouped boards (of eligible boards)"),
+    ("final_boards_below_tau", "grouped boards below tau vs their final group (count)"),
+    ("groups_with_any_board_below_tau", "groups with any board below tau (count)"),
+    ("groups_over_1pct_below_tau", "groups with > 1% of boards below tau"),
+    ("groups_over_5pct_below_tau", "groups with > 5% of boards below tau"),
+    ("groups_over_10pct_below_tau", "groups with > 10% of boards below tau"),
+    ("tiny_core_large_groups", f"groups >= {TINY_CORE_MIN_BOARDS} boards with a core <= {TINY_CORE_UNITS} units"),
+    ("near_duplicate_groups_nearest_other_at_or_above_tau", "groups whose nearest other group is >= tau"),
+)
+
+
+def build_candidate(boards: Sequence[Board], candidate: FamilyCandidate, config: ArchetypeConfig,
+                    progress: Callable[[str], None], workers: int = 1,
+                    checkpoint: SectionCallback | None = None,
+                    context: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Construct and evaluate one versioned family candidate (REPORT ONLY).
+
+    Variants are computed ONCE (the source strategy's leader pass and
+    refinement, continued to convergence; the state after the production cap
+    is kept from the same run as the canonical comparison base), then the
+    candidate's S2 merge runs once and the canonical S2 merge once. Nothing
+    reads the database or any outcome. Returns the public result plus
+    `_group` / `_variant` (internal, for the membership file) when
+    constructed. A non-converged, cycling or invalid result is returned as
+    NOT CONSTRUCTED with no families."""
+    checkpoint = checkpoint or (lambda phase, data, lines: None)
+    if candidate.refinement_hard_cap < config.max_refine_iterations:
+        raise ValueError("a candidate's refinement hard cap must be >= the production cap")
+    if candidate.tie_rule not in TIE_RULES:
+        raise ValueError(f"unknown tie rule {candidate.tie_rule!r}")
+    source = _strategy(candidate.strategy.variants_from)
+    timings: dict[str, float] = {}
+    started = time.monotonic()
+    v = _variants(boards, source, config, progress, workers, candidate.refinement_hard_cap,
+                  snapshot_after=config.max_refine_iterations)
+    timings["variants_seconds"] = round(time.monotonic() - started, 1)
+    eligible = v["eligible"]
+    universe = [b.obs for b in eligible]
+    moves = list(v["moves"])
+    refinement = {
+        "hard_cap": candidate.refinement_hard_cap, "canonical_production_cap": config.max_refine_iterations,
+        "convergence_moved_share": config.convergence_moved_share,
+        "convergence_threshold_moved_boards": v["threshold"], "iterations_used": len(moves),
+        "iterations_beyond_production_cap": max(0, len(moves) - config.max_refine_iterations),
+        "moved_boards_per_iteration": moves, "converged": v["converged"], "cycle": v["cycle"],
+        "eligible_boards": len(eligible), "variants": len(set(v["assign"].values())),
+        "boards_in_variants": len(v["assign"]), "boards_not_in_variants": len(eligible) - len(v["assign"]),
+        "variant_sizes": _size_summary(v["assign"]),
+        "variant_fingerprint": partition_fingerprint(v["assign"]) if v["assign"] else None,
+    }
+    out: dict[str, Any] = {"provenance": {**candidate_provenance(candidate, config), **(context or {})},
+                           "refinement": refinement}
+    failure = None
+    if not eligible:
+        failure = {"reason": "invalid_state", "detail": "no eligible boards"}
+    elif v["cycle"]:
+        c = v["cycle"]
+        failure = {"reason": "refinement_cycle",
+                   "detail": f"the partition of iteration {c['first_iteration']} repeated at iteration "
+                             f"{c['repeated_at_iteration']} (cycle length {c['cycle_length']}); refinement never met the "
+                             "convergence criterion"}
+    elif not v["converged"]:
+        failure = {"reason": "hard_cap_without_convergence",
+                   "detail": f"{len(moves)} passes (hard cap {candidate.refinement_hard_cap}) ended without meeting the "
+                             f"convergence criterion: the last pass moved {moves[-1] if moves else 'n/a'} boards, "
+                             f"threshold {v['threshold']}"}
+    elif not v["assign"]:
+        failure = {"reason": "invalid_state", "detail": "refinement produced no variant with >= min_group_size boards"}
+    status = CANDIDATE_NOT_CONSTRUCTED if failure else "variants converged"
+    checkpoint(f"{candidate.name}-variants", {"status": status, "failure": failure, "refinement": refinement},
+               [f"## {candidate.name}: refinement -- {status}",
+                *([f"- **{CANDIDATE_NOT_CONSTRUCTED}: {failure['reason']}** -- {failure['detail']}"] if failure else []),
+                *(f"- {k}: {json.dumps(val, default=_json_default)}" for k, val in refinement.items())])
+    if failure:
+        progress(f"{candidate.name}: {CANDIDATE_NOT_CONSTRUCTED} ({failure['reason']}): {failure['detail']}")
+        return {**out, "status": CANDIDATE_NOT_CONSTRUCTED, "failure": failure, "families": None, "comparison": None,
+                "timings": timings}
+
+    champions = load_roster().champions
+    vecs = {b.obs: board_vectors(b, candidate.strategy, config, champions) for b in eligible}
+    assign = v["assign"]
+    started = time.monotonic()
+    run = _merge_config([b for b in eligible if b.obs in assign], assign, vecs, candidate.strategy, config,
+                        candidate.tie_rule, candidate.residual_tie_order)
+    timings["candidate_merge_seconds"] = round(time.monotonic() - started, 1)
+    progress(f"{candidate.name}: S2 merge with {candidate.tie_rule} tie-break: {run['merges']} merges, "
+             f"{len(set(run['group'].values()))} groups, {timings['candidate_merge_seconds']}s")
+    problems = []
+    if set(run["group"]) != set(assign):
+        problems.append("the grouped boards differ from the boards in variants")
+    family_of_variant: dict[int, int] = {}
+    if any(family_of_variant.setdefault(assign[k], g) != g for k, g in run["group"].items()):
+        problems.append("a variant is split across families")
+    if run["decision_rule_mismatches"]:
+        problems.append(f"{run['decision_rule_mismatches']} S2 decisions disagree with the S2 rule")
+    if problems:
+        failure = {"reason": "invalid_state", "detail": "; ".join(problems)}
+        progress(f"{candidate.name}: {CANDIDATE_NOT_CONSTRUCTED} (invalid_state): {failure['detail']}")
+        return {**out, "status": CANDIDATE_NOT_CONSTRUCTED, "failure": failure, "families": None, "comparison": None,
+                "timings": timings}
+
+    started = time.monotonic()
+    view = _partition_view(boards, eligible, assign, run, candidate.strategy, config, moves)
+    timings["candidate_diagnostics_seconds"] = round(time.monotonic() - started, 1)
+    families = _family_summary(view, run, len(eligible))
+    families["tie_stats"] = run["tie_stats"]
+    families["family_fingerprint"] = partition_fingerprint(run["group"])
+    window = (context or {}).get("balance_window")
+    per_group = {r["group"]: r for r in view["final"]["per_group"]}
+    families["largest_families"] = [
+        {"candidate": candidate.name, "version": candidate.version, "balance_window": window, "group": g,
+         "boards": per_group[g]["boards"], "variants": per_group[g]["variants"],
+         "core_candidates": view["light"][g]["core_candidates"], "below_tau": per_group[g]["below_tau"],
+         "min_similarity": per_group[g]["min_similarity"], "median_similarity": per_group[g]["median_similarity"]}
+        for g in sorted(per_group, key=lambda g: (-per_group[g]["boards"], g))[:CANDIDATE_TOP_FAMILIES]]
+    families["family_anchors"] = {k: _public_lookup(x) for k, x in view["families"].items()}
+    families["regression_anchors"] = {k: _public_lookup(x) for k, x in view["regressions"].items()}
+
+    # canonical base_s2 on the production-cap variants (the snapshot of the same refinement run)
+    base = _strategy(candidate.base_s2)
+    snap = v["snapshot"]["assign"]
+    started = time.monotonic()
+    crun = _merge_config([b for b in eligible if b.obs in snap], snap, vecs, base, config, None, None)
+    cview = _partition_view(boards, eligible, snap, crun, base, config, v["snapshot"]["moves"])
+    timings["canonical_comparison_seconds"] = round(time.monotonic() - started, 1)
+    canonical = _family_summary(cview, crun, len(eligible))
+    canonical["family_fingerprint"] = partition_fingerprint(crun["group"])
+    progress(f"{candidate.name}: canonical {base.name} for comparison: {crun['merges']} merges, "
+             f"{len(set(crun['group'].values()))} groups, {timings['canonical_comparison_seconds']}s")
+    comparison = {
+        "canonical": base.name, "definition": CANDIDATE_DEFINITIONS["comparison"],
+        "canonical_variants_converged": v["snapshot"]["converged"],
+        "canonical_refinement_moves": v["snapshot"]["moves"],
+        "metrics": [{"metric": key, "label": label, "canonical": canonical[key], "candidate": families[key],
+                     "difference_candidate_minus_canonical": families[key] - canonical[key]}
+                    for key, label in CANDIDATE_COMPARISON_METRICS],
+        "within_group_similarity": {"canonical": canonical["within_group_similarity"],
+                                    "candidate": families["within_group_similarity"]},
+        "nearest_other_group_similarity": {"canonical": canonical["nearest_other_group_similarity"],
+                                           "candidate": families["nearest_other_group_similarity"]},
+        "lock_in": {"canonical": canonical["lock_in"], "candidate": families["lock_in"]},
+        "variants_production_cap_vs_converged": partition_disagreement(universe, snap, assign),
+        "families_canonical_vs_candidate": partition_disagreement(universe, crun["group"], run["group"]),
+        "family_anchors": [{"label": label, "change_canonical_to_candidate": _family_change(cview["families"][label],
+                                                                                           view["families"][label]),
+                            "canonical": _public_lookup(cview["families"][label]),
+                            "candidate": _public_lookup(view["families"][label])} for label, _ in FAMILY_ANCHORS],
+        "regression_anchors": [{"label": label,
+                                "change_canonical_to_candidate": _regression_change(cview["regressions"][label],
+                                                                                    view["regressions"][label]),
+                                "canonical": _public_lookup(cview["regressions"][label]),
+                                "candidate": _public_lookup(view["regressions"][label])}
+                               for label, _ in REGRESSION_ANCHORS],
+        "canonical_summary": {k: val for k, val in canonical.items() if k not in ("merge_checks",)},
+    }
+    return {**out, "status": CANDIDATE_CONSTRUCTED, "failure": None, "families": families, "comparison": comparison,
+            "timings": timings, "_group": run["group"], "_variant": assign}
+
+
+def render_candidate(candidate: FamilyCandidate, result: Mapping[str, Any], names: Names) -> list[str]:
+    def f(x: Any) -> str:
+        return "n/a" if x is None else f"{x:.4f}" if isinstance(x, float) else str(x)
+
+    def q(d: Mapping[str, Any] | None) -> str:
+        return "n/a" if not d else ", ".join(f"{k} {f(val)}" for k, val in d.items())
+
+    def units(us: Sequence[str]) -> str:
+        return ", ".join(names.champion(u) for u in us) or "-"
+
+    prov, ref = result["provenance"], result["refinement"]
+    lines = [f"## Composition-family candidate {candidate.name} (version {candidate.version}) -- "
+             f"{result['status']}", "",
+             f"**{CANDIDATE_DEFINITIONS['status']}** {CANDIDATE_DEFINITIONS['evidence']}", ""]
+    if result["status"] != CANDIDATE_CONSTRUCTED:
+        fail = result["failure"]
+        lines += [f"**THE CANDIDATE WAS NOT SUCCESSFULLY CONSTRUCTED ({fail['reason']}): {fail['detail']}.** No "
+                  "families are reported and no membership rows are written for it.", ""]
+    lines += ["### Provenance", candidate.strategy.description,
+              *(f"- {k}: {json.dumps(prov[k], default=_json_default)}" for k in prov if k != "definitions"),
+              *(f"- definition {k}: {val}" for k, val in CANDIDATE_DEFINITIONS.items()), "",
+              "### Refinement (convergence-aware)",
+              f"- converged: {ref['converged']}; iterations used {ref['iterations_used']} (hard cap {ref['hard_cap']}; "
+              f"canonical production cap {ref['canonical_production_cap']}; "
+              f"{ref['iterations_beyond_production_cap']} beyond it); cycle: {ref['cycle']}",
+              f"- convergence threshold: {ref['convergence_threshold_moved_boards']} moved boards "
+              f"(max(1, floor({ref['convergence_moved_share']} x {ref['eligible_boards']} eligible boards)))",
+              f"- moved boards per iteration: {ref['moved_boards_per_iteration']}",
+              f"- variants: {ref['variants']}; boards in variants {ref['boards_in_variants']} / "
+              f"{ref['eligible_boards']} eligible; not in a variant {ref['boards_not_in_variants']}",
+              f"- variant sizes: {q(ref['variant_sizes']['size_quantiles'])}; largest {ref['variant_sizes']['largest']}",
+              f"- variant fingerprint: {ref['variant_fingerprint']}", ""]
+    if result["status"] != CANDIDATE_CONSTRUCTED:
+        return lines + [f"- runtime: {result['timings']}", ""]
+    fam, cmp_ = result["families"], result["comparison"]
+    lines += ["### Candidate families (structure only; denominators stated)",
+              f"- accepted S2 merges {fam['accepted_merges']}; variants {fam['variants_before_merge']} -> "
+              f"{fam['groups']} families",
+              f"- grouped {fam['grouped_boards']} / ungrouped {fam['ungrouped_boards']} of {fam['eligible_boards']} "
+              f"eligible boards ({_pct(fam['grouped_share_of_eligible'])} grouped)",
+              f"- family sizes: {q(fam['group_size_quantiles'])}; largest {fam['largest_groups']}",
+              f"- size bands (families): {json.dumps(fam['size_bands'])}; boards by band: "
+              f"{json.dumps(fam['boards_by_size_band'])}",
+              f"- grouped boards below tau vs their final family: {fam['final_boards_below_tau']} "
+              f"({_pct(fam['final_boards_below_tau_share_of_grouped'])} of grouped boards); families with any "
+              f"{fam['groups_with_any_board_below_tau']}, > 1% {fam['groups_over_1pct_below_tau']}, > 5% "
+              f"{fam['groups_over_5pct_below_tau']}, > 10% {fam['groups_over_10pct_below_tau']}",
+              f"- large tiny-core families (>= {TINY_CORE_MIN_BOARDS} boards, core <= {TINY_CORE_UNITS} units): "
+              f"{fam['tiny_core_large_groups']}; families merged from 2+ variants {fam['groups_merged_from_2plus_variants']}",
+              f"- within-family similarity (every grouped board): {q(fam['within_group_similarity'])}",
+              f"- family minimum similarity: {q(fam['group_min_similarity'])}; core drift: {q(fam['core_drift'])}",
+              f"- nearest-other-family similarity: {q(fam['nearest_other_group_similarity'])}; near-duplicate families "
+              f"(nearest other >= tau): {fam['near_duplicate_groups_nearest_other_at_or_above_tau']}",
+              f"- recursive lock-in counts: {json.dumps(fam['lock_in'], default=_json_default)}",
+              f"- tie statistics: {json.dumps(fam['tie_stats'])}; decision mismatches {fam['decision_rule_mismatches']}",
+              f"- family fingerprint: {fam['family_fingerprint']}", "",
+              f"### Largest {CANDIDATE_TOP_FAMILIES} families (structure only; {candidate.name}, balance window "
+              f"{prov.get('balance_window')})"]
+    lines += [f"- family {r['group']}: {r['boards']} boards, {r['variants']} variant(s), below tau {r['below_tau']}, "
+              f"min / median similarity {f(r['min_similarity'])} / {f(r['median_similarity'])}; core: "
+              f"{units(r['core_candidates'])}" for r in fam["largest_families"]]
+    lines += ["", f"### Comparison with canonical {cmp_['canonical']}", cmp_["definition"], "",
+              "| metric | canonical | candidate | candidate - canonical |", "|---|---|---|---|"]
+    lines += [f"| {r['label']} | {r['canonical']} | {r['candidate']} | {r['difference_candidate_minus_canonical']:+d} |"
+              for r in cmp_["metrics"]]
+    vd, fd = cmp_["variants_production_cap_vs_converged"], cmp_["families_canonical_vs_candidate"]
+    lines += ["", f"- within-family similarity: canonical {q(cmp_['within_group_similarity']['canonical'])}; candidate "
+              f"{q(cmp_['within_group_similarity']['candidate'])}",
+              f"- nearest-other-family similarity: canonical {q(cmp_['nearest_other_group_similarity']['canonical'])}; "
+              f"candidate {q(cmp_['nearest_other_group_similarity']['candidate'])}",
+              f"- recursive lock-in: canonical {json.dumps(cmp_['lock_in']['canonical'], default=_json_default)}; "
+              f"candidate {json.dumps(cmp_['lock_in']['candidate'], default=_json_default)}",
+              f"- variants, production cap vs converged: {vd['boards_with_changed_group_membership']} boards changed "
+              f"variant; disagreement {f(vd['disagreement_share_of_pairs_together_in_either'])} of pairs together in "
+              f"either, {f(vd['disagreement_share_of_all_pairs'])} of all eligible pairs",
+              f"- families, canonical vs candidate: {fd['boards_with_changed_group_membership']} boards changed "
+              f"family; disagreement {f(fd['disagreement_share_of_pairs_together_in_either'])} of pairs together in "
+              f"either, {f(fd['disagreement_share_of_all_pairs'])} of all eligible pairs", "",
+              "### Named family anchors (evaluation diagnostics only; never inputs)"]
+    for a in cmp_["family_anchors"]:
+        c, d = a["canonical"], a["candidate"]
+        lines.append(f"- {a['label']}: {a['change_canonical_to_candidate']} (canonical {c['groups']} groups / "
+                     f"{c['boards']} boards, largest {c['largest_sizes']}; candidate {d['groups']} groups / {d['boards']} "
+                     f"boards, largest {d['largest_sizes']}); candidate largest core: "
+                     f"{units((d['largest_cores'] or [[]])[0])}")
+    lines += ["", "### Regression anchors (shells of earlier mixed groups; diagnostics only)"]
+    for a in cmp_["regression_anchors"]:
+        c, d = a["canonical"], a["candidate"]
+        lines.append(f"- {a['label']}: {a['change_canonical_to_candidate']} (canonical {c['groups']} groups / "
+                     f"{c['boards']} boards, core sizes {c['largest_core_sizes']}; candidate {d['groups']} groups / "
+                     f"{d['boards']} boards, core sizes {d['largest_core_sizes']})")
+    return lines + ["", f"- runtime: {result['timings']}", ""]
+
+
+
 @dataclass(frozen=True)
 class LoadedInputs:
     """Everything the analysis needs, fully materialized in memory (plain
@@ -3654,7 +4099,7 @@ def build_report(db: Database, *, balance_window: str = DEFAULT_BALANCE_WINDOW,
 #: and the control columns of the family/regression review). The controls'
 #: own report sections are omitted. Every S2 decision, threshold and diagnostic
 #: is computed by the same code as in "full", so the S2 sections are identical.
-REPORT_MODES: tuple[str, ...] = ("full", "s2-diagnostics", "s2-stability-b", "s2-stability-c")
+REPORT_MODES: tuple[str, ...] = ("full", "s2-diagnostics", "s2-stability-b", "s2-stability-c", *CANDIDATE_MODES)
 #: REPORT-ONLY stability research modes (run #9 follow-up): one S2 strategy
 #: each, so B and C can run as separate production jobs within the budget.
 STABILITY_MODES: dict[str, str] = {"s2-stability-b": "B_S2_experimental", "s2-stability-c": "C_S2_experimental"}
@@ -3662,6 +4107,12 @@ STABILITY_MODE_NOTE = ("S2 STABILITY RESEARCH RUN (report mode {mode}) -- NOT th
                        "{strategy}'s variants are computed once (its control's leader pass and refinement{conv}); the "
                        "canonical S2 merge, the current tie behaviour and the research tie rules are then replayed under "
                        "several tie orders on those variants. Canonical S2 is unchanged; nothing is promoted.")
+CANDIDATE_MODE_NOTE = ("EXPERIMENTAL COMPOSITION-FAMILY CANDIDATE EVALUATION (report mode {mode}): {name} (version "
+                       "{version}). NOT user-facing and NOT a production rule: nothing serves, publishes or labels these "
+                       "families, and canonical S2 and every existing strategy are unchanged. {name}'s variants are "
+                       "computed once (refined to convergence, hard cap {cap}); its S2 merge and the canonical {base} "
+                       "comparison run once each. Patch-window results are development evidence, not independent "
+                       "validation.")
 S2_MODE_NOTE = ("FOCUSED S2 RESEARCH RUN (report mode s2-diagnostics) -- NOT the full A/B/C/S2 report. Strategy A is "
                 "not computed. B and C are computed in this run only as the variant sources and comparison baselines "
                 "of B_S2 and C_S2; their own report sections are omitted. B_S2 and C_S2 (decisions, thresholds, "
@@ -3684,6 +4135,9 @@ def strategy_plan(mode: str = "full") -> list[tuple[Strategy, str]]:
         by_name = {s.name: s for s in STRATEGIES}
         exp = by_name[STABILITY_MODES[mode]]
         return [(by_name[exp.variants_from], "variant_source"), (exp, "stability")]
+    if mode in CANDIDATE_MODES:
+        candidate = CANDIDATE_MODES[mode]
+        return [(_strategy(candidate.strategy.variants_from), "variant_source"), (candidate.strategy, "candidate")]
     raise ValueError(f"unknown report mode {mode!r}; expected one of {REPORT_MODES}")
 
 
@@ -3691,6 +4145,8 @@ def report_phases(mode: str = "full") -> tuple[str, ...]:
     if mode in STABILITY_MODES:  # the study's checkpoints, then its full section (variants are computed inside it)
         name = STABILITY_MODES[mode]
         return ("population", *stability_phases(name, mode == "s2-stability-c"), name, "closing")
+    if mode in CANDIDATE_MODES:  # the variants checkpoint, then the candidate section
+        return ("population", *candidate_phases(CANDIDATE_MODES[mode]), "closing")
     return ("population", *(s.name for s, _ in strategy_plan(mode)), "closing")
 
 
@@ -3704,10 +4160,13 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
             config: ArchetypeConfig, *, progress: Callable[[str], None] | None = None,
             on_section: SectionCallback | None = None, workers: int = 1,
             mode: str = "full",
-            research_cap: int = RESEARCH_MAX_REFINE_ITERATIONS) -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
+            research_cap: int = RESEARCH_MAX_REFINE_ITERATIONS,
+            code_version: Mapping[str, Any] | None = None) -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
     """Pure in-memory analysis (no database). Returns the same (report,
     markdown, membership) whether or not `progress`/`on_section` are given,
-    and for any `workers` (execution only). `mode`: see REPORT_MODES."""
+    and for any `workers` (execution only). `mode`: see REPORT_MODES.
+    `code_version` (candidate modes only): recorded in the candidate's
+    provenance as given (e.g. the workflow's commit SHA)."""
     plan = strategy_plan(mode)
     progress = progress or _noop
     emit = on_section or (lambda phase, data, lines: None)
@@ -3726,6 +4185,10 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
         note = STABILITY_MODE_NOTE.format(
             mode=mode, strategy=STABILITY_MODES[mode],
             conv=f", continued up to {research_cap} refinement passes for the convergence study" if mode == "s2-stability-c" else "")
+    if mode in CANDIDATE_MODES:
+        c = CANDIDATE_MODES[mode]
+        note = CANDIDATE_MODE_NOTE.format(mode=mode, name=c.name, version=c.version, cap=c.refinement_hard_cap,
+                                          base=c.base_s2)
     if focused:
         report["report_mode"] = mode
         report["report_mode_note"] = note
@@ -3764,6 +4227,25 @@ def analyze(boards: Sequence[Board], population: dict[str, Any], access: str,
         progress(f"{exp.name}: stability study completed")
         emit(exp.name, report["strategies"][exp.name], lines)
         plan = []  # nothing else runs in a stability mode
+    if mode in CANDIDATE_MODES:
+        candidate = CANDIDATE_MODES[mode]
+        progress(f"{candidate.name}: candidate construction started (variants from {candidate.strategy.variants_from}, "
+                 f"refinement to convergence, hard cap {candidate.refinement_hard_cap})")
+        context = {"report_mode": mode, "balance_window": population.get("balance_window"),
+                   "population": dict(population), "code_version": dict(code_version or {"available": False})}
+        result = build_candidate(boards, candidate, config, progress, workers=workers, checkpoint=emit, context=context)
+        group, variant = result.pop("_group", None), result.pop("_variant", None)
+        report["candidate_status"] = result["status"]
+        report["strategies"][candidate.name] = result
+        lines = render_candidate(candidate, result, names)
+        md += lines
+        if group is not None:
+            for k, g in sorted(group.items()):
+                membership.append({"strategy": candidate.name, "observation": k, "group": g, "variant": variant[k],
+                                   "placement": by_obs[k].placement, "shop_units": len(by_obs[k].identity)})
+        progress(f"{candidate.name}: candidate evaluation completed: {result['status']}")
+        emit(candidate.name, result, lines)
+        plan = []  # nothing else runs in a candidate mode
     for strategy, role in plan:
         progress(f"{strategy.name}: started")
         chunk_start = len(md)
