@@ -219,6 +219,15 @@ Riot access currently uses a **development key that must be regenerated regularl
 - **Goal:** a functioning, policy-compliant product that is suitable for persistent Riot production API access.
 - Development-key collection is temporary infrastructure.
 - Policy-sensitive features (overlays, live assistance) need the current Riot policy checked before any implementation. The README's "Riot policy boundary" still applies: aggregate and post-game analysis only.
+- **Zero-cost public site and Riot-facing pages (IMPLEMENTED; operator switch PENDING):**
+  - **Data source:** the public site runs without any cloud database. `TFT_DATA_SOURCE=demo` gives synthetic data, labelled on every page; `snapshot` gives a bundled read-only snapshot of real matches. A configured but broken `DATABASE_URL` is still a loud 503, never fake data.
+  - **Pages:** About, Methodology & data, Privacy and Terms pages; Riot's legal boilerplate in every footer; `/riot.txt` from `RIOT_SITE_VERIFICATION`.
+  - **Positioning:** aggregate, historical study before or after play; explicitly not a live in-game assistant, overlay or scouting tool.
+  - **Operator steps:** on the public Render service, delete `DATABASE_URL` and `RIOT_API_KEY`, then set `TFT_DATA_SOURCE=demo`.
+- **Before applying for a production key (PENDING):**
+  - publish a real analytics snapshot (built by the owner's local data engine) so the reviewed site shows observed evidence rather than demo data;
+  - register the product, then set `RIOT_SITE_VERIFICATION` from the Developer Portal;
+  - re-check the current Riot policies at submission time.
 
 ### Track 8: Composition discovery/theorycrafting (FUTURE; the long-term differentiator)
 

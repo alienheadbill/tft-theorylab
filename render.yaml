@@ -16,10 +16,21 @@ services:
         value: americas
       - key: TFT_DB_PATH
         value: data/tftlab.sqlite3
-      - key: RIOT_API_KEY
+      # Public data source (README: "Zero-cloud-database public site"). Set on
+      # the service, never committed: "demo" (synthetic, labelled on every
+      # page) or "snapshot" (a bundled read-only snapshot of real matches).
+      # Both require DATABASE_URL to be absent from this service.
+      - key: TFT_DATA_SOURCE
         sync: false
-      # Production uses the Neon Ohio Postgres database. Keep the credential
-      # in Render's secret environment only; never commit it here.
-      # Leave unset only for local/demo-style deployments.
+      # Riot site verification string served at /riot.txt, exactly as the
+      # Developer Portal provides it. Not a secret, and never the API key.
+      - key: RIOT_SITE_VERIFICATION
+        sync: false
+      # Only for TFT_DATA_SOURCE=database (production Postgres). The zero-cost
+      # public site runs WITHOUT it; a set but unreachable database is a loud
+      # 503, never demo data. Keep any credential in Render's secret
+      # environment only; never commit it here.
       - key: DATABASE_URL
         sync: false
+      # The web app makes no Riot API calls, so it needs no RIOT_API_KEY
+      # (ingestion runs elsewhere and keeps its own key).

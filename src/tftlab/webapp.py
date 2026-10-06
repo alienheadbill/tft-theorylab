@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import json
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from .analytics import (
@@ -44,7 +45,75 @@ WEB_DIR = PACKAGE_DIR / "web"
 STATIC_DIR = WEB_DIR / "static"
 
 
-class ProductionDatabaseUnavailable(RuntimeError):
+# ---------------------------------------------------------------- data source
+#
+# Where the public site's numbers come from. `TFT_DATA_SOURCE` selects it
+# explicitly; unset keeps the original automatic behavior for local
+# development. Every response says which one is active (`demo`, and
+# `/api/source` in full), and synthetic data is never presented as observed
+# Riot match evidence.
+#
+#   database  `DATABASE_URL` (production Postgres), opened read-only. Required
+#             to be set; an unreachable one is a loud 503, never demo data.
+#   snapshot  a bundled, read-only SQLite copy of real indexed matches at
+#             `TFT_SNAPSHOT_PATH` (+ optional `<path>.json` manifest). No cloud
+#             database. A missing/empty/invalid snapshot is a loud 503, never
+#             demo data.
+#   demo      the deterministic SYNTHETIC demo dataset, labelled as such
+#             everywhere. No database at all: the zero-cost review mode.
+#   (unset)   automatic: `DATABASE_URL` if set, else a populated local SQLite
+#             file (`TFT_DB_PATH`), else the demo dataset.
+#
+# `snapshot`/`demo` together with `DATABASE_URL` is refused (503): a
+# configured production database is never silently ignored or replaced.
+
+DATA_SOURCE_ENV = "TFT_DATA_SOURCE"
+DATA_SOURCE_MODES = ("database", "snapshot", "demo")
+DEFAULT_SNAPSHOT_PATH = "data/snapshot/theorylabs-snapshot.sqlite3"
+#: An observed source whose latest indexed game is older than this is shown
+#: as stale (it may not reflect the current patch).
+DEFAULT_STALE_AFTER_DAYS = 14
+
+
+@dataclass(frozen=True)
+class DataSource:
+    mode: str  # "database" | "snapshot" | "local" | "demo"
+    label: str  # short, shown in the page ledger/footer
+    observed: bool  # numbers are computed from real indexed Riot ranked matches
+    synthetic: bool  # numbers are generated (the demo dataset)
+    description: str
+    configured: str  # "explicit" (TFT_DATA_SOURCE) or "automatic"
+
+
+def _source(mode: str, configured: str) -> DataSource:
+    if mode == "database":
+        return DataSource("database", "indexed ranked matches", True, False,
+                          "Statistics computed from historical ranked TFT matches indexed into the production database.",
+                          configured)
+    if mode == "snapshot":
+        return DataSource("snapshot", "analytics snapshot", True, False,
+                          "Statistics computed from a bundled, read-only snapshot of historical ranked TFT matches. "
+                          "It does not update until a new snapshot is published.", configured)
+    if mode == "local":
+        return DataSource("local", "local database", True, False,
+                          "Statistics computed from a local copy of indexed ranked TFT matches (development).",
+                          configured)
+    return DataSource("demo", "demo data (synthetic)", False, True,
+                      "DEMO DATA: every match, statistic and date shown is synthetic, generated so the pages can be "
+                      "tried without a database. None of it is observed Riot match evidence.", configured)
+
+
+class DataSourceUnavailable(RuntimeError):
+    """The selected data source cannot serve. Surfaced as a 503 with a
+    generic `public_message` (never a path, DSN or credential), and never
+    replaced by another source."""
+
+    public_message = "the configured data source is unavailable"
+    backend: str | None = None
+    mode: str | None = None
+
+
+class ProductionDatabaseUnavailable(DataSourceUnavailable):
     """`DATABASE_URL` is configured but the database could not be reached.
 
     Deliberately distinct from "no production database configured, use
@@ -54,9 +123,32 @@ class ProductionDatabaseUnavailable(RuntimeError):
     the synthetic demo dataset.
     """
 
+    public_message = "DATABASE_URL is configured but the database is unreachable"
+    backend = "postgres"
+    mode = "database"
+
+
+class SnapshotUnavailable(DataSourceUnavailable):
+    """`TFT_DATA_SOURCE=snapshot` but the snapshot file is missing, empty or
+    not a valid read-only TheoryLabs database."""
+
+    public_message = "the configured analytics snapshot is unavailable"
+    backend = "sqlite"
+    mode = "snapshot"
+
+
+class DataSourceMisconfigured(DataSourceUnavailable):
+    """Contradictory or invalid data-source settings (operator error)."""
+
+    public_message = "the data source is misconfigured"
+
 
 def _sqlite_db_path() -> Path:
     return Path(os.getenv("TFT_DB_PATH", "data/tftlab.sqlite3"))
+
+
+def _snapshot_path() -> Path:
+    return Path(os.getenv("TFT_SNAPSHOT_PATH") or DEFAULT_SNAPSHOT_PATH)
 
 
 def _has_participants(db: Database) -> bool:
@@ -79,29 +171,49 @@ def _open_if_live(target: Path | str) -> Database | None:
     return None
 
 
+#: The demo dataset is built on first use. A page fires several API requests
+#: at once, so the build/check is serialized: concurrent first requests must
+#: never race to delete or half-build the same file.
+_DEMO_LOCK = threading.Lock()
+
+
 def _build_demo_db() -> Database:
     demo_path = Path(os.getenv("TFT_DEMO_DB_PATH", "data/web-demo.sqlite3"))
-    rebuild = True
-    if demo_path.exists():
-        try:
-            with Database(demo_path) as existing:
-                rebuild = not _has_participants(existing)
-        except Exception:
-            rebuild = True
-    if rebuild:
+    with _DEMO_LOCK:
+        rebuild = True
         if demo_path.exists():
-            demo_path.unlink()
-        with Database(demo_path) as db:
-            db.ingest_many(generate_demo_matches(180))
-    db = Database(demo_path)
-    # Example notebook entries live only in this local demo database, never in
-    # a real one. No-op once any experiment exists.
-    seed_demo_experiments(db)
+            try:
+                with Database(demo_path) as existing:
+                    rebuild = not _has_participants(existing)
+            except Exception:
+                rebuild = True
+        if rebuild:
+            if demo_path.exists():
+                demo_path.unlink()
+            with Database(demo_path) as db:
+                db.ingest_many(generate_demo_matches(180))
+        db = Database(demo_path)
+        # Example notebook entries live only in this local demo database, never in
+        # a real one. No-op once any experiment exists.
+        seed_demo_experiments(db)
     return db
 
 
-def _resolve_database() -> tuple[Database, bool]:
-    """Pick the active data source.
+def _configured_mode() -> str:
+    mode = (os.getenv(DATA_SOURCE_ENV) or "").strip().lower()
+    if mode and mode not in DATA_SOURCE_MODES:
+        raise DataSourceMisconfigured(f"{DATA_SOURCE_ENV} must be one of {', '.join(DATA_SOURCE_MODES)} (or unset)")
+    if mode in ("snapshot", "demo") and os.getenv("DATABASE_URL"):
+        raise DataSourceMisconfigured(
+            f"{DATA_SOURCE_ENV}={mode} cannot be combined with DATABASE_URL; remove DATABASE_URL to run without a "
+            "cloud database")
+    if mode == "database" and not os.getenv("DATABASE_URL"):
+        raise DataSourceMisconfigured(f"{DATA_SOURCE_ENV}=database requires DATABASE_URL")
+    return mode
+
+
+def _resolve_source() -> tuple[Database, DataSource]:
+    """Open the active data source (see the section comment above).
 
     When `DATABASE_URL` is set, it is *always* used, opened read-only via
     `Database.open_existing` (no schema setup from a request) -- connecting
@@ -111,14 +223,12 @@ def _resolve_database() -> tuple[Database, bool]:
     this raises `ProductionDatabaseUnavailable` rather than silently falling
     through to demo data; the exception handler registered on the app turns
     that into an explicit 503, per the same "never quietly pretend
-    everything is fine" rule.
-
-    Only when `DATABASE_URL` is unset at all does this fall back to a
-    populated local SQLite file, and finally the deterministic demo
-    dataset -- both of which are fine for local development, where there
-    was never a production database to fail. Callers must close the
-    returned `Database`.
+    everything is fine" rule. A selected snapshot that cannot be opened is
+    the same kind of loud failure. Callers must close the returned
+    `Database`.
     """
+    mode = _configured_mode()
+    configured = "explicit" if mode else "automatic"
     database_url = os.getenv("DATABASE_URL")
     if database_url:
         # Read-only: a request never creates, migrates, indexes or backfills
@@ -131,15 +241,109 @@ def _resolve_database() -> tuple[Database, bool]:
             raise ProductionDatabaseUnavailable(
                 f"DATABASE_URL is configured but unavailable ({type(exc).__name__})"
             ) from exc
-        return db, False
+        return db, _source("database", configured)
+
+    if mode == "snapshot":
+        path = _snapshot_path()
+        if not path.is_file():
+            raise SnapshotUnavailable("snapshot file not found")
+        try:
+            db = Database.open_existing(path)  # SQLite mode=ro: never created or written
+        except Exception as exc:
+            raise SnapshotUnavailable(f"snapshot unreadable ({type(exc).__name__})") from exc
+        try:
+            empty = not _has_participants(db)
+        except Exception as exc:
+            db.close()
+            raise SnapshotUnavailable(f"snapshot unreadable ({type(exc).__name__})") from exc
+        if empty:
+            db.close()
+            raise SnapshotUnavailable("snapshot holds no matches")
+        return db, _source("snapshot", configured)
+
+    if mode == "demo":
+        return _build_demo_db(), _source("demo", configured)
 
     sqlite_path = _sqlite_db_path()
     if sqlite_path.exists():
         db = _open_if_live(sqlite_path)
         if db is not None:
-            return db, False
+            return db, _source("local", configured)
 
-    return _build_demo_db(), True
+    return _build_demo_db(), _source("demo", configured)
+
+
+def _resolve_database() -> tuple[Database, bool]:
+    """(database, is the synthetic demo dataset) -- see `_resolve_source`."""
+    db, source = _resolve_source()
+    return db, source.synthetic
+
+
+def _snapshot_manifest() -> dict[str, Any] | None:
+    """The optional `<snapshot>.json` manifest (exported_at, generator,
+    notes...), as given. Unreadable -> reported, never fatal."""
+    path = _snapshot_path().with_name(_snapshot_path().name + ".json")
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {"error": "snapshot manifest unreadable"}
+    return data if isinstance(data, dict) else {"error": "snapshot manifest is not a JSON object"}
+
+
+def _stale_after_days() -> int:
+    try:
+        return max(1, int(os.getenv("TFT_STALE_AFTER_DAYS", DEFAULT_STALE_AFTER_DAYS)))
+    except ValueError:
+        return DEFAULT_STALE_AFTER_DAYS
+
+
+def source_status(db: Database, source: DataSource, *, now_ms: int | None = None) -> dict[str, Any]:
+    """Everything the UI needs to say where the numbers come from and how
+    fresh they are. Synthetic data never gets a freshness verdict: its dates
+    are generated."""
+    matches, latest = db.query_one("SELECT COUNT(*), MAX(game_datetime) FROM matches")
+    boards = db.query_one("SELECT COUNT(*) FROM participants")[0]
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    stale_after = _stale_after_days()
+    age_days = None
+    stale = None
+    if source.observed and latest:
+        age_days = round((now_ms - int(latest)) / 86_400_000, 1)
+        stale = age_days > stale_after
+    return {
+        "ok": True,
+        **asdict(source),
+        "demo": source.synthetic,
+        "backend": db.dialect,
+        "matches": matches,
+        "boards": boards,
+        "latest_game_datetime": latest,
+        "latest_game_date_is_synthetic": source.synthetic,
+        "default_balance_window": default_balance_window(db),
+        "age_days": age_days,
+        "stale": stale,
+        "stale_after_days": stale_after,
+        "snapshot": _snapshot_manifest() if source.mode == "snapshot" else None,
+    }
+
+
+#: Riot site verification (`/riot.txt`): the exact string Riot provides, set
+#: by the operator on the host. Never the Riot API key.
+RIOT_SITE_VERIFICATION_ENV = "RIOT_SITE_VERIFICATION"
+
+
+def riot_site_verification() -> str | None:
+    """The configured verification string, or None (not configured, or
+    refused because it looks like a Riot API key)."""
+    value = (os.getenv(RIOT_SITE_VERIFICATION_ENV) or "").strip()
+    if not value:
+        return None
+    api_key = (os.getenv("RIOT_API_KEY") or "").strip()
+    if value.upper().startswith("RGAPI-") or (api_key and value == api_key):
+        return None  # an API key must never be published, whatever variable it was put in
+    return value
 
 
 # ---------------------------------------------------------------- Discovery population cache
@@ -284,28 +488,51 @@ def _experiment_with_art(entry, *, include_field_notes: bool = False) -> dict[st
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="TFT Theory Lab", version="0.2.0")
+    app = FastAPI(title="TheoryLabs", version="0.2.0")
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-    @app.exception_handler(ProductionDatabaseUnavailable)
-    async def _production_database_unavailable(request: Request, exc: ProductionDatabaseUnavailable) -> JSONResponse:
-        # Deliberately no exception detail beyond the exception's own generic
-        # message (which never includes the DATABASE_URL itself, only the
-        # failing exception's type) -- never echo connection strings/credentials.
+    @app.exception_handler(DataSourceUnavailable)
+    async def _data_source_unavailable(request: Request, exc: DataSourceUnavailable) -> JSONResponse:
+        # Deliberately only the class's fixed public message -- never the
+        # exception detail, a path, the DATABASE_URL or any credential.
         return JSONResponse(
             status_code=503,
             content={
                 "ok": False,
                 "demo": False,
-                "backend": "postgres",
+                "backend": exc.backend,
+                "source_mode": exc.mode,
                 "status": "error",
-                "error": "DATABASE_URL is configured but the database is unreachable",
+                "error": exc.public_message,
             },
         )
 
     @app.get("/", include_in_schema=False)
     def home() -> FileResponse:
         return FileResponse(WEB_DIR / "index.html")
+
+    # Static information pages (no data source needed: they always render).
+    for route, page in (("/about", "about.html"), ("/methodology", "methodology.html"), ("/data", "methodology.html"),
+                        ("/privacy", "privacy.html"), ("/terms", "terms.html")):
+        app.add_api_route(route, (lambda page=page: FileResponse(WEB_DIR / page)), methods=["GET"],
+                          include_in_schema=False)
+
+    @app.get("/riot.txt", include_in_schema=False)
+    def riot_txt() -> PlainTextResponse:
+        """Riot site verification: exactly the operator-configured string,
+        as plain text with nothing before or after it. 404 when none is
+        configured -- never a placeholder."""
+        value = riot_site_verification()
+        headers = {"Cache-Control": "no-store"}
+        if value is None:
+            return PlainTextResponse("Not Found", status_code=404, headers=headers)
+        return PlainTextResponse(value, headers=headers)
+
+    @app.get("/api/source")
+    def data_source() -> dict[str, object]:
+        db, source = _resolve_source()
+        with db:
+            return source_status(db, source)
 
     @app.get("/champions", include_in_schema=False)
     @app.get("/champions/{key}", include_in_schema=False)
@@ -352,14 +579,15 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     def health() -> dict[str, object]:
-        db, demo = _resolve_database()
+        db, source = _resolve_source()
         with db:
             participants = db.query_one("SELECT COUNT(*) FROM participants")[0]
             matches = db.query_one("SELECT COUNT(*) FROM matches")[0]
             balance_window = default_balance_window(db)
         return {
             "ok": True,
-            "demo": demo,
+            "demo": source.synthetic,
+            "source": source.mode,
             "backend": db.dialect,
             "balance_window": balance_window,
             "matches": matches,

@@ -3,27 +3,30 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>TFT Theory Lab</title>
-  <meta name="description" content="A TFT scouting notebook: statistically interesting, underplayed carry lines before they become meta." />
+  <title>TheoryLabs &middot; TFT analytics and theorycrafting</title>
+  <meta name="description" content="TheoryLabs is an aggregate Teamfight Tactics analytics and theorycrafting tool for studying champions, items, teammates, traits and underexplored composition ideas from historical ranked matches." />
   <meta name="color-scheme" content="dark" />
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
   <a class="skip-link" href="#discoveries">Skip to discoveries</a>
 
+  <div id="source-banner" class="source-banner" role="status" aria-live="polite" hidden></div>
+
   <header class="cover">
     <div class="cover-top">
-      <p class="cover-kicker">scouting notebook</p>
-      <nav class="cover-nav" aria-label="Sections">
-        <a href="#discoveries">discoveries</a>
-        <a href="#working-notes">working notes</a>
+      <p class="cover-kicker">theorycrafting notebook</p>
+      <nav class="cover-nav" aria-label="Main">
+        <a href="/#discoveries">discover</a>
         <a href="/champions">champions</a>
-        <a href="/experiments">my experiments</a>
-        <a href="#method">method</a>
+        <a href="/experiments">experiments</a>
+        <a href="/about">about</a>
+        <a href="/methodology">methodology &amp; data</a>
       </nav>
     </div>
-    <h1><span class="scribble">TFT Theory Lab</span></h1>
+    <h1><span class="scribble">TheoryLabs</span></h1>
     <p class="cover-tagline">&ldquo;Finding rerolls nobody is playing yet.&rdquo;</p>
+    <p class="cover-intro">TheoryLabs is an <strong>aggregate TFT analytics and theorycrafting tool</strong> for studying champions, items, teammates, traits and underexplored composition ideas. Everything comes from historical ranked matches, for study before or after you play: it is not a live in-game assistant and never looks at a game in progress. <a href="/about">How it works</a>.</p>
 
     <div class="ledger">
       <label class="ledger-item ledger-window">
@@ -110,17 +113,21 @@
       <div class="stamp-legend">
         <p class="stamp-legend-intro">Every piece of evidence carries a stamp saying where it came from.</p>
         <dl>
-          <div><dt><span class="stamp stamp-observed">Observed</span></dt><dd>A real statistical result from indexed matches. Everything in this notebook today is observed.</dd></div>
+          <div><dt><span class="stamp stamp-observed">Observed</span></dt><dd>A statistical result computed from the indexed matches of the active data source (named in the note at the top of the page; in demo mode those matches are synthetic). Every result in this notebook today is of this kind.</dd></div>
           <div><dt><span class="stamp stamp-variant">Variant</span></dt><dd>Reserved: a related line the system hasn't measured on its own yet. Not used anywhere today.</dd></div>
           <div><dt><span class="stamp stamp-theorycrafted">Theorycrafted</span></dt><dd>Reserved: a board the system actually synthesizes rather than observes. Nothing here is theorycrafted yet.</dd></div>
         </dl>
       </div>
+      <p class="method-more"><a href="/methodology">Full methodology, sample sizes and limitations &rarr;</a></p>
     </section>
   </main>
 
-  <footer class="colophon">
-    TFT Theory Lab &middot; <span id="footer-mode">—</span> &middot; demo-mode numbers are synthetic until a live Riot dataset is connected.
+  <footer class="colophon site-footer">
+    <nav class="footer-nav" aria-label="Site"><a href="/#discoveries">Discover</a><a href="/champions">Champions</a><a href="/experiments">Experiments</a><a href="/about">About</a><a href="/methodology">Methodology &amp; data</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+    <p>TheoryLabs &middot; <span id="footer-mode">&mdash;</span> &middot; aggregate historical match statistics for study before and after you play; not a live in-game assistant.</p>
+    <p class="riot-disclaimer">TheoryLabs isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.</p>
   </footer>
+  <script src="/static/site.js"></script>
   <script src="/static/art.js"></script>
   <script src="/static/app.js"></script>
 </body>

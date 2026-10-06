@@ -1,4 +1,4 @@
-/* TFT Theory Lab — "strategist's notebook" visual system.
+/* TheoryLabs — "strategist's notebook" visual system.
    Every irregularity below (rotations, uneven radii, alternating rules) is
    fixed in CSS or chosen by list position in app.js, never randomized, so
    the page looks identical on every load. */
@@ -947,3 +947,51 @@ input[type="search"]::placeholder { color: var(--graphite); opacity: 0.8; }
   html { scroll-behavior: auto; }
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* ---------- TheoryLabs site chrome: data-source banner, footer, info pages ---------- */
+
+.cover-nav { flex-wrap: wrap; column-gap: 20px; row-gap: 2px; }
+.cover-intro { margin: 14px 0 0; max-width: 760px; font-size: 17px; }
+
+.source-banner {
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 10px 14px 10px 56px;
+  border-left: 4px solid var(--ink-green);
+  background: var(--paper-warm);
+  font: 14px/1.5 var(--sans);
+  color: var(--text);
+}
+.source-banner-title { font-weight: 700; }
+.source-banner.source-demo { border-left-color: var(--amber); background: rgba(226, 179, 92, 0.12); }
+.source-banner.source-stale, .source-banner.source-empty { border-left-color: var(--amber); }
+.source-banner.source-error { border-left-color: var(--pencil); background: rgba(240, 130, 111, 0.1); }
+/* evidence stamps can never read as observed Riot evidence on synthetic data */
+body.source-synthetic .stamp-observed::after { content: " · demo"; }
+
+.site-footer { display: grid; gap: 10px; }
+.site-footer p { margin: 0; }
+.footer-nav { display: flex; flex-wrap: wrap; gap: 4px 18px; font: 13.5px var(--sans); }
+.footer-nav a { color: var(--text); padding: 4px 0; }
+.riot-disclaimer { max-width: 860px; line-height: 1.55; }
+
+.prose { max-width: 760px; }
+.prose h2 { margin: 34px 0 8px; font: 700 24px/1.25 var(--serif); }
+.prose h3 { margin: 22px 0 6px; font: 700 19px/1.3 var(--serif); }
+.prose p, .prose li { color: var(--text); }
+.prose ul, .prose ol { padding-left: 22px; }
+.prose li + li { margin-top: 6px; }
+.prose .quiet { color: var(--graphite); font-style: italic; }
+.prose .callout { margin: 18px 0; padding: 12px 16px; border-left: 3px solid var(--pencil); background: var(--paper-warm); }
+.prose code { font: 0.92em var(--mono); }
+.prose dl { display: grid; gap: 10px; }
+.prose dt { font-weight: 700; }
+.prose dd { margin: 0 0 6px; color: var(--graphite); }
+
+@media (max-width: 620px) {
+  .source-banner { padding-left: 14px; }
+  .cover-nav { column-gap: 14px; }
+  .cover-nav a, .footer-nav a { padding: 8px 0; }
+}
+.source-banner { margin-top: 12px; }
+body.source-synthetic .status-mark { background: var(--amber); }
