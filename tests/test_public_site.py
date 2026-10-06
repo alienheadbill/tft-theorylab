@@ -16,7 +16,7 @@ from tftlab.storage import Database
 WEB = Path(__file__).parent.parent / "src" / "tftlab" / "web"
 PAGES = ("/", "/champions", "/champions/khazix", "/experiments", "/about", "/methodology", "/data", "/privacy", "/terms")
 HTML_FILES = sorted(WEB.glob("*.html"))
-#: Riot General Policies (last updated March 11, 2025): legal boilerplate, verbatim with the product name.
+#: Riot General Policies (page last updated May 29, 2025): legal boilerplate, verbatim with the product name.
 RIOT_BOILERPLATE = ("TheoryLabs isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or "
                     "anyone officially involved in producing or managing Riot Games properties. Riot Games, and all "
                     "associated properties are trademarks or registered trademarks of Riot Games, Inc.")
@@ -196,8 +196,9 @@ def test_methodology_page_covers_data_carries_samples_and_limits(monkeypatch, tm
 def test_privacy_page_matches_what_the_site_actually_does(monkeypatch, tmp_path) -> None:
     text = _client(monkeypatch, tmp_path).get("/privacy").text
     for phrase in ("No accounts", "No cookies", "No analytics, tracking or advertising", "Riot Games API",
-                   "PUUIDs", "hosting provider", "Last updated"):
+                   "PUUIDs", "persistent", "pseudonymous", "hosting provider", "Last updated"):
         assert phrase in text, phrase
+    assert "anonymous player" not in text  # PUUIDs are persistent identifiers, not anonymous
     static = "\n".join(p.read_text() for p in (WEB / "static").glob("*.js"))
     for api in ("document.cookie", "localStorage", "sessionStorage", "indexedDB", "navigator.sendBeacon"):
         assert api not in static, api  # the policy's claims hold for the shipped scripts

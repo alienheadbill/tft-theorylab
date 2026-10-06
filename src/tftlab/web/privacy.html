@@ -53,9 +53,11 @@
       <p>TheoryLabs uses the Riot Games API to retrieve ranked TFT match data and turns it into <strong>aggregate</strong>
         statistics about champions, items, traits and boards. The website shows only aggregates across many boards: it never
         displays player names, Riot IDs or other player identifiers, and it offers no way to look up a player.</p>
-      <p>To sample matches without collecting the same ones twice, the data pipeline keeps Riot's anonymous player
-        identifiers (PUUIDs) of the sampled ladder players in an internal collection log. These are not published, not sold
-        and not shared, and are used only for that purpose. Data obtained from Riot is handled in line with Riot's
+      <p>To sample matches without collecting the same ones twice, and to rotate which ladder players are sampled, the data
+        pipeline keeps the PUUIDs of the sampled ladder players in an internal collection log. A PUUID is Riot's persistent,
+        pseudonymous player identifier: it contains no name, but it refers to the same Riot account over time. These are
+        not published, not sold and not shared, and are used only internally for that collection, deduplication and
+        rotation purpose. Data obtained from Riot is handled in line with Riot's
         developer policies.</p>
 
       <h2>Your choices and contact</h2>
