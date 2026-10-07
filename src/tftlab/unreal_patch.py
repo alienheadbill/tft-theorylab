@@ -97,12 +97,13 @@ class UnrealPatchWindow:
 # timestamp-based registry, since the version string itself carries no
 # usable information anymore.
 #
-# These two windows are deliberately CONSERVATIVE CLASSIFICATION windows,
+# These windows are deliberately CONSERVATIVE CLASSIFICATION windows,
 # not exact deployment windows -- see UnrealPatchWindow's docstring. Source
-# for both: Riot's official TFT patch schedule,
+# for all of them: Riot's official TFT patch schedule,
 # https://support.riotgames.com/en-us/tft/events/patch-schedule-teamfight-tactics/
-# (18.2 scheduled 2026-09-10, 18.3 scheduled 2026-09-23 Pacific Time, 18.4
-# scheduled 2026-10-07). Community reports say NA actually received 18.3
+# (18.2 scheduled 2026-09-10, 18.3 scheduled 2026-09-23, 18.4 scheduled
+# 2026-10-07 and 18.5 scheduled 2026-10-21, all Pacific Time; Riot's 18.4
+# patch notes were published 2026-10-06). Community reports say NA actually received 18.3
 # roughly a day early (~2026-09-22); that entire ambiguous transition
 # period is deliberately EXCLUDED from both windows below, left as a gap
 # that resolves to UNRESOLVED_UNREAL_PATCH -- this sandbox has no way to
@@ -120,10 +121,20 @@ class UnrealPatchWindow:
 #     has elapsed everywhere in that timezone (2026-09-24T07:00:00Z is
 #     2026-09-23T24:00:00 -07:00, i.e. midnight PDT rolling into the 24th);
 #     ends before the next scheduled patch (18.4) on 2026-10-07.
+#   18.4 window: 2026-10-08T07:00:00Z .. 2026-10-20T00:00:00Z (exclusive)
+#     Same convention as 18.3: starts once the full scheduled 2026-10-07
+#     Pacific-Time patch day has elapsed (2026-10-08T07:00:00Z is
+#     2026-10-07T24:00:00 -07:00). That is TheoryLabs' conservative
+#     classification boundary, NOT a claim that Riot deployed 18.4 at that
+#     instant. Ends a full day before the next scheduled patch (18.5) on
+#     2026-10-21, as a safety margin against an early 18.5 rollout.
 #
 # Anything in the gap between these two windows (2026-09-22T00:00:00Z
 # through 2026-09-24T07:00:00Z) -- exactly the reported early-NA-18.3
-# transition period -- remains UNRESOLVED_UNREAL_PATCH by design.
+# transition period -- remains UNRESOLVED_UNREAL_PATCH by design. So does
+# the 18.3 -> 18.4 transition gap, 2026-10-06T00:00:00Z through
+# 2026-10-08T07:00:00Z: it is classified as neither patch, and 18.3 was NOT
+# widened to cover it.
 #
 # To extend this as new patches ship: read off the actual masked-Unreal
 # match timestamp range via `tftlab patch-diagnostics` (or
@@ -144,6 +155,13 @@ UNREAL_PATCH_REGISTRY: tuple[UnrealPatchWindow, ...] = (
         client_patch="18.3",
         starts_at=1_790_233_200_000,  # 2026-09-24T07:00:00Z
         ends_at=1_791_244_800_000,  # 2026-10-06T00:00:00Z (exclusive)
+        verified=True,
+        source="https://support.riotgames.com/en-us/tft/events/patch-schedule-teamfight-tactics/",
+    ),
+    UnrealPatchWindow(
+        client_patch="18.4",
+        starts_at=1_791_442_800_000,  # 2026-10-08T07:00:00Z
+        ends_at=1_792_454_400_000,  # 2026-10-20T00:00:00Z (exclusive)
         verified=True,
         source="https://support.riotgames.com/en-us/tft/events/patch-schedule-teamfight-tactics/",
     ),

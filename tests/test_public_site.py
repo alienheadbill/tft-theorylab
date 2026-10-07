@@ -3,7 +3,6 @@ labelling, Riot compliance pages, the Riot legal boilerplate and `/riot.txt`."""
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
@@ -43,9 +42,16 @@ def _client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, mode: str | None
 
 
 def _snapshot(tmp_path: Path, matches: int = 12) -> Path:
+    """A certified public snapshot, produced the only accepted way: by the
+    exporter, from a source that passes the real-ingestion checks."""
+    from _helpers import build_live_ingest_like_source
+    from tftlab.public_snapshot import export_public_snapshot
+
+    source = tmp_path / "source.sqlite3"
+    build_live_ingest_like_source(source, matches)
     path = tmp_path / "snapshot" / "theorylabs-snapshot.sqlite3"
-    with Database(path) as db:  # built by the owner's local engine; the web app only ever reads it
-        db.ingest_many(generate_demo_matches(matches))
+    with Database.open_existing(source) as db:
+        export_public_snapshot(db, path, exported_at_ms=1_791_000_000_000)
     return path
 
 
@@ -108,12 +114,12 @@ def test_automatic_mode_keeps_local_development_behaviour(monkeypatch, tmp_path)
 def test_snapshot_mode_serves_a_bundled_read_only_snapshot_with_freshness(monkeypatch, tmp_path) -> None:
     path = _snapshot(tmp_path)
     before = path.read_bytes()
-    Path(str(path) + ".json").write_text(json.dumps({"exported_at": "2026-10-01T00:00:00Z", "generator": "test"}))
     client = _client(monkeypatch, tmp_path, mode="snapshot", TFT_SNAPSHOT_PATH=str(path))
     body = client.get("/api/source").json()
     assert (body["mode"], body["observed"], body["synthetic"], body["demo"]) == ("snapshot", True, False, False)
-    assert body["snapshot"] == {"exported_at": "2026-10-01T00:00:00Z", "generator": "test"}
-    assert body["matches"] == 12 and body["stale"] is True  # its latest game is far older than 14 days
+    assert body["snapshot"]["exported_at"] == "2026-10-03T04:00:00Z"  # from the exporter's provenance
+    assert body["snapshot"]["format"] == "theorylabs-public-snapshot" and body["snapshot"]["balance_windows"] == ["18.3"]
+    assert body["matches"] == 12 and body["stale"] == (body["age_days"] > 14)  # judged against the latest game
     assert client.get("/api/discovery").json()["demo"] is False
     assert client.get("/api/champions").status_code == 200
     assert path.read_bytes() == before  # opened read-only: never written by a request
@@ -125,8 +131,8 @@ def test_source_status_freshness_is_computed_against_the_latest_game() -> None:
     with Database(":memory:") as db:
         db.ingest_many(generate_demo_matches(3))
         latest = db.query_one("SELECT MAX(game_datetime) FROM matches")[0]
-        fresh = source_status(db, _source("snapshot", "explicit"), now_ms=latest + 2 * 86_400_000)
-        old = source_status(db, _source("snapshot", "explicit"), now_ms=latest + 30 * 86_400_000)
+        fresh = source_status(db, _source("database", "explicit"), now_ms=latest + 2 * 86_400_000)
+        old = source_status(db, _source("database", "explicit"), now_ms=latest + 30 * 86_400_000)
     assert (fresh["stale"], fresh["age_days"]) == (False, 2.0)
     assert (old["stale"], old["age_days"]) == (True, 30.0)
 

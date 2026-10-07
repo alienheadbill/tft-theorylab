@@ -200,6 +200,11 @@ REAL_18_2_STARTS = 1_789_084_800_000  # 2026-09-11T00:00:00Z
 REAL_18_2_ENDS = 1_790_035_200_000  # 2026-09-22T00:00:00Z (exclusive)
 REAL_18_3_STARTS = 1_790_233_200_000  # 2026-09-24T07:00:00Z
 REAL_18_3_ENDS = 1_791_244_800_000  # 2026-10-06T00:00:00Z (exclusive)
+# 18.4 (scheduled 2026-10-07 PT; 18.5 scheduled 2026-10-21 PT): the same
+# convention as 18.3 -- a conservative classification window, not a
+# deployment instant.
+REAL_18_4_STARTS = 1_791_442_800_000  # 2026-10-08T07:00:00Z
+REAL_18_4_ENDS = 1_792_454_400_000  # 2026-10-20T00:00:00Z (exclusive)
 
 # The actual production timestamp range reported by `tftlab
 # patch-diagnostics` at the time this registry was populated: 47 matches,
@@ -208,10 +213,31 @@ PRODUCTION_EARLIEST_GAME_DATETIME = 1_789_681_679_589  # 2026-09-17T21:47:59.589
 PRODUCTION_LATEST_GAME_DATETIME = 1_790_134_351_471  # 2026-09-23T03:32:31.471Z
 
 
-def test_production_registry_has_exactly_two_usable_windows() -> None:
-    assert len(UNREAL_PATCH_REGISTRY) == 2
+def test_production_registry_has_exactly_three_usable_windows() -> None:
+    assert len(UNREAL_PATCH_REGISTRY) == 3
     assert all(window.is_usable for window in UNREAL_PATCH_REGISTRY)
-    assert {window.client_patch for window in UNREAL_PATCH_REGISTRY} == {"18.2", "18.3"}
+    assert [window.client_patch for window in UNREAL_PATCH_REGISTRY] == ["18.2", "18.3", "18.4"]
+    schedule = "https://support.riotgames.com/en-us/tft/events/patch-schedule-teamfight-tactics/"
+    assert all(window.source == schedule for window in UNREAL_PATCH_REGISTRY)
+
+
+def test_real_18_4_window_is_the_conservative_classification_window() -> None:
+    from datetime import datetime, timezone
+
+    def iso(ms: int) -> str:
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
+
+    assert iso(REAL_18_4_STARTS) == "2026-10-08T07:00:00+00:00"  # after the full Oct 7 Pacific patch day
+    assert iso(REAL_18_4_ENDS) == "2026-10-20T00:00:00+00:00"  # a day before 18.5 (Oct 21 PT)
+    assert resolve_unreal_patch(REAL_18_4_STARTS) == "18.4"
+    assert resolve_unreal_patch(REAL_18_4_ENDS - 1) == "18.4"
+    assert resolve_unreal_patch(REAL_18_4_ENDS) == UNRESOLVED_UNREAL_PATCH  # end exclusive; no open-ended patch
+
+
+def test_18_3_was_not_widened_and_the_18_3_to_18_4_transition_stays_unresolved() -> None:
+    assert resolve_unreal_patch(REAL_18_3_ENDS - 1) == "18.3"
+    for gap in (REAL_18_3_ENDS, 1_791_331_200_000, REAL_18_4_STARTS - 1):  # Oct 6 00:00Z, Oct 7 00:00Z, just before
+        assert resolve_unreal_patch(gap) == UNRESOLVED_UNREAL_PATCH
 
 
 def test_real_18_2_window_resolves() -> None:
