@@ -7,6 +7,7 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import re
 import shutil
 import sqlite3
 from pathlib import Path
@@ -341,7 +342,9 @@ def test_cli_refuses_a_demo_source_and_writes_nothing(tmp_path) -> None:
 def test_cli_requires_an_explicit_source(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://x:x@127.0.0.1:1/x")  # never used as a fallback
     result = CliRunner().invoke(app, ["export-public-snapshot", "--out", str(tmp_path / "o.sqlite3")])
-    assert result.exit_code != 0 and "--source" in result.output
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)  # rich may colour/wrap the usage error
+    assert result.exit_code == 2 and "source" in plain  # a usage error: --source is required
+    assert not (tmp_path / "o.sqlite3").exists()
 
 
 # ---------------------------------------------------------------- Postgres source (a restored backup)
