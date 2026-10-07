@@ -348,9 +348,17 @@ def export_public_snapshot(source: Database, out_path: Path | str, *, balance_wi
             db.commit()
             prepared = []
             if prepare:
+                # An optimization only: a window whose preparation fails is
+                # computed live by the website, exactly as without a run.
                 progress("preparing Discovery runs on the snapshot")
-                prepared = [{"balance_window": r.balance_window, "status": r.status}
-                            for r in prepare_discovery(db, balance_windows=facts["windows"])]
+                for window in facts["windows"]:
+                    try:
+                        prepared += [{"balance_window": r.balance_window, "status": r.status}
+                                     for r in prepare_discovery(db, balance_windows=[window])]
+                    except Exception as exc:
+                        db.conn.rollback()
+                        prepared.append({"balance_window": window, "status": "failed", "error": type(exc).__name__})
+                        progress(f"  {window}: Discovery preparation failed ({type(exc).__name__}); served live instead")
             for table in EXCLUDED_TABLES:
                 db.execute(f"DROP TABLE IF EXISTS {table}")
             boards = sum(facts["boards"].values())
@@ -402,6 +410,8 @@ def export_public_snapshot(source: Database, out_path: Path | str, *, balance_wi
             db.execute(f"INSERT INTO {METADATA_TABLE} (key, value) VALUES (?, ?)",
                        (PROVENANCE_KEY, json.dumps(provenance, sort_keys=True)))
             db.commit()
+            # One self-contained, compact file: no WAL/-shm sidecars to ship.
+            db.conn.execute("PRAGMA journal_mode=DELETE")
             db.conn.execute("VACUUM")
         progress("verifying the snapshot")
         verification = verify_public_snapshot(build, source_match_ids=facts["match_ids"], puuids=facts["puuids"],
@@ -410,8 +420,12 @@ def export_public_snapshot(source: Database, out_path: Path | str, *, balance_wi
                                               expected_windows=facts["windows"],
                                               secrets=[*secrets, *(os.environ.get(k) or "" for k in ("RIOT_API_KEY", "DATABASE_URL"))])
     except BaseException:
-        build.unlink(missing_ok=True)
+        for leftover in (build, *(Path(str(build) + s) for s in ("-wal", "-shm", "-journal"))):
+            leftover.unlink(missing_ok=True)
         raise
+    for sidecar in ("-wal", "-shm", "-journal"):
+        Path(str(build) + sidecar).unlink(missing_ok=True)
+        Path(str(out_path) + sidecar).unlink(missing_ok=True)
     os.replace(build, out_path)
     files = {out_path.name: {"bytes": out_path.stat().st_size, "sha256": _sha256_file(out_path)}}
     gz_path = None

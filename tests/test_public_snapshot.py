@@ -53,6 +53,9 @@ def test_export_writes_a_verified_sanitized_snapshot(source, tmp_path) -> None:
     out = tmp_path / "pub" / "public.sqlite3"
     result = _export(src, out, compress=True, secrets=[str(src)])
     assert out.is_file() and result.gzip_path and result.gzip_path.is_file()
+    assert sorted(p.name for p in out.parent.iterdir()) == [  # one self-contained file: no WAL/-shm sidecars
+        "public.sqlite3", "public.sqlite3.gz", "public.sqlite3.manifest.json"]
+    assert sqlite3.connect(out).execute("PRAGMA journal_mode").fetchone()[0] == "delete"
     assert set(result.verification["checks"]) == {
         "read_schema", "provenance", "public_read_path", "no_collection_tables", "no_puuid_columns", "no_raw_payloads",
         "no_augment_payloads", "opaque_match_ids", "referential_consistency", "trusted_windows_only",

@@ -1,0 +1,214 @@
+name: Build public snapshot from encrypted backup
+
+# MANUAL ONLY. Turns one existing encrypted production backup (an artifact of
+# "Encrypted Postgres backup", db-backup.yml) into a sanitized public website
+# snapshot, without contacting Neon or any other database:
+#
+#   download the selected encrypted artifact from this repository
+#   -> verify its checksum -> decrypt it (same AES-256-CBC/PBKDF2 parameters
+#   as db-backup.yml, DB_BACKUP_PASSPHRASE) -> restore it into an ephemeral
+#   Postgres 18 container on this runner -> `tftlab export-public-snapshot`
+#   (real-ingestion checks, sanitization, opaque match ids, verification)
+#   -> `tftlab verify-public-snapshot` -> upload ONLY the gzipped sanitized
+#   snapshot and its manifest as a short-lived artifact.
+#
+# The decrypted dump and the restored database never leave the runner and are
+# deleted in an always-run cleanup step. Nothing is deployed, committed or
+# changed on Render; publishing the snapshot is a separate, manual decision.
+# Required repository secret: DB_BACKUP_PASSPHRASE (the backup passphrase).
+on:
+  workflow_dispatch:
+    inputs:
+      backup_run_id:
+        description: "Run ID of the 'Encrypted Postgres backup' run that produced the artifact (default: the verified 2026-10-05 backup)"
+        required: true
+        default: "37308579783"
+      backup_artifact_name:
+        description: "Encrypted backup artifact name from that run"
+        required: true
+        default: "theorylabs-postgres-backup-20261005T121811Z"
+      balance_windows:
+        description: "Space-separated trusted balance windows to export (e.g. 18.3); empty = every trusted window in the backup"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  actions: read  # download an artifact from another run of this repository
+
+concurrency:
+  group: public-snapshot-from-backup
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BACKUP_RUN_ID: ${{ github.event.inputs.backup_run_id }}
+      BACKUP_ARTIFACT: ${{ github.event.inputs.backup_artifact_name }}
+      BALANCE_WINDOWS: ${{ github.event.inputs.balance_windows }}
+      RESTORE_CONTAINER: theorylabs-snapshot-restore
+    steps:
+      # Before checkout. Static messages only; secrets are never printed.
+      - name: Validate inputs and configuration
+        shell: bash
+        env:
+          DB_BACKUP_PASSPHRASE: ${{ secrets.DB_BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::Run this workflow from main (got ${GITHUB_REF})." >&2
+            exit 1
+          fi
+          if ! printf '%s' "${BACKUP_RUN_ID}" | grep -Eq '^[0-9]{1,20}$'; then
+            echo "::error::backup_run_id must be a numeric workflow run ID." >&2
+            exit 1
+          fi
+          if ! printf '%s' "${BACKUP_ARTIFACT}" | grep -Eq '^theorylabs-postgres-backup-[0-9]{8}T[0-9]{6}Z$'; then
+            echo "::error::backup_artifact_name must look like theorylabs-postgres-backup-20261005T121811Z." >&2
+            exit 1
+          fi
+          if ! printf '%s' "${BALANCE_WINDOWS}" | grep -Eq '^([0-9]{1,3}\.[0-9]{1,3}[a-z]?( |$))*$'; then
+            echo "::error::balance_windows must be empty or space-separated windows like 18.3." >&2
+            exit 1
+          fi
+          if [ -z "${DB_BACKUP_PASSPHRASE}" ] || [ "${#DB_BACKUP_PASSPHRASE}" -lt 24 ]; then
+            echo "::error::DB_BACKUP_PASSPHRASE repository secret is missing or too short." >&2
+            exit 1
+          fi
+          {
+            echo "### Public snapshot from encrypted backup"
+            echo
+            echo "- Backup run: \`${BACKUP_RUN_ID}\`"
+            echo "- Backup artifact: \`${BACKUP_ARTIFACT}\`"
+            echo "- Balance windows: \`${BALANCE_WINDOWS:-every trusted window}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "Inputs valid. Secrets are not printed."
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e ".[postgres]"
+
+      - name: Download the selected encrypted backup artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ github.event.inputs.backup_artifact_name }}
+          run-id: ${{ github.event.inputs.backup_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/backup-encrypted
+
+      - name: Verify checksum, decrypt and restore into ephemeral Postgres 18
+        shell: bash
+        env:
+          DB_BACKUP_PASSPHRASE: ${{ secrets.DB_BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          IN="${RUNNER_TEMP}/backup-encrypted"
+          PLAIN="${RUNNER_TEMP}/backup-plain"
+          mkdir -p "${PLAIN}"
+          # Plaintext never outlives this step, even when it fails.
+          trap 'rm -f "${PLAIN}/restore.dump"' EXIT
+
+          STAMP="${BACKUP_ARTIFACT#theorylabs-postgres-backup-}"
+          ENC="theorylabs-${STAMP}.dump.enc"
+          CHECKSUM="${ENC}.sha256"
+          cd "${IN}"
+          if [ ! -s "${ENC}" ] || [ ! -s "${CHECKSUM}" ]; then
+            echo "::error::The artifact does not contain the expected encrypted dump and checksum." >&2
+            exit 1
+          fi
+          # The checksum was written next to the encrypted file by db-backup.yml.
+          sha256sum --check --strict "${CHECKSUM}"
+
+          # Exactly db-backup.yml's encryption parameters.
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 -md sha256 \
+            -pass env:DB_BACKUP_PASSPHRASE \
+            -in "${ENC}" -out "${PLAIN}/restore.dump"
+          test -s "${PLAIN}/restore.dump"
+
+          PGPASS="$(openssl rand -hex 24)"
+          echo "::add-mask::${PGPASS}"
+          docker run -d --rm \
+            --name "${RESTORE_CONTAINER}" \
+            -e POSTGRES_PASSWORD="${PGPASS}" \
+            -e POSTGRES_DB=restoredb \
+            -p 127.0.0.1:55432:5432 \
+            -v "${PLAIN}:/backup:ro" \
+            postgres:18 >/dev/null
+          for _ in $(seq 1 60); do
+            if docker exec "${RESTORE_CONTAINER}" pg_isready -U postgres -d restoredb >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec "${RESTORE_CONTAINER}" pg_isready -U postgres -d restoredb >/dev/null
+          docker exec "${RESTORE_CONTAINER}" \
+            pg_restore --no-owner --no-acl -U postgres -d restoredb /backup/restore.dump
+
+          rm -f "${PLAIN}/restore.dump"
+          # The ephemeral database's URL (this runner's loopback only) goes to a
+          # private file, not GITHUB_ENV, so no step log ever shows it.
+          printf '%s' "postgresql://postgres:${PGPASS}@127.0.0.1:55432/restoredb" > "${RUNNER_TEMP}/restore-db-url"
+          echo "Backup checksum verified, decrypted and restored into an ephemeral database; plaintext dump deleted."
+
+      - name: Export the sanitized public snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="${RUNNER_TEMP}/public-snapshot"
+          mkdir -p "${OUT}"
+          WINDOW_ARGS=()
+          for window in ${BALANCE_WINDOWS}; do
+            WINDOW_ARGS+=(--balance-window "${window}")
+          done
+          tftlab export-public-snapshot \
+            --source "$(cat "${RUNNER_TEMP}/restore-db-url")" \
+            --out "${OUT}/theorylabs-public-snapshot.sqlite3" \
+            --compress "${WINDOW_ARGS[@]}"
+
+      - name: Verify the snapshot independently
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="${RUNNER_TEMP}/public-snapshot"
+          tftlab verify-public-snapshot "${OUT}/theorylabs-public-snapshot.sqlite3"
+          python - "${OUT}/theorylabs-public-snapshot.sqlite3.manifest.json" >> "${GITHUB_STEP_SUMMARY}" <<'PY'
+          import json, sys
+          m = json.load(open(sys.argv[1]))
+          p = m["provenance"]
+          print("\n#### Sanitized public snapshot (verified)\n")
+          print(f"- Windows: {', '.join(p['balance_windows'])}; matches {p['matches']}; boards {p['boards']}; latest game {p['latest_game']}")
+          print(f"- Real-ingestion checks: passed; ledger coverage {p['real_ingestion_checks']['discovery_ledger_coverage']}")
+          print(f"- Verification: {', '.join(m['verification']['checks'])}")
+          for name, info in m["files"].items():
+              print(f"- `{name}`: {info['bytes']} bytes, sha256 `{info['sha256']}`")
+          print("\nOnly the .gz snapshot and this manifest are uploaded. Nothing was deployed.")
+          PY
+
+      - name: Upload the sanitized snapshot (gzip + manifest only)
+        uses: actions/upload-artifact@v4
+        with:
+          name: theorylabs-public-snapshot-from-${{ github.event.inputs.backup_artifact_name }}
+          path: |
+            ${{ runner.temp }}/public-snapshot/theorylabs-public-snapshot.sqlite3.gz
+            ${{ runner.temp }}/public-snapshot/theorylabs-public-snapshot.sqlite3.manifest.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Remove all production backup material from the runner
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          docker rm -f -v "${RESTORE_CONTAINER}" >/dev/null 2>&1 || true
+          rm -rf "${RUNNER_TEMP}/backup-plain" "${RUNNER_TEMP}/backup-encrypted" "${RUNNER_TEMP}/public-snapshot"
+          rm -f "${RUNNER_TEMP}/restore-db-url"
+          echo "Ephemeral database container, decrypted/encrypted backup files and build outputs removed."
