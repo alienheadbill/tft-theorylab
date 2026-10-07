@@ -149,14 +149,19 @@ Riot Match-V1 has started returning a masked, unparseable `game_version` for som
 
 **Only verified, sourced windows are ever used to classify a match.** `UnrealPatchWindow.is_usable` requires both `verified=True` and a non-empty `source`; an unverified or sourceless entry is silently skipped during resolution (as if it weren't in the registry at all) rather than affecting production classification, no matter how plausible its timestamp looks. `tftlab validate-live-data` and `tftlab patch-diagnostics` both report `unreal_registry_usable_windows`/`unreal_registry_total_windows`, so a registered-but-not-yet-verified window is visible, not silently inert.
 
-**Currently populated with two conservative windows**, sourced from Riot's official TFT patch schedule (<https://support.riotgames.com/en-us/tft/events/patch-schedule-teamfight-tactics/> -- 18.2 scheduled 2026-09-10, 18.3 scheduled 2026-09-23 Pacific Time, 18.4 scheduled 2026-10-07):
+**Currently populated with three conservative windows**, sourced from Riot's official TFT patch schedule (<https://support.riotgames.com/en-us/tft/events/patch-schedule-teamfight-tactics/> -- 18.2 scheduled 2026-09-10, 18.3 scheduled 2026-09-23, 18.4 scheduled 2026-10-07 and 18.5 scheduled 2026-10-21, all Pacific Time; Riot published the 18.4 patch notes on 2026-10-06):
 
 | Patch | Window (UTC) | Notes |
 | --- | --- | --- |
 | `18.2` | `2026-09-11T00:00:00Z` .. `2026-09-22T00:00:00Z` (exclusive) | Starts a full day after the scheduled release; ends before the earliest reported NA 18.3 sighting. |
 | `18.3` | `2026-09-24T07:00:00Z` .. `2026-10-06T00:00:00Z` (exclusive) | Starts after the full scheduled Pacific-Time release day has elapsed everywhere in that timezone; ends before the next scheduled patch (18.4). |
+| `18.4` | `2026-10-08T07:00:00Z` .. `2026-10-20T00:00:00Z` (exclusive) | Same convention: starts after the full scheduled 2026-10-07 Pacific-Time patch day (TheoryLabs' conservative classification boundary, not a claim that Riot deployed 18.4 at that instant); ends a day before the scheduled 18.5 transition on 2026-10-21. |
 
-The gap between them (`2026-09-22T00:00:00Z` through `2026-09-24T07:00:00Z`) deliberately covers the reported early-NA-18.3 rollout ambiguity and stays `UNRESOLVED_UNREAL_PATCH` -- see `src/tftlab/unreal_patch.py`'s module comment for the full reasoning. When a match's `game_datetime` doesn't fall in any usable window:
+The gaps between windows deliberately stay `UNRESOLVED_UNREAL_PATCH`:
+- `2026-09-22T00:00:00Z` through `2026-09-24T07:00:00Z` covers the reported early-NA-18.3 rollout ambiguity.
+- `2026-10-06T00:00:00Z` through `2026-10-08T07:00:00Z` covers the 18.3 → 18.4 transition. It is neither patch, and 18.3 was not widened to cover it.
+
+See `src/tftlab/unreal_patch.py`'s module comment for the full reasoning. When a match's `game_datetime` doesn't fall in any usable window:
 
 - It resolves to the explicit `UNRESOLVED_UNREAL_PATCH` sentinel (`"unreal-unresolved"`), never a fake shared patch bucket and never the raw masked string.
 - Its `balance_window` is left `None`, so it's automatically excluded from every balance-window-scoped analytics query (never silently blended into a real window's stats) and counted in `IntegrityReport.unresolved_unreal_matches` / flagged by `tftlab validate-live-data` as a severe issue (a missing balance window always is) until resolved.
@@ -281,7 +286,7 @@ Discovery's expensive part, the window-wide carry population plus partner/item/t
 | `TFT_DATA_SOURCE` | Source | Labelled as | If unusable |
 |---|---|---|---|
 | `database` | `DATABASE_URL` (production Postgres), read-only; must be set | indexed ranked matches (observed) | HTTP 503 |
-| `snapshot` | a bundled read-only SQLite snapshot of real indexed matches at `TFT_SNAPSHOT_PATH` (default `data/snapshot/theorylabs-snapshot.sqlite3`), optional `<path>.json` manifest such as `{"exported_at": ...}` | analytics snapshot (observed) | HTTP 503 (missing, empty or invalid file) |
+| `snapshot` | a sanitized public snapshot made by `tftlab export-public-snapshot` at `TFT_SNAPSHOT_PATH` (default `data/snapshot/theorylabs-snapshot.sqlite3`; a `.gz` is unpacked once into `TFT_SNAPSHOT_CACHE_DIR`, default `data/snapshot-cache`) | analytics snapshot (observed) **only when its exporter provenance certifies observed, non-synthetic data** | HTTP 503 (missing, empty, corrupt, or without valid exporter provenance -- e.g. any plain database, demo data included) |
 | `demo` | the deterministic **synthetic** demo dataset, no database at all | demo data (synthetic) | -- |
 | unset | automatic: `DATABASE_URL` if set, else a populated local SQLite file (`TFT_DB_PATH`), else demo | as above (`local database` for the local file) | as above |
 
@@ -302,7 +307,7 @@ In automatic mode the original three states still apply:
 - `observed` / `synthetic` (`demo` mirrors `synthetic`);
 - match and board counts and `latest_game_datetime`;
 - freshness: `age_days`, and `stale` (latest game older than `TFT_STALE_AFTER_DAYS`, default 14). Synthetic data gets no freshness verdict, because its dates are generated.
-- the snapshot manifest, if any.
+- for a snapshot, its public provenance fields (format, export time, windows, counts, code version, exclusions).
 
 Every page shows this in a banner at the top (`static/site.js`):
 - **Demo data** (amber): every number and date is synthetic. Evidence stamps on the page read "Observed · demo".
@@ -554,6 +559,67 @@ Current web pages/features:
 
 The next web milestone is a dedicated comp page with a hex board, champion/item assets, traits, patch selector, known-vs-theorycrafted labels, and live Riot/CommunityDragon data.
 
+## Public website snapshots
+
+`tftlab export-public-snapshot --source <sqlite-path-or-postgres-url> --out public.sqlite3 [--balance-window 18.3 ...] [--compress]` builds the SQLite file the website serves in `TFT_DATA_SOURCE=snapshot` mode, from a real TheoryLabs database such as the local store or a restored backup. The source is opened read-only. `--source` is required and never falls back to `DATABASE_URL`. `tftlab verify-public-snapshot FILE` re-runs the integrity checks on any file.
+
+**What it contains** -- only what the public routes read (`Database.REQUIRED_READ_SCHEMA`):
+
+| Table | Columns copied | Sanitized (fixed value) |
+|---|---|---|
+| `matches` | `match_id` (remapped), `game_datetime`, `game_version`, `patch`, `balance_window`, `queue_id` | `payload_json` = `{}`; `game_type`, `set_number`, `set_core_name` = NULL |
+| `participants` | `match_id` (remapped), `participant_index`, `placement` | `augments_json` = `[]`, `level` = 0 |
+| `units` | all: `match_id` (remapped), `participant_index`, `unit_index`, `character_id`, `unit_name`, `cost`, `tier`, `items_json`, `completed_item_count` | -- |
+| `traits` | all: `match_id` (remapped), `participant_index`, `trait_name`, `num_units`, `style`, `tier_current`, `tier_total` | -- |
+| `experiments`, `experiment_tags`, `experiment_field_notes` | the columns the notebook pages read, for the operator's own entries (`origin = 'manual'`); demo entries are never exported | -- |
+| `discovery_prepared_runs` / `_candidates` | Discovery prepared on the snapshot itself, so Discover is fast. A failed preparation is recorded and that window is computed live instead | -- |
+| `schema_migrations` | migration markers (part of the prepared-run fingerprint) | -- |
+| `public_snapshot_metadata` | the provenance record (below) | -- |
+
+**Never exported:**
+- the collection tables `seed_samples`, `match_discoveries` and `ingest_runs`;
+- PUUIDs, Riot IDs and raw Riot match ids;
+- raw Match-V1 payloads and augment payloads;
+- credentials and API keys.
+
+**Opaque match ids:** matches are renumbered `S0000001`, `S0000002`, ... in (game time, source id) order, consistently in every table. The mapping is never stored. Analytics don't depend on match ids: aggregates are unchanged, and only the order of exactly tied list entries can differ. The source population is recorded only as a one-way fingerprint (the sha256 of the sorted source ids).
+
+**Provenance and the fail-closed rule:** the `public_snapshot_metadata` table holds one versioned record:
+- `format: theorylabs-public-snapshot`, `format_version: 1`;
+- `synthetic: false`, `observed: true`, `source_kind: riot-match-v1-ranked-tft`;
+- `exported_at`, `code_version` (git SHA / run id when available, plus the analytics version);
+- `balance_windows`, per-window counts and dates, match/board/unit/trait counts and the latest game;
+- the source fingerprint, `tables`, `sanitized_columns` and `excluded_tables`, and the exclusions statement;
+- `real_ingestion_checks`.
+
+An export is refused, and nothing is written, unless the source passes every real-ingestion check:
+- it has a completed live-ingest run in `ingest_runs`, and its `match_discoveries` ledger links to exported matches;
+- every exported match is ranked queue 1100, with a regional Riot match id (for example `NA1_…`);
+- its stored raw payload has a matching `metadata.match_id`, a `data_version`, and a participant list consistent with the stored boards;
+- its patch is a numeric client patch, and its balance window is trusted (numeric).
+
+The deterministic demo dataset fails all of these (`DEMO_…` ids, `Version DEMO`, no ledger), even with a forged ledger. The website serves a snapshot as observed only when this provenance is present and certifies observed data. Any other file, however valid its schema, is a 503. These checks guard against mistakes, not deliberate forgery.
+
+**Verification before success:**
+- **Schema and read access:** the read schema and a read-only open through the website's own path.
+- **Provenance:** valid.
+- **Exclusions:** no collection tables or `puuid` columns, no raw payloads or augments, and no secret markers (`RGAPI-`, `postgres://`), source connection string, Riot match id or PUUID-shaped token anywhere in the file.
+- **Ids and windows:** opaque ids only, referential consistency after remapping, and only trusted (and, if requested, only the requested) windows.
+- **Counts:** reconciled against the source.
+
+The output is one self-contained file (no WAL sidecars), a `<out>.manifest.json` with provenance, verification and sha256s, and with `--compress` a `<out>.gz`.
+
+**Size:** about 16 MB per 1,000 matches as SQLite, or about 3.4 MB gzipped, at about 8.5 units and 10 traits per board. Patch 18.3's ~11k matches give roughly 170 MB, or about 37 MB gzipped. That is too large to commit to git comfortably but fine on free Render's disk; serve the `.gz` and the website unpacks it once. A practical $0 publication path, not automated here, is to attach the `.gz` to a GitHub Release of this public repository, then have the Render build download it and check the manifest's sha256.
+
+**From the encrypted backup:** `.github/workflows/public-snapshot-from-backup.yml` ("Build public snapshot from encrypted backup") is manual only, from `main`, with permissions `contents: read` and `actions: read`. It never contacts Neon. Its inputs name the backup run id and artifact; the defaults are the verified 2026-10-05 backup, run `37308579783`, artifact `theorylabs-postgres-backup-20261005T121811Z`. The workflow:
+1. downloads that artifact from this repository and checks its sha256;
+2. decrypts it with `DB_BACKUP_PASSPHRASE`, using exactly `db-backup.yml`'s `openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 -md sha256`;
+3. restores it into an ephemeral `postgres:18` container on the runner's loopback, with a random masked password;
+4. runs the exporter and the verifier;
+5. uploads **only** the `.gz` snapshot and its manifest, with 7-day retention.
+
+The plaintext dump is deleted right after `pg_restore`, by a trap even on failure. An always-run final step removes the container, the backup files and the private file holding the restore URL. Nothing is deployed.
+
 ## Deploying on Render
 
 The repo includes a `render.yaml` Blueprint that runs the FastAPI app with:
@@ -561,6 +627,8 @@ The repo includes a `render.yaml` Blueprint that runs the FastAPI app with:
 ```
 uvicorn tftlab.webapp:app --host 0.0.0.0 --port $PORT
 ```
+
+**Public snapshot (real data, still no cloud database):** see "Public website snapshots" below.
 
 **Zero-cloud-database public site:** set `TFT_DATA_SOURCE=demo` (synthetic, labelled on every page) and leave `DATABASE_URL` unset. The site then needs no database service at all, so it keeps working when a cloud database is unavailable or out of quota. When a real analytics snapshot is available, ship it at `TFT_SNAPSHOT_PATH` and switch to `TFT_DATA_SOURCE=snapshot`; the frontend is unchanged. Heavy ingestion and analytics are meant to run on the owner's machine, which is never exposed to the Internet; that is a separate follow-up.
 
@@ -589,10 +657,10 @@ With no `DATABASE_URL` and no `TFT_DATA_SOURCE` configured, the app automaticall
   - the validation and Discovery smoke results.
 
   The full report is in the `Ingest live sample` step log; the `ingest-telemetry` artifact (JSON, kept 30 days) has every aggregate; stored data is checked by `Validate ingested data`.
-- **Patch boundaries:** collection is bounded to the current trusted window (next paragraph). Once the latest registered window ends (18.3: 2026-10-06T00:00Z), scheduled runs fail with "No current trusted window" before any request is made, until the next patch's verified window is added to `UNREAL_PATCH_REGISTRY` in a reviewed change. That is deliberate: collection never guesses a patch.
+- **Patch boundaries:** collection is bounded to the current trusted window (next paragraph). Once the latest registered window ends, scheduled runs fail with "No current trusted window" before any request is made, until the next patch's verified window is added to `UNREAL_PATCH_REGISTRY` in a reviewed change. The same happens inside a transition gap: 18.3 ended at 2026-10-06T00:00Z, and 18.4 is current from 2026-10-08T07:00Z until 2026-10-20T00:00Z. That is deliberate: collection never guesses a patch.
 - **Pausing or changing it:** GitHub → Actions → Live ingest → "..." → **Disable workflow** pauses both the schedule and the Run button, and **Enable workflow** restores them. To change the cadence or the scheduled settings, edit the `cron` line or the job-level `env` block in a reviewed PR. GitHub also disables scheduled workflows in public repositories after 60 days without repository activity; re-enable it the same way.
 
-**Current trusted window only:** the production ingest always runs with `--current-trusted-window`, so every seed's match-history request is bounded to the current patch: Riot's `startTime`/`endTime` (epoch seconds, as Riot documents for the by-puuid match-IDs endpoint) are taken from the latest verified + sourced `UNREAL_PATCH_REGISTRY` window that has started and not ended (18.3 today: `startTime=1790233200`, i.e. 2026-09-24T07:00:00Z, `endTime=1791244800`). If no such window exists -- none registered, none usable, or the latest one has already ended -- the run fails instead of crawling unbounded history. This only narrows what is requested: each match is still classified normally, and `validate-live-data` remains the authority. Locally, `tftlab ingest-riot --start-time 2026-09-24T07:00:00Z` sets an explicit lower bound instead; with neither option you get ordinary recent history. The ingest report shows the bounds, the trusted window, how many seeds had no games in it, and the earliest/latest inserted match.
+**Current trusted window only:** the production ingest always runs with `--current-trusted-window`, so every seed's match-history request is bounded to the current patch: Riot's `startTime`/`endTime` (epoch seconds, as Riot documents for the by-puuid match-IDs endpoint) are taken from the latest verified + sourced `UNREAL_PATCH_REGISTRY` window that has started and not ended (18.4: `startTime=1791442800`, i.e. 2026-10-08T07:00:00Z, `endTime=1792454400`, i.e. 2026-10-20T00:00:00Z; 18.3 was `startTime=1790233200`, `endTime=1791244800`). If no such window exists -- none registered, none usable, or the latest one has already ended -- the run fails instead of crawling unbounded history. This only narrows what is requested: each match is still classified normally, and `validate-live-data` remains the authority. Locally, `tftlab ingest-riot --start-time 2026-09-24T07:00:00Z` sets an explicit lower bound instead; with neither option you get ordinary recent history. The ingest report shows the bounds, the trusted window, how many seeds had no games in it, and the earliest/latest inserted match.
 
 **Inputs** (Run workflow form): one seed count per cohort -- `challenger_seeds` (default 10), `grandmaster_seeds`, `master_seeds`, `diamond_seeds`, `platinum_seeds` (default 0 each); each is 0-100 and the total across cohorts must be 1-100 -- plus `matches_per_player` (recent matches per seed, 1-10, default 5 -- the CLI's deeper 100-match maximum is deliberately not exposed here, since more players beats deeper histories of the same players). For example 20 / 20 / 20 / 20 / 20 is 100 seeds. The preflight prints every cohort's count and the total. The defaults reproduce the original conservative 10 x 5 Challenger run. It has **no** `push`, `pull_request`, or `schedule` trigger -- it only ever runs when someone explicitly starts it, and a failure in any step (bad key, unreachable CommunityDragon, unreachable database, a severe integrity issue) stops the run there rather than continuing partway.
 
@@ -629,7 +697,9 @@ Why, from the first successful five-cohort run (100 seeds: 589 history reference
 
 **Limitations:** seeds are ladder players, so the population is what they played (see "Data population and seed cohorts"); a heavy grinder's games older than their last 10 are not requested; Diamond/Platinum candidates come from the first pages of each division (reported as capped when so).
 
-**Patch end is strict.** Production always runs `--current-trusted-window`. At 2026-10-06T00:00:00Z (end exclusive) there is no current trusted window unless 18.4's real verified window has been registered, so the ingest step fails instead of crawling another patch or going unbounded. 18.4 is added only when its real window is known.
+**Patch end is strict.** Production always runs `--current-trusted-window`. At 2026-10-06T00:00:00Z (end exclusive) 18.3 collection stopped. Until 18.4's conservative window opens at 2026-10-08T07:00:00Z there is no current trusted window, so the ingest step fails instead of crawling another patch or going unbounded. 18.5 needs its own reviewed window before 2026-10-20T00:00:00Z.
+
+**Collecting 18.4 locally:** `tftlab ingest-riot --current-trusted-window ...` with no `DATABASE_URL` writes to the local SQLite store (`TFT_DB_PATH`) once 18.4's window has opened. It writes the same ledger (`ingest_runs`, `seed_samples`, `match_discoveries`) that `export-public-snapshot` later requires.
 
 ### Maximum collection mode and Riot rate limits
 

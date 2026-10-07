@@ -34,6 +34,7 @@ from .champion_investigation import (
 from .demo import generate_demo_matches
 from .experiments import ExperimentNotFound, get_experiment, list_experiments, seed_demo_experiments
 from .game_art import enrich_candidate, experiment_art, field_note_art
+from .public_snapshot import read_snapshot_provenance
 from .prepared_discovery import PreparedLookup, lookup_prepared, read_prepared_candidate, read_prepared_candidates
 from .storage import Database
 from .scout import comp_fingerprint
@@ -55,10 +56,13 @@ STATIC_DIR = WEB_DIR / "static"
 #
 #   database  `DATABASE_URL` (production Postgres), opened read-only. Required
 #             to be set; an unreachable one is a loud 503, never demo data.
-#   snapshot  a bundled, read-only SQLite copy of real indexed matches at
-#             `TFT_SNAPSHOT_PATH` (+ optional `<path>.json` manifest). No cloud
-#             database. A missing/empty/invalid snapshot is a loud 503, never
-#             demo data.
+#   snapshot  a sanitized public snapshot produced by `tftlab
+#             export-public-snapshot` at `TFT_SNAPSHOT_PATH` (`.sqlite3`, or a
+#             `.gz` of it, unpacked once to `TFT_SNAPSHOT_CACHE_DIR`). No cloud
+#             database. It is served as observed evidence ONLY when it carries
+#             the exporter's verified provenance (`tftlab.public_snapshot.
+#             read_snapshot_provenance`); a missing, empty, unverified or
+#             synthetic snapshot is a loud 503, never demo data.
 #   demo      the deterministic SYNTHETIC demo dataset, labelled as such
 #             everywhere. No database at all: the zero-cost review mode.
 #   (unset)   automatic: `DATABASE_URL` if set, else a populated local SQLite
@@ -149,6 +153,45 @@ def _sqlite_db_path() -> Path:
 
 def _snapshot_path() -> Path:
     return Path(os.getenv("TFT_SNAPSHOT_PATH") or DEFAULT_SNAPSHOT_PATH)
+
+
+#: Unpacked `.gz` snapshots, keyed by (path, size, mtime): one decompression
+#: per deployed file, serialized like the demo build.
+_SNAPSHOT_UNPACKED: dict[tuple[str, int, int], Path] = {}
+_SNAPSHOT_LOCK = threading.Lock()
+
+
+def _snapshot_file() -> Path:
+    """The SQLite file to open: `TFT_SNAPSHOT_PATH` itself, or for a `.gz`
+    snapshot its one-time decompression into `TFT_SNAPSHOT_CACHE_DIR`
+    (gzip's CRC check rejects a corrupt archive)."""
+    path = _snapshot_path()
+    if not path.is_file():
+        raise SnapshotUnavailable("snapshot file not found")
+    if path.suffix != ".gz":
+        return path
+    stat = path.stat()
+    key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    with _SNAPSHOT_LOCK:
+        cached = _SNAPSHOT_UNPACKED.get(key)
+        if cached is not None and cached.is_file():
+            return cached
+        cache_dir = Path(os.getenv("TFT_SNAPSHOT_CACHE_DIR") or "data/snapshot-cache")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        target = cache_dir / f"{path.stem}.{stat.st_size}.{stat.st_mtime_ns}"
+        tmp = target.with_name(target.name + ".tmp")
+        try:
+            import gzip
+            import shutil
+
+            with gzip.open(path, "rb") as src, tmp.open("wb") as dst:
+                shutil.copyfileobj(src, dst, 1 << 20)
+            os.replace(tmp, target)
+        except Exception as exc:
+            tmp.unlink(missing_ok=True)
+            raise SnapshotUnavailable(f"snapshot archive unreadable ({type(exc).__name__})") from exc
+        _SNAPSHOT_UNPACKED[key] = target
+        return target
 
 
 def _has_participants(db: Database) -> bool:
@@ -244,18 +287,17 @@ def _resolve_source() -> tuple[Database, DataSource]:
         return db, _source("database", configured)
 
     if mode == "snapshot":
-        path = _snapshot_path()
-        if not path.is_file():
-            raise SnapshotUnavailable("snapshot file not found")
+        path = _snapshot_file()
         try:
             db = Database.open_existing(path)  # SQLite mode=ro: never created or written
         except Exception as exc:
             raise SnapshotUnavailable(f"snapshot unreadable ({type(exc).__name__})") from exc
         try:
+            read_snapshot_provenance(db)  # fail closed: only an exporter-certified, observed snapshot
             empty = not _has_participants(db)
         except Exception as exc:
             db.close()
-            raise SnapshotUnavailable(f"snapshot unreadable ({type(exc).__name__})") from exc
+            raise SnapshotUnavailable(f"snapshot not certified as observed data ({type(exc).__name__})") from exc
         if empty:
             db.close()
             raise SnapshotUnavailable("snapshot holds no matches")
@@ -279,17 +321,15 @@ def _resolve_database() -> tuple[Database, bool]:
     return db, source.synthetic
 
 
-def _snapshot_manifest() -> dict[str, Any] | None:
-    """The optional `<snapshot>.json` manifest (exported_at, generator,
-    notes...), as given. Unreadable -> reported, never fatal."""
-    path = _snapshot_path().with_name(_snapshot_path().name + ".json")
-    if not path.is_file():
-        return None
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return {"error": "snapshot manifest unreadable"}
-    return data if isinstance(data, dict) else {"error": "snapshot manifest is not a JSON object"}
+#: Provenance fields shown by `/api/source` for a snapshot (all
+#: non-identifying; the full record stays inside the file).
+SNAPSHOT_PUBLIC_FIELDS = ("format", "format_version", "source_kind", "exported_at", "balance_windows", "matches",
+                          "boards", "latest_game", "code_version", "exclusions")
+
+
+def _snapshot_info(db: Database) -> dict[str, Any]:
+    prov = read_snapshot_provenance(db)  # already certified when the source was resolved
+    return {key: prov.get(key) for key in SNAPSHOT_PUBLIC_FIELDS}
 
 
 def _stale_after_days() -> int:
@@ -325,7 +365,7 @@ def source_status(db: Database, source: DataSource, *, now_ms: int | None = None
         "age_days": age_days,
         "stale": stale,
         "stale_after_days": stale_after,
-        "snapshot": _snapshot_manifest() if source.mode == "snapshot" else None,
+        "snapshot": _snapshot_info(db) if source.mode == "snapshot" else None,
     }
 
 

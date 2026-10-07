@@ -1004,6 +1004,65 @@ def prepare_discovery_command(
         raise typer.Exit(code=1)
 
 
+@app.command("export-public-snapshot")
+def export_public_snapshot_command(
+    source: str = typer.Option(
+        ..., "--source",
+        help="REQUIRED source database: a SQLite path or postgres:// URL (e.g. a restored backup). Opened "
+             "read-only. There is deliberately no DATABASE_URL fallback.",
+    ),
+    out: Path = typer.Option(..., "--out", help="Output SQLite file for the public website (e.g. public.sqlite3)"),
+    balance_window: list[str] = typer.Option(
+        None, "--balance-window", help="Trusted window(s) to export; default: every classified window in the source"
+    ),
+    compress: bool = typer.Option(False, "--compress/--no-compress", help="Also write <out>.gz (gzip -9)"),
+    prepare: bool = typer.Option(True, "--prepare/--no-prepare", help="Precompute Discovery runs inside the snapshot"),
+) -> None:
+    """Build a sanitized public website snapshot from a real TheoryLabs database.
+
+    Only what the public routes read is exported, with opaque match ids and
+    no raw payloads, player identifiers or collection ledger. The source must
+    pass the real-ingestion checks (completed live-ingest runs and per-match
+    Riot Match-V1 checks) -- synthetic/demo data is refused -- and the result
+    is verified before it is written. Never contacts Riot or any database
+    other than --source.
+    """
+    from .public_snapshot import SnapshotExportError, export_public_snapshot
+
+    def progress(line: str) -> None:
+        console.print(line, markup=False, highlight=False)
+
+    try:
+        with Database.open_existing(source) as database:
+            result = export_public_snapshot(database, out, balance_windows=balance_window or None, compress=compress,
+                                            prepare=prepare, progress=progress, secrets=[source])
+    except SnapshotExportError as exc:
+        console.print(f"[bold red]Public snapshot NOT written:[/bold red] {exc}", markup=True, highlight=False)
+        raise typer.Exit(code=1) from None
+    prov = result.provenance
+    console.print(f"Snapshot: {result.path} ({prov['matches']} matches, {prov['boards']} boards, windows "
+                  f"{', '.join(prov['balance_windows'])}, latest game {prov['latest_game']})", markup=False)
+    for name, info in result.files.items():
+        console.print(f"  {name}: {info['bytes']} bytes, sha256 {info['sha256']}", markup=False)
+    console.print(f"Manifest: {result.manifest_path}", markup=False)
+
+
+@app.command("verify-public-snapshot")
+def verify_public_snapshot_command(
+    path: Path = typer.Argument(..., help="A public snapshot SQLite file"),
+) -> None:
+    """Re-run the public snapshot integrity checks (no source needed)."""
+    from .public_snapshot import SnapshotExportError, SnapshotProvenanceError, verify_public_snapshot
+
+    try:
+        result = verify_public_snapshot(path)
+    except (SnapshotExportError, SnapshotProvenanceError) as exc:
+        console.print(f"[bold red]NOT a valid public snapshot:[/bold red] {exc}", highlight=False)
+        raise typer.Exit(code=1) from None
+    console.print(f"Valid public snapshot: {', '.join(result['checks'])} passed; counts {result['counts']}; "
+                  f"windows {', '.join(result['balance_windows'])}", markup=False)
+
+
 @app.command("discovery-report")
 def discovery_report_command(
     db: str = typer.Option(

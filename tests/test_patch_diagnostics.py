@@ -68,7 +68,7 @@ def test_patch_diagnostics_reports_masked_unreal_range_without_ingesting(tmp_pat
     # The real registry now has 2 usable (verified + sourced) windows
     # (18.2, 18.3); these fabricated game_datetimes (1_000/5_000) are
     # long before either, so they correctly stay unresolved regardless.
-    assert "2/2 window(s) usable" in result.output
+    assert "3/3 window(s) usable" in result.output
 
 
 def test_patch_diagnostics_never_dumps_payloads(tmp_path: Path) -> None:

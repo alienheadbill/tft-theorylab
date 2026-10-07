@@ -105,7 +105,25 @@ def test_registry_and_classification_are_untouched() -> None:
     assert [(w.client_patch, w.starts_at, w.ends_at) for w in UNREAL_PATCH_REGISTRY] == [
         ("18.2", 1_789_084_800_000, 1_790_035_200_000),
         ("18.3", 1_790_233_200_000, 1_791_244_800_000),
+        ("18.4", 1_791_442_800_000, 1_792_454_400_000),
     ]
+
+
+@pytest.mark.parametrize(("now", "expected"), [
+    (1_791_442_800_000, "18.4"),  # 2026-10-08T07:00:00Z: 18.4 is current from its conservative start
+    (1_792_454_399_999, "18.4"),  # the last millisecond before its exclusive end
+    (1_791_244_800_000, None),  # 2026-10-06T00:00:00Z: the 18.3 -> 18.4 gap is neither patch
+    (1_791_442_799_999, None),
+    (1_792_454_400_000, None),  # 2026-10-20T00:00:00Z: no open-ended 18.4; 18.5 needs its own window
+])
+def test_current_trusted_window_for_18_4_and_its_gaps(now, expected) -> None:
+    if expected is None:
+        with pytest.raises(NoCurrentTrustedWindow):
+            current_trusted_window(now)
+    else:
+        window = current_trusted_window(now)
+        assert window.client_patch == expected
+        assert (window.starts_at // 1000, window.ends_at // 1000) == (1_791_442_800, 1_792_454_400)  # Riot seconds
 
 
 # ---------------------------------------------------------------- ingest
