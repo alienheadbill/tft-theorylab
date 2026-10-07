@@ -93,7 +93,8 @@ async function fetchJson(url) {
 }
 
 function setSource(demo) {
-  const label = demo ? 'demo dataset' : 'live Riot data';
+  // site.js owns the wording (and the source banner); this only keeps the ledger in step.
+  const label = window.TL_sourceLabel ? window.TL_sourceLabel(demo) : (demo ? 'demo data (synthetic)' : 'indexed match data');
   document.querySelector('#data-mode').textContent = label;
   document.querySelector('#footer-mode').textContent = label;
 }
@@ -646,7 +647,7 @@ function headerBlock(inv) {
 
 function renderInvestigation(inv) {
   const c = inv.champion;
-  document.title = `${c.name} · Champion Investigation · TFT Theory Lab`;
+  document.title = `${c.name} · Champion Investigation · TheoryLabs`;
   state.currentId = c.character_id;
   if (!inv.window) {
     showView(
@@ -697,7 +698,7 @@ async function loadInvestigation({ focus = true } = {}) {
     if (focus) viewEl.querySelector('#champion-name')?.focus({ preventScroll: true });
   } catch (err) {
     if (err.status === 404) {
-      document.title = 'Champion not found · TFT Theory Lab';
+      document.title = 'Champion not found · TheoryLabs';
       showView(
         `<p class="state-note">We couldn't find a champion called “${esc(state.key)}”. Pick one from the list below.</p>`,
         'Champion not found.',

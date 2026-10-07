@@ -114,7 +114,7 @@ function sheetHtml(e, i) {
 }
 
 async function renderList() {
-  document.title = 'My Experiments · TFT Theory Lab';
+  document.title = 'Experiments · TheoryLabs';
   const res = await fetch('/api/experiments');
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   const data = await res.json();
@@ -263,7 +263,7 @@ function riotSlip(d, art) {
 
 function fieldNotesBlock(notes) {
   if (!notes.length) {
-    return `<p class="field-empty">No field notes yet. This theory hasn't been scouted.</p>`;
+    return `<p class="field-empty">No field notes yet. This theory hasn't been researched.</p>`;
   }
   return `<ol class="field-log">${notes
     .map((n, i) => {
@@ -308,7 +308,7 @@ function checklistBlock(items) {
 async function renderDetail(key) {
   const res = await fetch(`/api/experiments/${encodeURIComponent(key)}`);
   if (res.status === 404) {
-    document.title = 'Not found · TFT Theory Lab';
+    document.title = 'Not found · TheoryLabs';
     view.innerHTML = `
       <p class="crumbs"><a href="/experiments">← all experiments</a></p>
       <p class="state-note">There's no page called &ldquo;${esc(key)}&rdquo; in this notebook.</p>`;
@@ -317,7 +317,7 @@ async function renderDetail(key) {
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   const e = (await res.json()).experiment;
   const c = e.comp;
-  document.title = `${e.title} · My Experiments`;
+  document.title = `${e.title} · Experiments · TheoryLabs`;
 
   view.innerHTML = `
     <p class="crumbs"><a href="/experiments">← all experiments</a></p>
@@ -356,13 +356,13 @@ async function renderDetail(key) {
       <div class="notes-row">
         <p class="margin-note">research still needed<br><span class="quiet-inline">ticked only once a note from that source exists</span></p>
         <div>
-          <h3 id="scout-title">Scout checklist</h3>
+          <h3 id="scout-title">Research checklist</h3>
           ${checklistBlock(e.scout_checklist || [])}
           ${e.fingerprint && e.fingerprint.signature ? `<p class="fingerprint">fingerprint · ${esc(e.fingerprint.signature)}</p>` : ''}
         </div>
       </div>
       <div class="notes-row">
-        <p class="margin-note quiet">dated research, oldest first: our data, scout reports, mechanics, sightings, status changes</p>
+        <p class="margin-note quiet">dated research, oldest first: our data, outside guides, mechanics, sightings, status changes</p>
         <div>
           <h3 id="field-notes-title"><span class="underlined">Field Notes</span></h3>
           ${fieldNotesBlock(e.field_notes || [])}

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Methodology & data · TheoryLabs</title>
+  <meta name="description" content="How TheoryLabs indexes matches, defines a committed carry, handles sample size and patches, and what its evidence cannot tell you." />
+  <meta name="color-scheme" content="dark" />
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body class="info-body">
+  <a class="skip-link" href="#main-content">Skip to the content</a>
+  <div id="source-banner" class="source-banner" role="status" aria-live="polite" hidden></div>
+  <header class="cover cover-compact">
+    <div class="cover-top">
+      <p class="cover-kicker">methodology & data</p>
+      <nav class="cover-nav" aria-label="Main">
+        <a href="/#discoveries">discover</a>
+        <a href="/champions">champions</a>
+        <a href="/experiments">experiments</a>
+        <a href="/about">about</a>
+        <a href="/methodology" aria-current="page">methodology &amp; data</a>
+      </nav>
+    </div>
+    <h1><span class="scribble">Methodology &amp; data</span></h1>
+  </header>
+
+  <main id="main-content">
+    <article class="page prose">
+<p class="cover-intro">TheoryLabs measures patterns in historical ranked TFT matches. This page explains what is
+      counted, how, and where the evidence stops. It is written to avoid overclaiming: the statistics describe what happened
+      in the indexed matches, not what will happen in your next game.</p>
+
+      <h2>Where the data comes from</h2>
+      <ul>
+        <li><strong>Matches</strong> are ranked TFT matches (queue 1100) retrieved through the Riot Games API. Collection
+          starts from a sample of ranked-ladder players (currently the North America ladder, Platinum through Challenger)
+          and indexes their recent ranked matches.</li>
+        <li><strong>Boards</strong>: each match has eight final boards, one per player. Counts on this site are usually
+          <em>boards</em>, so a champion can appear on more boards than there are matches.</li>
+        <li><strong>Game data</strong> such as champion, item and trait names, recipes and art comes from committed
+          snapshots of CommunityDragon's public game data.</li>
+        <li>The sample is a selected slice of the ranked ladder, not all of TFT, and is not weighted by rank.</li>
+      </ul>
+
+      <h2>Patches are never mixed</h2>
+      <p>Every statistic belongs to one <strong>balance window</strong> (a patch such as 18.3). Matches from different
+        balance windows are never combined. Matches from client-version transition periods whose patch cannot be confirmed
+        are left out of every analysis until their patch is known.</p>
+
+      <h2>What counts as a committed carry</h2>
+      <p>A champion counts as a carry on a board when it finished that board holding <strong>at least two completed
+        items</strong>, at least one of which Riot's own role recommendations associate with carrying (damage or mixed
+        items). Tank-only itemization does not count, and Thief's Gloves holders are not carry observations because their
+        items are random. The misses are counted too: a committed carry that never reached three stars is still in the
+        sample, and boards that hit three stars are shown separately from those that missed.</p>
+
+      <h2>Sample sizes and uncertainty</h2>
+      <ul>
+        <li>Every rate is shown with the number of boards behind it.</li>
+        <li>Discover defaults to at least 10 carry boards; common items, pairs and builds on a champion page need 10 or more
+          carry boards.</li>
+        <li>Small samples are <strong>shrunk</strong> toward the balance window's average before ranking, so a handful of lucky
+          games cannot outrank a line with real evidence behind it.</li>
+        <li>Teammate, item and trait associations compare boards with and without the feature, also shrunk toward the average,
+          and are labelled by their sample size.</li>
+      </ul>
+
+      <h2>Observed vs inferred vs theorycrafted</h2>
+      <dl>
+        <dt>Observed</dt><dd>Counted directly from indexed boards (placements, items, teammates, traits, star levels).</dd>
+        <dt>Inferred</dt><dd>Derived transparently from observed data and published game data, such as item components derived
+          from the recipes of common completed items. Match data has no timeline of when components were picked up, so these
+          are labelled as derived, not observed.</dd>
+        <dt>Theorycrafted</dt><dd>Ideas in the Experiments notebook that have not been measured. Always labelled.</dd>
+      </dl>
+      <p>Experimental research, such as automatic grouping of boards into composition families, is not shown on the site
+        until it is validated.</p>
+
+      <h2>Limitations</h2>
+      <ul>
+        <li><strong>Final boards only.</strong> Match data records each player's board when they were eliminated or won, not
+          how the game unfolded. Early-eliminated boards are smaller and weaker by nature.</li>
+        <li><strong>Association, not causation.</strong> A teammate or item appearing with good placements does not prove it
+          caused them; augments, positioning, lobby strength and luck are not in the data.</li>
+        <li><strong>Correlated boards.</strong> Boards from the same lobby are not independent.</li>
+        <li><strong>Many comparisons.</strong> When many lines are compared, the most extreme results are partly luck.</li>
+        <li><strong>Classification rules.</strong> The carry definition and item categories are rules applied to match data,
+          and can misclassify unusual boards.</li>
+      </ul>
+
+      <h2>Freshness</h2>
+      <p>Each data page shows the active data source, how many matches it holds, and the date of its latest game. A
+        <strong>snapshot</strong> is a fixed copy that does not update until a new one is published; data older than two
+        weeks is marked as possibly out of date. In <strong>demo mode</strong> every match, number and date is synthetic.</p>
+      <p class="quiet">The note at the top of this page shows the data source the site is using right now.</p>
+    </article>
+  </main>
+
+  <footer class="colophon site-footer">
+    <nav class="footer-nav" aria-label="Site"><a href="/#discoveries">Discover</a><a href="/champions">Champions</a><a href="/experiments">Experiments</a><a href="/about">About</a><a href="/methodology">Methodology &amp; data</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+    <p>TheoryLabs &middot; <span id="footer-mode">&mdash;</span> &middot; aggregate historical match statistics for study before and after you play; not a live in-game assistant.</p>
+    <p class="riot-disclaimer">TheoryLabs isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.</p>
+  </footer>
+  <script src="/static/site.js"></script>
+</body>
+</html>

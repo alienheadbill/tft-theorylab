@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>My Experiments · TFT Theory Lab</title>
+  <title>Experiments · TheoryLabs</title>
   <meta name="description" content="Personal TFT theorycraft: comp ideas worth testing, kept in a notebook." />
   <meta name="color-scheme" content="dark" />
   <link rel="stylesheet" href="/static/app.css" />
@@ -11,14 +11,17 @@
 <body class="experiments-body">
   <a class="skip-link" href="#experiments-view">Skip to the notebook</a>
 
+  <div id="source-banner" class="source-banner" role="status" aria-live="polite" hidden></div>
+
   <header class="cover cover-compact">
     <div class="cover-top">
       <p class="cover-kicker">theorycraft notebook</p>
-      <nav class="cover-nav" aria-label="Sections">
-        <a href="/#discoveries">discoveries</a>
+      <nav class="cover-nav" aria-label="Main">
+        <a href="/#discoveries">discover</a>
         <a href="/champions">champions</a>
-        <a href="/experiments" aria-current="page">my experiments</a>
-        <a href="/#method">method</a>
+        <a href="/experiments" aria-current="page">experiments</a>
+        <a href="/about">about</a>
+        <a href="/methodology">methodology &amp; data</a>
       </nav>
     </div>
     <h1><span class="scribble scribble-alt">My Experiments</span></h1>
@@ -35,9 +38,12 @@
     </section>
   </main>
 
-  <footer class="colophon">
-    TFT Theory Lab &middot; my experiments &middot; entries are added from the command line (<code>tftlab experiment-add</code>); this page is read-only.
+  <footer class="colophon site-footer">
+    <nav class="footer-nav" aria-label="Site"><a href="/#discoveries">Discover</a><a href="/champions">Champions</a><a href="/experiments">Experiments</a><a href="/about">About</a><a href="/methodology">Methodology &amp; data</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+    <p>TheoryLabs &middot; <span id="footer-mode">&mdash;</span> &middot; theorycrafting notebook; entries are added by the site operator from the command line, and this page is read-only.</p>
+    <p class="riot-disclaimer">TheoryLabs isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.</p>
   </footer>
+  <script src="/static/site.js"></script>
   <script src="/static/art.js"></script>
   <script src="/static/experiments.js"></script>
 </body>

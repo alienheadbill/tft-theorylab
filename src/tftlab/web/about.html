@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>About · TheoryLabs</title>
+  <meta name="description" content="What TheoryLabs is, how to use it, and what it is not: aggregate TFT analytics and theorycrafting from historical ranked matches." />
+  <meta name="color-scheme" content="dark" />
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body class="info-body">
+  <a class="skip-link" href="#main-content">Skip to the content</a>
+
+  <header class="cover cover-compact">
+    <div class="cover-top">
+      <p class="cover-kicker">about TheoryLabs</p>
+      <nav class="cover-nav" aria-label="Main">
+        <a href="/#discoveries">discover</a>
+        <a href="/champions">champions</a>
+        <a href="/experiments">experiments</a>
+        <a href="/about" aria-current="page">about</a>
+        <a href="/methodology">methodology &amp; data</a>
+      </nav>
+    </div>
+    <h1><span class="scribble">About TheoryLabs</span></h1>
+  </header>
+
+  <main id="main-content">
+    <article class="page prose">
+<p class="cover-intro">TheoryLabs is an <strong>aggregate Teamfight Tactics analytics and theorycrafting tool</strong> for
+      studying champions, items, teammates, traits and underexplored composition ideas. It turns many historical ranked
+      matches into evidence you can read before or after you play, so you can understand <em>why</em> a line works
+      instead of copying a tier list.</p>
+
+      <h2>How a player uses it</h2>
+      <ol>
+        <li><strong>Pick a question.</strong> &ldquo;Which carries are doing well while almost nobody plays them?&rdquo; or
+          &ldquo;I want to carry with this champion. What does the evidence say?&rdquo;</li>
+        <li><strong>Read the evidence.</strong> Every number comes with its sample size and the balance window (patch) it was
+          measured in. Small samples are flagged and pulled toward the average.</li>
+        <li><strong>Decide for yourself.</strong> TheoryLabs explains patterns; it never tells you what to do in a game.</li>
+      </ol>
+
+      <h2>Discover</h2>
+      <p>The <a href="/#discoveries">Discover</a> page lists carry lines that perform well relative to how rarely they are
+        played, ranked by an Opportunity Score that rewards strong, low-usage lines and discounts thin evidence. Opening a
+        line shows how often committed boards actually hit three stars, which teammates, item packages and traits appear
+        with it, and how those boards placed.</p>
+
+      <h2>Champion Investigation</h2>
+      <p><a href="/champions">Champion Investigation</a> answers &ldquo;I want this champion to be my carry: what can I
+        realistically build around it, and why?&rdquo; It summarises common completed items and item pairs, the item
+        components those items are built from, frequent teammates and recurring unit cores, trait counts, and the star-level
+        evidence, each with how many boards support it.</p>
+
+      <h2>Experiments</h2>
+      <p><a href="/experiments">Experiments</a> is a theorycrafting notebook: composition ideas worth testing, with research
+        notes. Every entry carries an evidence stamp. An idea stays <strong>Theorycrafted</strong> until real match evidence is
+        attached; it is never presented as a proven or new composition. Entries are written by the site operator; the page
+        is read-only.</p>
+
+      <h2>Observed evidence vs theorycrafting</h2>
+      <dl>
+        <dt>Observed</dt><dd>A statistic computed from indexed matches of the active data source.</dd>
+        <dt>Theorycrafted</dt><dd>An idea or reasoning that has not been measured. Shown separately and labelled.</dd>
+      </dl>
+      <p>The note at the top of each data page names the active data source. When the site runs on <strong>demo
+        data</strong>, every number is synthetic and is labelled that way; it is never presented as real match evidence.</p>
+
+      <h2>What TheoryLabs is not</h2>
+      <div class="callout">
+        <p>TheoryLabs is <strong>not a live gameplay assistant</strong>. It does not read or react to a game in progress,
+          has no overlay, does not track or scout opponents, does not give real-time or moment-to-moment instructions, and
+          does not automate any in-game decision or skill. All evidence is aggregate and historical, for study outside the
+          game.</p>
+      </div>
+
+      <h2>Data and methods</h2>
+      <p>See <a href="/methodology">Methodology &amp; data</a> for how matches are indexed, how a carry is defined, sample
+        sizes, freshness and limitations. Privacy and the site's terms are on the <a href="/privacy">Privacy</a> and
+        <a href="/terms">Terms</a> pages.</p>
+    </article>
+  </main>
+
+  <footer class="colophon site-footer">
+    <nav class="footer-nav" aria-label="Site"><a href="/#discoveries">Discover</a><a href="/champions">Champions</a><a href="/experiments">Experiments</a><a href="/about">About</a><a href="/methodology">Methodology &amp; data</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+    <p>TheoryLabs &middot; aggregate historical match statistics for study before and after you play; not a live in-game assistant.</p>
+    <p class="riot-disclaimer">TheoryLabs isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.</p>
+  </footer>
+
+</body>
+</html>

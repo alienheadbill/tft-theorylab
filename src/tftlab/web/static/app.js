@@ -174,7 +174,8 @@ async function loadBalanceWindows() {
 }
 
 function setSource(demo) {
-  const label = demo ? 'demo dataset' : 'live Riot data';
+  // site.js owns the wording (and the source banner); this only keeps the ledger in step.
+  const label = window.TL_sourceLabel ? window.TL_sourceLabel(demo) : (demo ? 'demo data (synthetic)' : 'indexed match data');
   document.querySelector('#data-mode').textContent = label;
   document.querySelector('#footer-mode').textContent = label;
 }

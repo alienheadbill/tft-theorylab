@@ -276,13 +276,40 @@ Discovery's expensive part, the window-wide carry population plus partner/item/t
 
 ## Production safety
 
-`webapp._resolve_database` (used by every API endpoint) recognizes three states, and never silently blurs them together:
+`webapp._resolve_source` (used by every API endpoint) selects the data source explicitly with **`TFT_DATA_SOURCE`**, and never silently blurs sources together:
 
-1. **`DATABASE_URL` unset** -- local/dev only. Falls back to a populated local SQLite file, then the deterministic demo dataset. This is the *only* case where demo data is ever served.
+| `TFT_DATA_SOURCE` | Source | Labelled as | If unusable |
+|---|---|---|---|
+| `database` | `DATABASE_URL` (production Postgres), read-only; must be set | indexed ranked matches (observed) | HTTP 503 |
+| `snapshot` | a bundled read-only SQLite snapshot of real indexed matches at `TFT_SNAPSHOT_PATH` (default `data/snapshot/theorylabs-snapshot.sqlite3`), optional `<path>.json` manifest such as `{"exported_at": ...}` | analytics snapshot (observed) | HTTP 503 (missing, empty or invalid file) |
+| `demo` | the deterministic **synthetic** demo dataset, no database at all | demo data (synthetic) | -- |
+| unset | automatic: `DATABASE_URL` if set, else a populated local SQLite file (`TFT_DB_PATH`), else demo | as above (`local database` for the local file) | as above |
+
+- `snapshot` or `demo` combined with a set `DATABASE_URL`, `database` without one, or an unknown value is refused with a 503 (`"the data source is misconfigured"`). A configured production database is never silently ignored or replaced by fake data.
+- 503 bodies carry only a fixed public message, never a path, DSN or credential.
+- Snapshots and the production database are opened read-only. A request never creates or writes them.
+
+In automatic mode the original three states still apply:
+
+1. **`DATABASE_URL` unset** -- local/dev only. Falls back to a populated local SQLite file, then the deterministic demo dataset.
 2. **`DATABASE_URL` set and reachable** -- always treated as live (`"demo": false`), even with zero matches so far (a fresh production database before first ingest). It is never swapped for demo data just because it's empty.
 3. **`DATABASE_URL` set but unreachable** -- every endpoint returns **HTTP 503** with `{"ok": false, "demo": false, "status": "error", "error": "..."}` instead of falling through to demo data. The error message never includes the DSN or credentials. This is intentional: if you've pointed the app at a real database, a connection failure is a production incident to see immediately (including via Render's own health check, since `render.yaml` points `healthCheckPath` at `/api/health`), not something to paper over.
 
 `/api/health` (and every other endpoint) also reports `backend` (`"sqlite"`/`"postgres"`), the active `balance_window`, and `matches`/`participants` counts, so "is this real data, and how much of it" is always answerable from one request.
+
+`GET /api/source` describes the active source in full:
+- `mode` and `label`;
+- `observed` / `synthetic` (`demo` mirrors `synthetic`);
+- match and board counts and `latest_game_datetime`;
+- freshness: `age_days`, and `stale` (latest game older than `TFT_STALE_AFTER_DAYS`, default 14). Synthetic data gets no freshness verdict, because its dates are generated.
+- the snapshot manifest, if any.
+
+Every page shows this in a banner at the top (`static/site.js`):
+- **Demo data** (amber): every number and date is synthetic. Evidence stamps on the page read "Observed · demo".
+- **Historical match data** or **Analytics snapshot**: counts and the latest game date.
+- **Older data**: the data is stale.
+- **No matches indexed yet**: the source is connected but empty.
+- **Data unavailable**: the source failed. The explanatory pages still work.
 
 ## Operational CLI commands
 
@@ -309,6 +336,8 @@ Every carry/discovery endpoint below is balance-window scoped (`?balance_window=
 - `GET /api/experiments`, `GET /api/experiments/{slug-or-id}` -- the read-only theorycraft notebook (see below); not balance-window scoped
 - `GET /api/champions` -- every current-set champion (the art manifest's list) with display name, cost, slug, art and its carry-board count in the window (`carry_games`: committed player boards, eight per match), from one light count query
 - `GET /api/champions/{name-or-id}` -- one champion's carry investigation (`top_n` rows per list); the key is a name or slug (`khazix`, `Kha'Zix`) or a Riot id. Unknown champions are 404; a known champion with no carry games in the window is a 200 with `carry: null` (and `how_to_play: null`). Additive fields: `how_to_play` (the concise layer: `component_direction`, `items`, `pairs`, `builds`, `teammates`, `recurring_cores`, `trait_directions`, `star_signal`, `summary`), `items.individual` and `cores` (recurring 3–4 unit cores; see Recurring cores)
+- `GET /api/source` -- the active data source (mode, label, observed/synthetic, counts, latest game, freshness, snapshot manifest); see "Production safety"
+- `GET /riot.txt` -- Riot site verification string from `RIOT_SITE_VERIFICATION` (plain text; 404 when unset)
 
 ## Frontend: Discovery Dashboard
 
@@ -478,6 +507,25 @@ All of these write only through the CLI. The website remains read-only.
 
 This project is designed around aggregate/post-game analysis and static recommendations. It should not become a live tool that reads opponents' boards or dynamically dictates decisions during a match.
 
+**Public compliance pages** (static, no data source needed):
+- `/about`: what TheoryLabs is, how to use it, and what it is not;
+- `/methodology` (alias `/data`): data source, balance windows, carry definition, sample sizes, observed vs inferred vs theorycrafted, limitations, freshness;
+- `/privacy`: describes the site as it actually is: no accounts, cookies, browser storage, analytics or third-party requests. It also covers hosting logs and Riot data usage;
+- `/terms`: simple terms for a non-commercial individual project.
+
+Every page links to Discover, Champions, Experiments, About and Methodology in the header, and to all of those plus Privacy and Terms in the footer. The footer carries Riot's legal boilerplate from the General Policies, verbatim: "TheoryLabs isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc."
+
+**Riot site verification (`/riot.txt`):** the site serves the value of the **`RIOT_SITE_VERIFICATION`** environment variable at `/riot.txt`.
+- **Format:** plain text, `Cache-Control: no-store`, surrounding whitespace removed, nothing before or after the string.
+- **Unset:** a 404, never a placeholder.
+- **API-key guard:** a value that looks like a Riot API key (`RGAPI-...`) or equals `RIOT_API_KEY` is refused with a 404. The web app itself uses no Riot API key.
+
+When the Developer Portal gives you the verification string:
+1. Render dashboard → the public web service → **Environment** → add `RIOT_SITE_VERIFICATION` with exactly that string.
+2. Save, which redeploys the service.
+3. Open `https://<your-domain>/riot.txt` and check it shows only the string.
+4. Then verify in the Developer Portal.
+
 ## Website
 
 Milestone 1.5 includes a functional web UI for the discovery engine.
@@ -489,10 +537,12 @@ tftlab web
 
 Then open `http://127.0.0.1:8000`.
 
-The website automatically uses `DATABASE_URL` (Postgres) when configured -- reachable is enough, even with zero matches so far -- or `TFT_DB_PATH` (SQLite) when that file contains matches. Only when neither is configured/populated does it create a deterministic synthetic demo dataset and clearly label the UI as **Demo dataset**. See "Production safety" above for exactly what happens if a configured `DATABASE_URL` is unreachable (a loud 503, not a quiet fallback to demo). Use demo data only to test the product flow; it is not live TFT performance data.
+The website uses the data source selected by `TFT_DATA_SOURCE` (see "Production safety"). Unset, it automatically uses `DATABASE_URL` (Postgres) when configured -- reachable is enough, even with zero matches so far -- or `TFT_DB_PATH` (SQLite) when that file contains matches, and otherwise the deterministic synthetic demo dataset, labelled **demo data (synthetic)** in a banner on every page. See "Production safety" above for exactly what happens if a configured `DATABASE_URL` is unreachable (a loud 503, not a quiet fallback to demo). Use demo data only to test the product flow; it is not live TFT performance data.
 
 Current web pages/features:
-- TFT Theory Lab landing/discovery page
+- TheoryLabs landing/discovery page
+- About, Methodology & data, Privacy and Terms pages
+- Data-source banner (demo / snapshot / indexed matches, freshness, unavailable)
 - 1/2/3/4/5-cost filter
 - Minimum-sample filter
 - Hidden reroll candidate cards
@@ -512,9 +562,11 @@ The repo includes a `render.yaml` Blueprint that runs the FastAPI app with:
 uvicorn tftlab.webapp:app --host 0.0.0.0 --port $PORT
 ```
 
-With no `DATABASE_URL` configured, the app automatically falls back to a generated demo dataset, so it boots and serves data even with zero configuration. `/api/health` and `/api/carries` report `"demo"` (true/false) and `"backend"` (`"sqlite"`/`"postgres"`) so it's always clear which one is live. Once `DATABASE_URL` **is** set, that changes: see "Production safety" above -- an unreachable configured database now fails loudly (HTTP 503 from every endpoint, including `/api/health`) instead of quietly serving demo data. Since `render.yaml`'s `healthCheckPath` points at `/api/health`, this means Render will correctly flag the service as unhealthy if the configured database goes down -- that's the intended behavior, not a bug to work around.
+**Zero-cloud-database public site:** set `TFT_DATA_SOURCE=demo` (synthetic, labelled on every page) and leave `DATABASE_URL` unset. The site then needs no database service at all, so it keeps working when a cloud database is unavailable or out of quota. When a real analytics snapshot is available, ship it at `TFT_SNAPSHOT_PATH` and switch to `TFT_DATA_SOURCE=snapshot`; the frontend is unchanged. Heavy ingestion and analytics are meant to run on the owner's machine, which is never exposed to the Internet; that is a separate follow-up.
 
-**Current production hosting:** the web/API service runs on Render in **Ohio** and its runtime `DATABASE_URL` points to the Neon **Ohio** production branch (`neondb`). `render.yaml` pins `region: ohio` and declares `DATABASE_URL` as `sync: false`, so the credential stays in Render's environment rather than the repository. After any hosting/database change, confirm `/api/health` reports `"backend": "postgres"` and `"demo": false` before relying on it. The previous Oregon Render Postgres database is temporarily retained as a rollback snapshot, not as the active production database.
+With no `DATABASE_URL` and no `TFT_DATA_SOURCE` configured, the app automatically falls back to a generated demo dataset, so it boots and serves data even with zero configuration. `/api/health` and `/api/carries` report `"demo"` (true/false) and `"backend"` (`"sqlite"`/`"postgres"`) so it's always clear which one is live. Once `DATABASE_URL` **is** set, that changes: see "Production safety" above -- an unreachable configured database now fails loudly (HTTP 503 from every endpoint, including `/api/health`) instead of quietly serving demo data. Since `render.yaml`'s `healthCheckPath` points at `/api/health`, this means Render will correctly flag the service as unhealthy if the configured database goes down -- that's the intended behavior, not a bug to work around.
+
+**Current production hosting:** the web/API service runs on Render in **Ohio** (`tft-theory-lab-ohio.onrender.com`, the service `verify-ohio.yml` checks). Until the operator switches it to the zero-cloud-database mode above, its runtime `DATABASE_URL` points to the Neon **Ohio** production branch (`neondb`). `render.yaml` pins `region: ohio` and declares `DATABASE_URL` as `sync: false`, so the credential stays in Render's environment rather than the repository. After any hosting/database change, confirm `/api/health` reports `"backend": "postgres"` and `"demo": false` before relying on it. The previous Oregon Render Postgres database is temporarily retained as a rollback snapshot, not as the active production database.
 
 ## Live ingestion via GitHub Actions
 
