@@ -3,6 +3,29 @@ __pycache__/
 .pytest_cache/
 *.pyc
 *.egg-info/
+
+# Secrets: only the template is committed.
 .env
+.env.*
+!.env.example
+
+# Local databases and SQLite side files (WAL/shared-memory/rollback journals).
 data/*.sqlite3
 data/*.db
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
+*.db-wal
+*.db-shm
+*.db-journal
+
+# The local collector's private working area: raw database (Riot payloads,
+# PUUID sampling ledger), backups, run reports, generated public snapshots.
+data/local/
+
+# Generated public snapshot artifacts and temporary export/build files,
+# wherever they are written.
+theorylabs-public-snapshot*
+*.sqlite3.building
+*.sqlite3.partial
+*.sqlite3.gz

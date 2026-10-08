@@ -88,6 +88,11 @@ Riot access currently uses a **development key that must be regenerated regularl
 - **Scheduled collection code (IMPLEMENTED):** `live-ingest.yml` is on `main` with a six-hour schedule and fixed conservative settings. It uses **bounded** mode, not maximum: both production maximum-mode runs failed with 401 during deep ladder enumeration, so maximum stays manual-only until that is diagnosed. 401/403 now fail a bounded run with no ledger progress, as in maximum mode.
 - **Operational verification (IMPLEMENTED):** a scheduled production run was observed successfully on 2026-09-30 (`36718342282`), including persisted ingest provenance. After the Neon cutover, an owner-only bounded smoke also succeeded against Neon (`36763413989`): 3 Challenger seeds × 3 histories, 10/10 Riot requests returned 200, 4 new ranked matches were inserted, validation passed and Discovery smoke passed.
 - **Next (ACCEPTED/CURRENT):** monitor scheduled-run yield/error/storage telemetry over multiple runs, then diagnose the maximum-mode deep-ladder 401 before any change to scheduled bounded mode. Do not build a new ingestion system.
+- **Zero-cost local collector (IMPLEMENTED; first real local run PENDING):**
+  - `tftlab local-collect` turns a personal computer into the collector, using one SQLite file (`data/local/theorylabs.sqlite3`). There is no Postgres, Docker, Neon or other cloud database.
+  - The run: preflight (local target, disk, current trusted window, Riot key, CommunityDragon), a consistent backup with retention, the existing bounded `ingest_ladder` (15/15/20/25/25 × 10, current trusted window, `10:10` ceiling), validation, then Discovery preparation for the current window only. It ends with a plain-language report.
+  - Also: `local-status` (offline), `local-snapshot` (verified sanitized export), `local-init`, `local-set-key`, and launchers in `scripts/`. Guide: `docs/local-collector.md`.
+  - It never reads `DATABASE_URL`, refuses database URLs, and has no scheduling.
 - **Patch 18.4 window (REGISTERED):** `2026-10-08T07:00:00Z` .. `2026-10-20T00:00:00Z` (exclusive), from Riot's patch schedule. 18.4 is scheduled for 2026-10-07 PT and 18.5 for 2026-10-21 PT.
   - The 18.3 → 18.4 transition (`2026-10-06T00:00Z` .. `2026-10-08T07:00Z`) stays unresolved.
   - `--current-trusted-window` collection works again from 2026-10-08T07:00Z, locally against SQLite. The scheduled GitHub ingest uses Neon, so disable it or keep it disabled if Neon should not be written.
@@ -234,7 +239,7 @@ Riot access currently uses a **development key that must be regenerated regularl
   - The manual workflow "Build public snapshot from encrypted backup" turns the 2026-10-05 encrypted backup (artifact expires 2026-10-13) into a downloadable snapshot artifact, without Neon.
   - Next steps: dispatch it, inspect the size and contents, choose the publication path (for example a GitHub Release asset), and only then switch Render to `TFT_DATA_SOURCE=snapshot`.
 - **Before applying for a production key (PENDING):**
-  - publish a real analytics snapshot (built by the owner's local data engine) so the reviewed site shows observed evidence rather than demo data;
+  - publish a real analytics snapshot (built by the owner's local data engine: `tftlab local-collect`, then `tftlab local-snapshot`) so the reviewed site shows observed evidence rather than demo data;
   - register the product, then set `RIOT_SITE_VERIFICATION` from the Developer Portal;
   - re-check the current Riot policies at submission time.
 

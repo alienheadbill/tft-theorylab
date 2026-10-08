@@ -23,6 +23,39 @@ source .venv/bin/activate        # Windows: .venv\\Scripts\\activate
 pip install -e ".[dev]"          # add ",postgres" too if you're testing against Postgres locally
 ```
 
+### Collect data on your own computer (zero cost)
+
+The recommended way to collect real data: one SQLite file on a personal computer, with no Postgres, Docker or cloud database. Python 3.11+ is the only thing to install. The step-by-step guide for non-programmers is in **[docs/local-collector.md](docs/local-collector.md)**.
+
+```bash
+tftlab local-init        # once: creates data/local/ and .env (never overwrites either)
+tftlab local-set-key     # paste a fresh Riot development key (hidden prompt, saved in .env)
+tftlab local-status      # offline: how much data is stored, current patch window, backups
+tftlab local-collect     # THE daily command (or scripts/local-collect.cmd / .ps1 / .sh)
+tftlab local-snapshot    # optional: sanitized public website snapshot (never uploaded)
+```
+
+`local-collect` runs these steps in order:
+
+1. **Preflight**, before anything changes:
+   - local SQLite target only;
+   - disk space;
+   - the current trusted window from `UNREAL_PATCH_REGISTRY`;
+   - the Riot key, with `verify-riot`'s check;
+   - CommunityDragon costs.
+2. **Backup:** a consistent SQLite online backup into `data/local/backups/`; the newest 7 are kept.
+3. **Collection:** the existing `ingest_ladder`, bounded, with 15/15/20/25/25 Challenger/Grandmaster/Master/Diamond/Platinum seeds × 10 matches. It uses the current trusted window and the production `10:10` rate ceiling.
+4. **Validation:** `validate_live_data` for that window's balance window(s).
+5. **Discovery:** `prepare_window` for those windows only.
+6. **Report:** plain language, saved as JSON in `data/local/reports/`. It has no key, PUUIDs or match ids.
+
+Safety rules:
+
+- The raw database is `data/local/theorylabs.sqlite3`, or `TFT_LOCAL_DB_PATH` / `--db`.
+- `DATABASE_URL` is never read, and database URLs are refused, so these commands cannot write to a cloud database.
+- An expired key, a missing key or no current trusted window stops the run before the database is touched.
+- A severe validation failure keeps the data, but blocks the "success" outcome and snapshot readiness.
+
 ### Run without a Riot API key
 
 ```bash
@@ -318,6 +351,7 @@ Every page shows this in a banner at the top (`static/site.js`):
 
 ## Operational CLI commands
 
+- `tftlab local-init` / `local-set-key` / `local-status [--check-riot]` / `local-collect` / `local-snapshot [--balance-window W]` -- the zero-cost local collector on one SQLite file (see "Collect data on your own computer" above and [docs/local-collector.md](docs/local-collector.md)). They never use `DATABASE_URL` and refuse database URLs.
 - `tftlab verify-riot` -- one minimal authenticated Riot request to confirm `RIOT_API_KEY` works, without ingesting anything.
 - `tftlab ingest-riot [--challenger-seeds N] [--grandmaster-seeds N] [--master-seeds N] [--diamond-seeds N] [--platinum-seeds N] [--max-ladder-pages N] | [--players N] [--sampling challenger|high_elo]; [--matches-per-player N] [--current-trusted-window | --start-time ISO8601] [--allow-degraded-costs]` -- see "Run on live Riot data" above.
 - `tftlab validate-live-data [--db ...] [--balance-window ...] [--no-check-metadata]` -- data-integrity checks against ingested data for one balance window: total matches/participants, how many of those matches are ranked-TFT vs. a non-target queue (visibility only -- never deletes non-target rows itself), % of units with a present shop cost, CommunityDragon champion coverage and unknown champion/item/trait IDs (cross-checked against a live CommunityDragon fetch unless `--no-check-metadata`; reported as "skipped" rather than a possibly-wrong empty list/0% when metadata isn't available), matches missing a `balance_window`, malformed placements, duplicate match IDs, participants with no units at all (split in two, see below), and matches with an unresolved Unreal-era patch (see "Unreal-era client patch resolution" above). **A missing `balance_window` is split into two counts**: `matches_missing_balance_window` (every such match) and `unexpected_missing_balance_window` (everything except matches intentionally left unresolved because their masked-Unreal `game_version` doesn't fall in any usable `UNREAL_PATCH_REGISTRY` window -- a `NULL` patch, e.g. a totally missing `game_version`, always counts as unexpected). **Participants without units are split in two as well**: `source_empty_participants` -- the participant's own raw Riot entry (same position in `info.participants`, same placement, same participant count) has a `units` field that is missing or `[]`, so storage is faithful to the source (first seen in production on 18.3: a 2nd-place, level-9 board Riot sent with no units) -- and `unexpected_participants_without_units` -- the raw entry lists units that aren't stored, or the raw/stored mapping can't be trusted. Source-empty boards are printed as a warning and kept exactly as stored; only the unexpected kind is severe. **Exits non-zero** on the structural checks -- `unexpected_missing_balance_window`, malformed placement, duplicate ID, `unexpected_participants_without_units`. Intentionally-unresolved Unreal rollout-gap matches are still printed prominently as a warning (with their own earliest/latest `game_datetime`), but do **not** by themselves fail validation: a production database sitting entirely inside a documented Unreal rollout gap ends "No severe integrity issues detected." Unknown IDs, a low cost-presence/metadata-coverage rate, and non-target-queue matches are also printed as warnings, not failures, since those can legitimately happen right after a patch before CommunityDragon updates, or before this milestone's queue filtering existed. Also prints store-wide (not window-scoped) diagnostics -- raw `game_version`/resolved-patch/balance-window distributions and the earliest/latest `game_datetime` -- specifically to help identify real Unreal-era patch cutover timestamps; never prints full match payloads.
