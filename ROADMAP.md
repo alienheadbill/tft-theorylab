@@ -48,7 +48,11 @@ Before starting substantial new work, map it to a milestone below or to a concre
 Details are in the README.
 
 - **Riot TFT ingestion** (`tftlab ingest-riot`, `live-ingest.yml`): scheduled every 6 hours (bounded mode), manually dispatched, and guarded by the shared production concurrency group.
-- **Production hosting/data path:** Render web/API in **Ohio** reads Neon Postgres in **AWS us-east-2 (Ohio)**. GitHub production ingestion, diagnostics and encrypted backups target the same Neon database; the former Render Postgres database is retained temporarily as rollback.
+- **Production hosting/data path (LIVE):**
+  - **Public site:** free Render web/API in **Ohio**, `TFT_DATA_SOURCE=snapshot`, serving the verified, sanitized **18.3** snapshot from the GitHub Release `public-snapshot-18.3-20261005`. There is no `DATABASE_URL` and no cloud database.
+  - **Data engine:** local SQLite on the owner's computer, via `tftlab local-collect` and then `tftlab local-snapshot`.
+  - **Neon (Ohio):** the former production database. It is now legacy, and only the GitHub cloud workflows still target it.
+  - **The older Render Postgres database:** legacy rollback material.
 - **Raw match storage** (SQLite or Postgres), with provenance:
   - the `seed_samples` rotation ledger;
   - `match_discoveries`;
@@ -88,6 +92,11 @@ Riot access currently uses a **development key that must be regenerated regularl
 - **Scheduled collection code (IMPLEMENTED):** `live-ingest.yml` is on `main` with a six-hour schedule and fixed conservative settings. It uses **bounded** mode, not maximum: both production maximum-mode runs failed with 401 during deep ladder enumeration, so maximum stays manual-only until that is diagnosed. 401/403 now fail a bounded run with no ledger progress, as in maximum mode.
 - **Operational verification (IMPLEMENTED):** a scheduled production run was observed successfully on 2026-09-30 (`36718342282`), including persisted ingest provenance. After the Neon cutover, an owner-only bounded smoke also succeeded against Neon (`36763413989`): 3 Challenger seeds × 3 histories, 10/10 Riot requests returned 200, 4 new ranked matches were inserted, validation passed and Discovery smoke passed.
 - **Next (ACCEPTED/CURRENT):** monitor scheduled-run yield/error/storage telemetry over multiple runs, then diagnose the maximum-mode deep-ladder 401 before any change to scheduled bounded mode. Do not build a new ingestion system.
+- **Zero-cost local collector (IMPLEMENTED; first real local run PENDING):**
+  - `tftlab local-collect` turns a personal computer into the collector, using one SQLite file (`data/local/theorylabs.sqlite3`). There is no Postgres, Docker, Neon or other cloud database.
+  - The run: preflight (local target, disk, current trusted window, Riot key, CommunityDragon), a consistent backup with retention, the existing bounded `ingest_ladder` (15/15/20/25/25 × 10, current trusted window, `10:10` ceiling), validation, then Discovery preparation for the current window only. It ends with a plain-language report.
+  - Also: `local-status` (offline), `local-snapshot` (verified sanitized export), `local-init`, `local-set-key`, and launchers in `scripts/`. Guide: `docs/local-collector.md`.
+  - It never reads `DATABASE_URL`, refuses database URLs, and has no scheduling.
 - **Patch 18.4 window (REGISTERED):** `2026-10-08T07:00:00Z` .. `2026-10-20T00:00:00Z` (exclusive), from Riot's patch schedule. 18.4 is scheduled for 2026-10-07 PT and 18.5 for 2026-10-21 PT.
   - The 18.3 → 18.4 transition (`2026-10-06T00:00Z` .. `2026-10-08T07:00Z`) stays unresolved.
   - `--current-trusted-window` collection works again from 2026-10-08T07:00Z, locally against SQLite. The scheduled GitHub ingest uses Neon, so disable it or keep it disabled if Neon should not be written.
@@ -223,25 +232,26 @@ Riot access currently uses a **development key that must be regenerated regularl
 - **Goal:** a functioning, policy-compliant product that is suitable for persistent Riot production API access.
 - Development-key collection is temporary infrastructure.
 - Policy-sensitive features (overlays, live assistance) need the current Riot policy checked before any implementation. The README's "Riot policy boundary" still applies: aggregate and post-game analysis only.
-- **Zero-cost public site and Riot-facing pages (IMPLEMENTED; operator switch PENDING):**
+- **Zero-cost public site and Riot-facing pages (IMPLEMENTED; LIVE in snapshot mode):**
   - **Data source:** the public site runs without any cloud database. `TFT_DATA_SOURCE=demo` gives synthetic data, labelled on every page; `snapshot` gives a bundled read-only snapshot of real matches. A configured but broken `DATABASE_URL` is still a loud 503, never fake data.
   - **Pages:** About, Methodology & data, Privacy and Terms pages; Riot's legal boilerplate in every footer; `/riot.txt` from `RIOT_SITE_VERIFICATION`.
   - **Positioning:** aggregate, historical study before or after play; explicitly not a live in-game assistant, overlay or scouting tool.
-  - **Operator steps:** on the public Render service, delete `DATABASE_URL` and `RIOT_API_KEY`, then set `TFT_DATA_SOURCE=demo`.
-- **Real public snapshot path (IMPLEMENTED; production snapshot PENDING operator review):**
+  - **Operator steps (DONE):** `DATABASE_URL` and `RIOT_API_KEY` were removed from the public Render service; it ran `TFT_DATA_SOURCE=demo` until the snapshot switch below.
+- **Real public snapshot path (IMPLEMENTED; LIVE):**
   - `tftlab export-public-snapshot` builds a sanitized, verified SQLite snapshot: opaque match ids, no PUUIDs, raw payloads or collection ledger, and versioned provenance.
   - It is fail-closed: synthetic or demo data can never be exported or served as observed.
   - The manual workflow "Build public snapshot from encrypted backup" turns the 2026-10-05 encrypted backup (artifact expires 2026-10-13) into a downloadable snapshot artifact, without Neon.
   - **Done:** run `37791848207` produced the verified 18.3 snapshot: 12,348 matches, 98,784 boards, `.gz` 45,992,565 bytes, sha256 `ac3ff85a…`.
-  - **Distribution bridge (IMPLEMENTED; release and switch PENDING):**
+  - **Distribution bridge (IMPLEMENTED; LIVE):**
     - the manual "Publish public snapshot release" workflow publishes a verified snapshot artifact as an immutable GitHub Release (`public-snapshot-18.3-20261005`) with only the `.gz` and its manifest;
     - `tftlab fetch-snapshot` (Render build and start) downloads it, checks the sha256, verifies it, then installs it atomically; it is a no-op in demo mode.
-  - **Next:**
-    1. dispatch the release before the artifact expires (2026-10-15T14:24Z);
-    2. set the four Render variables, with `DATABASE_URL` absent;
-    3. confirm `/api/source`.
+  - **Done:**
+    - release `public-snapshot-18.3-20261005` was published on 2026-10-08 with exactly the `.gz` (45,992,565 bytes) and its manifest;
+    - Render was switched to `TFT_DATA_SOURCE=snapshot`, with the four `TFT_SNAPSHOT_*`/`TFT_DATA_SOURCE` variables set and `DATABASE_URL` absent;
+    - the public site now serves the 18.3 snapshot.
+  - **Next:** publish later patches the same way from the local data engine (`tftlab local-snapshot`, then a new versioned release).
 - **Before applying for a production key (PENDING):**
-  - publish a real analytics snapshot (built by the owner's local data engine) so the reviewed site shows observed evidence rather than demo data;
+  - the reviewed site now shows observed evidence (the 18.3 snapshot), not demo data. Keep it current with snapshots from the owner's local data engine (`tftlab local-collect`, then `tftlab local-snapshot`);
   - register the product, then set `RIOT_SITE_VERIFICATION` from the Developer Portal;
   - re-check the current Riot policies at submission time.
 

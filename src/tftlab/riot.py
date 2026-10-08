@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+from dataclasses import dataclass
 from typing import Any, Callable
 
 import httpx
@@ -67,6 +68,30 @@ def classify_riot_error(message: str) -> str:
     if status == 429:
         return "rate_limited"
     return f"http_{status}"
+
+
+@dataclass(frozen=True)
+class RiotKeyCheck:
+    """Outcome of `check_riot_key`. `category` is `classify_riot_error`'s
+    label when the check failed; `detail` is the client's (key-redacted)
+    error message for the Challenger league request, which carries no
+    player identifiers."""
+
+    ok: bool
+    category: str | None = None
+    detail: str = ""
+    challenger_entries: int = 0
+
+
+def check_riot_key(client: Any) -> RiotKeyCheck:
+    """Verify an API key with one minimal authenticated request (the
+    Challenger league list). Shared by `tftlab verify-riot` and the local
+    collector's preflight; ingests nothing and never sees the key itself."""
+    try:
+        payload = client.challenger()
+    except RiotApiError as exc:
+        return RiotKeyCheck(False, classify_riot_error(str(exc)), str(exc))
+    return RiotKeyCheck(True, challenger_entries=len(payload.get("entries") or []))
 
 
 #: Riot method ids (`<api service>.<method>`, as the Riot API reference

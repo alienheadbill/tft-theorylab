@@ -23,6 +23,39 @@ source .venv/bin/activate        # Windows: .venv\\Scripts\\activate
 pip install -e ".[dev]"          # add ",postgres" too if you're testing against Postgres locally
 ```
 
+### Collect data on your own computer (zero cost)
+
+The recommended way to collect real data: one SQLite file on a personal computer, with no Postgres, Docker or cloud database. Python 3.11+ is the only thing to install. The step-by-step guide for non-programmers is in **[docs/local-collector.md](docs/local-collector.md)**.
+
+```bash
+tftlab local-init        # once: creates data/local/ and .env (never overwrites either)
+tftlab local-set-key     # paste a fresh Riot development key (hidden prompt, saved in .env)
+tftlab local-status      # offline: how much data is stored, current patch window, backups
+tftlab local-collect     # THE daily command (or scripts/local-collect.cmd / .ps1 / .sh)
+tftlab local-snapshot    # optional: sanitized public website snapshot (never uploaded)
+```
+
+`local-collect` runs these steps in order:
+
+1. **Preflight**, before anything changes:
+   - local SQLite target only;
+   - disk space;
+   - the current trusted window from `UNREAL_PATCH_REGISTRY`;
+   - the Riot key, with `verify-riot`'s check;
+   - CommunityDragon costs.
+2. **Backup:** a consistent SQLite online backup into `data/local/backups/`; the newest 7 are kept.
+3. **Collection:** the existing `ingest_ladder`, bounded, with 15/15/20/25/25 Challenger/Grandmaster/Master/Diamond/Platinum seeds × 10 matches. It uses the current trusted window and the production `10:10` rate ceiling.
+4. **Validation:** `validate_live_data` for that window's balance window(s).
+5. **Discovery:** `prepare_window` for those windows only.
+6. **Report:** plain language, saved as JSON in `data/local/reports/`. It has no key, PUUIDs or match ids.
+
+Safety rules:
+
+- The raw database is `data/local/theorylabs.sqlite3`, or `TFT_LOCAL_DB_PATH` / `--db`.
+- `DATABASE_URL` is never read, and database URLs are refused, so these commands cannot write to a cloud database.
+- An expired key, a missing key or no current trusted window stops the run before the database is touched.
+- A severe validation failure keeps the data, but blocks the "success" outcome and snapshot readiness.
+
 ### Run without a Riot API key
 
 ```bash
@@ -318,6 +351,7 @@ Every page shows this in a banner at the top (`static/site.js`):
 
 ## Operational CLI commands
 
+- `tftlab local-init` / `local-set-key` / `local-status [--check-riot]` / `local-collect` / `local-snapshot [--balance-window W]` -- the zero-cost local collector on one SQLite file (see "Collect data on your own computer" above and [docs/local-collector.md](docs/local-collector.md)). They never use `DATABASE_URL` and refuse database URLs.
 - `tftlab verify-riot` -- one minimal authenticated Riot request to confirm `RIOT_API_KEY` works, without ingesting anything.
 - `tftlab ingest-riot [--challenger-seeds N] [--grandmaster-seeds N] [--master-seeds N] [--diamond-seeds N] [--platinum-seeds N] [--max-ladder-pages N] | [--players N] [--sampling challenger|high_elo]; [--matches-per-player N] [--current-trusted-window | --start-time ISO8601] [--allow-degraded-costs]` -- see "Run on live Riot data" above.
 - `tftlab validate-live-data [--db ...] [--balance-window ...] [--no-check-metadata]` -- data-integrity checks against ingested data for one balance window: total matches/participants, how many of those matches are ranked-TFT vs. a non-target queue (visibility only -- never deletes non-target rows itself), % of units with a present shop cost, CommunityDragon champion coverage and unknown champion/item/trait IDs (cross-checked against a live CommunityDragon fetch unless `--no-check-metadata`; reported as "skipped" rather than a possibly-wrong empty list/0% when metadata isn't available), matches missing a `balance_window`, malformed placements, duplicate match IDs, participants with no units at all (split in two, see below), and matches with an unresolved Unreal-era patch (see "Unreal-era client patch resolution" above). **A missing `balance_window` is split into two counts**: `matches_missing_balance_window` (every such match) and `unexpected_missing_balance_window` (everything except matches intentionally left unresolved because their masked-Unreal `game_version` doesn't fall in any usable `UNREAL_PATCH_REGISTRY` window -- a `NULL` patch, e.g. a totally missing `game_version`, always counts as unexpected). **Participants without units are split in two as well**: `source_empty_participants` -- the participant's own raw Riot entry (same position in `info.participants`, same placement, same participant count) has a `units` field that is missing or `[]`, so storage is faithful to the source (first seen in production on 18.3: a 2nd-place, level-9 board Riot sent with no units) -- and `unexpected_participants_without_units` -- the raw entry lists units that aren't stored, or the raw/stored mapping can't be trusted. Source-empty boards are printed as a warning and kept exactly as stored; only the unexpected kind is severe. **Exits non-zero** on the structural checks -- `unexpected_missing_balance_window`, malformed placement, duplicate ID, `unexpected_participants_without_units`. Intentionally-unresolved Unreal rollout-gap matches are still printed prominently as a warning (with their own earliest/latest `game_datetime`), but do **not** by themselves fail validation: a production database sitting entirely inside a documented Unreal rollout gap ends "No severe integrity issues detected." Unknown IDs, a low cost-presence/metadata-coverage rate, and non-target-queue matches are also printed as warnings, not failures, since those can legitimately happen right after a patch before CommunityDragon updates, or before this milestone's queue filtering existed. Also prints store-wide (not window-scoped) diagnostics -- raw `game_version`/resolved-patch/balance-window distributions and the earliest/latest `game_datetime` -- specifically to help identify real Unreal-era patch cutover timestamps; never prints full match payloads.
@@ -705,15 +739,22 @@ tftlab fetch-snapshot && uvicorn tftlab.webapp:app --host 0.0.0.0 --port $PORT
 
 **Public snapshot (real data, still no cloud database):** see "Public website snapshots" below.
 
-**Zero-cloud-database public site:** set `TFT_DATA_SOURCE=demo` (synthetic, labelled on every page) and leave `DATABASE_URL` unset. The site then needs no database service at all, so it keeps working when a cloud database is unavailable or out of quota. To serve real data, publish a verified snapshot as a GitHub Release and set the four `TFT_SNAPSHOT_*`/`TFT_DATA_SOURCE` variables (see "Publishing a snapshot to the website"); the frontend is unchanged. Heavy ingestion and analytics are meant to run on the owner's machine, which is never exposed to the Internet; that is a separate follow-up.
+**Zero-cloud-database public site:** set `TFT_DATA_SOURCE=demo` (synthetic, labelled on every page) and leave `DATABASE_URL` unset. The site then needs no database service at all, so it keeps working when a cloud database is unavailable or out of quota. To serve real data, publish a verified snapshot as a GitHub Release and set the four `TFT_SNAPSHOT_*`/`TFT_DATA_SOURCE` variables (see "Publishing a snapshot to the website"); the frontend is unchanged. Ingestion and heavy analytics run on the owner's machine (`tftlab local-collect`; see "Collect data on your own computer"), which is never exposed to the Internet.
 
 With no `DATABASE_URL` and no `TFT_DATA_SOURCE` configured, the app automatically falls back to a generated demo dataset, so it boots and serves data even with zero configuration. `/api/health` and `/api/carries` report `"demo"` (true/false) and `"backend"` (`"sqlite"`/`"postgres"`) so it's always clear which one is live. Once `DATABASE_URL` **is** set, that changes: see "Production safety" above -- an unreachable configured database now fails loudly (HTTP 503 from every endpoint, including `/api/health`) instead of quietly serving demo data. Since `render.yaml`'s `healthCheckPath` points at `/api/health`, this means Render will correctly flag the service as unhealthy if the configured database goes down -- that's the intended behavior, not a bug to work around.
 
-**Current production hosting:** the web/API service runs on Render in **Ohio** (`tft-theory-lab-ohio.onrender.com`, the service `verify-ohio.yml` checks). Until the operator switches it to the zero-cloud-database mode above, its runtime `DATABASE_URL` points to the Neon **Ohio** production branch (`neondb`). `render.yaml` pins `region: ohio` and declares `DATABASE_URL` as `sync: false`, so the credential stays in Render's environment rather than the repository. After any hosting/database change, confirm `/api/health` reports `"backend": "postgres"` and `"demo": false` before relying on it. The previous Oregon Render Postgres database is temporarily retained as a rollback snapshot, not as the active production database.
+**Current production hosting (live architecture):** the public web/API service runs on free Render in **Ohio** (`tft-theory-lab-ohio.onrender.com`) with `TFT_DATA_SOURCE=snapshot`. It serves the verified, sanitized **18.3** snapshot from the immutable GitHub Release `public-snapshot-18.3-20261005` (published 2026-10-08), which `tftlab fetch-snapshot` installs at build/start time. The service has **no `DATABASE_URL`** and no `RIOT_API_KEY`, and no cloud database is involved. Render's health check, `/api/health`, reports `"source": "snapshot"`, `"demo": false` and `"backend": "sqlite"`, and `/api/source` shows the snapshot's own provenance. The snapshot was published on 2026-10-08; it holds 12,348 matches and 98,784 boards, with the latest game at `2026-10-05T06:12:03.635Z`. Neon (Ohio) was the production database before this switch. It is no longer read by the website; it remains only as a legacy target of the cloud workflows below. The older Oregon Render Postgres database is likewise legacy rollback material, not an active database.
+
+New data comes from the **local data engine**:
+1. `tftlab local-collect` collects into local SQLite on the owner's computer (Riot development key, current trusted window, pre-run backups; see "Collect data on your own computer" and [docs/local-collector.md](docs/local-collector.md)).
+2. `tftlab local-snapshot` exports a sanitized snapshot from it.
+3. A reviewed publication step (a GitHub Release, as above) makes it available to the site. Nothing is uploaded or deployed automatically.
 
 ## Live ingestion via GitHub Actions
 
-`.github/workflows/live-ingest.yml` pulls real Riot data into the Neon production database, **automatically every 6 hours**, on manual dispatch, and through the owner-only Ops Control smoke command `/ingest smoke`. Every path uses the same guarded steps: `tftlab verify-riot`, then `tftlab ingest-riot`, then `tftlab validate-live-data`, then `tftlab discovery-smoke`, then `tftlab prepare-discovery` (publishes the prepared Discovery analytics the website reads).
+> **Status: legacy cloud collection path.** The public website no longer reads Neon; it serves a published snapshot, and the recommended collector is the local one (`tftlab local-collect`). The workflow below still writes to the legacy Neon database whenever it runs (on its schedule unless disabled in the Actions UI, or when dispatched). Disable it if Neon should not be written.
+
+`.github/workflows/live-ingest.yml` pulls real Riot data into the legacy Neon database, **automatically every 6 hours** (while enabled), on manual dispatch, and through the owner-only Ops Control smoke command `/ingest smoke`. Every path uses the same guarded steps: `tftlab verify-riot`, then `tftlab ingest-riot`, then `tftlab validate-live-data`, then `tftlab discovery-smoke`, then `tftlab prepare-discovery` (publishes the prepared Discovery analytics the website reads).
 
 ### Scheduled collection (every 6 hours)
 
@@ -741,14 +782,14 @@ With no `DATABASE_URL` and no `TFT_DATA_SOURCE` configured, the app automaticall
 
 **Production database credentials, by purpose:**
 
-- The **Ohio Render web service** receives a runtime environment variable named `DATABASE_URL`; its value is the Neon Ohio production connection string.
-- **GitHub Actions production workflows** use the repository secret `NEON_DATABASE_URL` and expose it to the CLI as the process-level `DATABASE_URL` variable. Live ingest, production backups, patch diagnostics, and read-only research reports therefore all target the same Neon production database.
+- The **public Render web service has no `DATABASE_URL`**: it runs in snapshot mode, which refuses one.
+- **GitHub Actions cloud workflows** use the repository secret `NEON_DATABASE_URL` and expose it to the CLI as the process-level `DATABASE_URL` variable. Live ingest, cloud backups, patch diagnostics and read-only research reports therefore all target the legacy Neon database (not the website's data source).
 - The repository secret `DATABASE_URL` is temporarily retained as the **legacy Render Postgres rollback/migration-source URL**. Production workflows must not write to it after cutover.
 
 **Required GitHub repository secrets** (Settings → Secrets and variables → Actions → New repository secret, on the repo, not in any file):
 
 - `RIOT_API_KEY` -- the Riot API key used by live ingestion.
-- `NEON_DATABASE_URL` -- the Neon Ohio production branch Postgres connection string.
+- `NEON_DATABASE_URL` -- the legacy Neon Ohio Postgres connection string (cloud workflows only; the website does not use it).
 - `DATABASE_URL` -- legacy Render Postgres URL retained temporarily for rollback/migration tooling.
 - `DB_BACKUP_PASSPHRASE` -- independent encryption passphrase for verified database backup artifacts.
 

@@ -11,6 +11,7 @@ import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from .analytics import available_balance_windows, carry_commitment_stats, default_balance_window, discover_candidates
 from .cdragon import CommunityDragonClient, SetMetadata
@@ -43,7 +44,7 @@ from .sampling import SAMPLING_MODES
 from .unreal_patch import NoCurrentTrustedWindow
 from .unreal_patch import current_trusted_window as current_trusted_window_for
 from .normalize import CostLookup
-from .riot import RiotApiError, RiotClient, classify_riot_error
+from .riot import RiotApiError, RiotClient, check_riot_key, classify_riot_error
 from .storage import Database
 from .prepared_discovery import ANALYTICS_VERSION, prepare_window
 from .validate import validate_live_data
@@ -680,25 +681,23 @@ def verify_riot() -> None:
         console.print("[red]RIOT_API_KEY is not set.[/red]")
         raise typer.Exit(code=1)
 
-    try:
-        with RiotClient(
-            settings.riot_api_key, platform=settings.platform, region=settings.region
-        ) as client:
-            payload = client.challenger()
-    except RiotApiError as exc:
-        category = classify_riot_error(str(exc))
+    with RiotClient(
+        settings.riot_api_key, platform=settings.platform, region=settings.region
+    ) as client:
+        check = check_riot_key(client)
+    if not check.ok:
         messages = {
             "unauthorized": EXPIRED_KEY_MESSAGE,
             "forbidden": "403 Forbidden -- RIOT_API_KEY lacks permission for this endpoint/region.",
             "rate_limited": "429 Rate limited -- back off and retry later; Riot enforces per-key rate limits.",
             "network_error": "Network error contacting Riot API -- check connectivity and try again.",
         }
-        console.print(f"[red]Riot API verification failed: {messages.get(category, str(exc))}[/red]")
+        console.print(f"[red]Riot API verification failed: {messages.get(check.category, check.detail)}[/red]")
         raise typer.Exit(code=1)
 
-    entries = len(payload.get("entries", []))
     console.print(
-        f"[green]RIOT_API_KEY is valid.[/green] platform={settings.platform} challenger entries={entries}"
+        f"[green]RIOT_API_KEY is valid.[/green] platform={settings.platform} "
+        f"challenger entries={check.challenger_entries}"
     )
 
 
@@ -1099,6 +1098,304 @@ def fetch_snapshot_command() -> None:
     console.print(f"  windows {', '.join(summary.get('balance_windows') or [])}; matches {summary.get('matches')}; "
                   f"boards {summary.get('boards')}; latest game {summary.get('latest_game')}; "
                   f"{summary.get('checks')} verification checks passed", markup=False, highlight=False)
+
+
+# ---------------------------------------------------------------- local collector
+#
+# The zero-cost collector on one personal computer (see tftlab.local_collector):
+# a local SQLite file only. These commands never read DATABASE_URL and refuse
+# database URLs, so they cannot write to a cloud database by mistake.
+
+
+def _local_riot_client(api_key: str, *, platform: str, region: str) -> RiotClient:
+    from .local_collector import DEFAULT_RATE_CEILING
+
+    return RiotClient(api_key, platform=platform, region=region,
+                      rate_ceilings=parse_rate_limits(DEFAULT_RATE_CEILING, "rate ceiling"))
+
+
+def _local_db_or_exit(db: str | None) -> Path:
+    from .local_collector import LocalTargetError, resolve_local_db
+
+    try:
+        return resolve_local_db(db)
+    except LocalTargetError as exc:
+        console.print(f"[bold red]Refused:[/bold red] {exc}", highlight=False)
+        raise typer.Exit(code=2) from None
+
+
+_CHECK_STYLE = {"ok": "[green]OK[/green]  ", "warn": "[yellow]WARN[/yellow]", "fail": "[bold red]FAIL[/bold red]",
+                "info": "[cyan]INFO[/cyan]"}
+
+
+def _print_check(item) -> None:
+    console.print(f"  {_CHECK_STYLE.get(item.status, item.status)} {item.name}: ", end="")
+    console.print(item.detail, markup=False, highlight=False)
+
+
+def _print_collect_report(report, report_path: Path | None) -> None:
+    from .local_collector import SUCCESS, describe_prepared, human_bytes, iso
+
+    before_w = (report.before or {}).get("window", {})
+    after_w = (report.after or {}).get("window", {})
+    ingest = report.ingest or {}
+    riot = report.riot or {}
+    title = {SUCCESS: "[bold green]SUCCESS[/bold green]"}.get(report.outcome, f"[bold red]{report.outcome.upper()}[/bold red]")
+    console.print(f"\n[bold]TheoryLabs local collection report[/bold] -- {title}")
+
+    def line(label: str, value) -> None:
+        console.print(f"  {label}: ", end="")
+        console.print(str(value), markup=False, highlight=False)
+
+    if report.patch:
+        line("Balance window", f"patch {report.patch} ({iso(report.window_start)} to {iso(report.window_end)}); "
+             f"stored balance window(s): {', '.join(after_w.get('balance_windows') or before_w.get('balance_windows') or []) or 'none yet'}")
+    line("Raw database (private, stays on this computer)", report.db_path)
+    if ingest:
+        line("Patch matches before this run", before_w.get("matches", 0))
+        line("New matches inserted", ingest.get("inserted", 0))
+        line("Already stored (duplicates skipped)", ingest.get("duplicates_skipped", 0))
+    if after_w:
+        line("Patch matches now", after_w.get("matches", 0))
+        line("Boards (players' final boards) in the patch", after_w.get("boards", 0))
+        line("Latest game", iso(after_w.get("latest_game")))
+    if ingest.get("seeds"):
+        line("Seeds sampled (selected/requested)",
+             ", ".join(f"{c} {v['selected']}/{v['requested']}" for c, v in ingest["seeds"].items()))
+    if ingest.get("run_status"):
+        line("Collection run", f"{ingest.get('run_status')} ({ingest.get('run_id')})")
+    if riot:
+        line("Riot requests", f"{riot.get('requests', 0)} ({riot.get('successes', 0)} successful)")
+        line("Rate-limit events (429)", f"{riot.get('rate_limited', 0)}; waited {riot.get('waited_s', 0)}s for rate limits, "
+             f"elapsed {riot.get('elapsed_s', 0)}s")
+    if report.validation:
+        line("Validation", "; ".join(
+            f"{bw}: {'FAILED -- ' + ', '.join(v['severe']) if v['is_severe'] else 'passed'}"
+            + (f" (warnings: {'; '.join(v['warnings'])})" if v["warnings"] else "")
+            for bw, v in report.validation.items()))
+    elif ingest.get("run_status") == "completed":
+        line("Validation", "skipped (no current-patch matches yet)")
+    if report.prepared:
+        line("Discovery preparation", describe_prepared(report.prepared))
+    if report.backup:
+        path = report.backup.get("path")
+        line("Backup before this run", f"{path} ({human_bytes(report.backup.get('bytes'))})" if path else report.backup.get("note"))
+        if report.backup.get("removed"):
+            line("Older backups removed (retention)", len(report.backup["removed"]))
+    if report.database_ok is not None:
+        line("Database integrity check", "passed" if report.database_ok else "FAILED")
+    line("Ready to create a public snapshot", "yes -- run `tftlab local-snapshot`" if report.ready_for_snapshot else "no")
+    if report_path is not None:
+        line("Report saved", report_path)
+    console.print("")
+    console.print(Text(report.message, style="green" if report.outcome == SUCCESS else "bold red"))
+
+
+@app.command("local-init")
+def local_init_command() -> None:
+    """First-time setup for the local collector: create data/local/ (and its
+    backups/, public/ and reports/ folders) and a .env from .env.example.
+
+    Never overwrites an existing .env or database and never asks for the key.
+    """
+    from .local_collector import init_local
+
+    for path, action in init_local(Path.cwd()):
+        console.print(f"  {path}: {action}", markup=False, highlight=False)
+    console.print("\nNext: put your Riot development key in .env (or run `tftlab local-set-key`), then run "
+                  "`tftlab local-status` and `tftlab local-collect`.", markup=False)
+
+
+@app.command("local-set-key")
+def local_set_key_command() -> None:
+    """Save a (new) Riot development key into .env without showing it.
+
+    The key is typed at a hidden prompt, so it never appears on screen or in
+    your shell history. Only the RIOT_API_KEY line of .env changes.
+    """
+    from .local_collector import RIOT_KEY_RE, set_env_key
+
+    key = typer.prompt("Paste your Riot development key (input is hidden)", hide_input=True).strip()
+    if not RIOT_KEY_RE.fullmatch(key):
+        console.print("[red]That does not look like a Riot API key (they look like RGAPI-xxxxxxxx-xxxx-...). "
+                      ".env was not changed.[/red]")
+        raise typer.Exit(code=1)
+    set_env_key(Path(".env"), key)
+    console.print("[green]Saved RIOT_API_KEY in .env.[/green] (Not shown.) Next: `tftlab local-collect`.")
+
+
+@app.command("local-status")
+def local_status_command(
+    db: str = typer.Option(None, "--db", help="Local SQLite file (default: TFT_LOCAL_DB_PATH or data/local/theorylabs.sqlite3)"),
+    check_riot: bool = typer.Option(False, "--check-riot", help="Also verify RIOT_API_KEY with one Riot request"),
+) -> None:
+    """How much data does the local collector have? Read-only.
+
+    Contacts nobody (no Riot, no CommunityDragon) unless --check-riot is
+    given. Shows aggregates only -- never player ids, match ids or keys.
+    """
+    from . import local_collector as lc
+
+    _load_dotenv()
+    db_path = _local_db_or_exit(db)
+    status = lc.local_status(db_path, at_ms=lc.now_ms())
+
+    def line(label: str, value) -> None:
+        console.print(f"  {label}: ", end="")
+        console.print(str(value), markup=False, highlight=False)
+
+    console.print("[bold]TheoryLabs local collector status[/bold]")
+    line("Local database", f"{db_path}" + ("" if status["exists"] else " (not created yet -- run `tftlab local-collect`)"))
+    tw = status["trusted_window"]
+    line("Now (UTC)", lc.iso(status["now"]))
+    if tw["patch"]:
+        line("Current trusted patch", f"{tw['patch']} ({lc.iso(tw['starts_at'])} to {lc.iso(tw['ends_at'])}); "
+             "now is inside it -- collection is possible")
+    else:
+        line("Current trusted patch", "none -- collection is not possible until a new patch window is verified "
+             f"and registered ({tw.get('reason')})")
+    if status.get("read_error"):
+        line("Database", f"could not be read ({status['read_error']}); `tftlab local-collect` brings an older "
+             "database up to date, or restore a backup (see docs/local-collector.md)")
+    elif status["exists"]:
+        store = status["store"]
+        line("File size", lc.human_bytes(status["size_bytes"]))
+        line("Total matches", store["matches"])
+        line("Total boards", store["boards"])
+        line("Latest game", lc.iso(store["latest_game"]))
+        line("Collection runs", f"{store['runs_completed']} completed, {store['runs_incomplete']} incomplete")
+        line("Sampling ledger size (seed samples)", store["ledger_rows"])
+        if "current" in status:
+            cur = status["current"]
+            line(f"Patch {tw['patch']} so far", f"{cur['matches']} matches, {cur['boards']} boards, latest game "
+                 f"{lc.iso(cur['latest_game'])}")
+        console.print("  Matches by balance window:")
+        for w in status["windows"] or []:
+            console.print(f"    {w['balance_window']}: {w['matches']} matches (latest {lc.iso(w['latest_game'])})",
+                          markup=False, highlight=False)
+        if not status["windows"]:
+            console.print("    none yet")
+        line("Prepared Discovery", ", ".join(f"{bw}: {st}" for bw, st in status["prepared"].items()) or "none")
+    lb = status["latest_backup"]
+    line("Latest local backup", f"{lb['name']} ({lc.human_bytes(lb['bytes'])}, {lc.iso(lb['modified'])}); "
+         f"{status['backups']} kept" if lb else "none yet")
+    if check_riot:
+        settings = Settings.from_env()
+        if not lc.riot_key_configured(settings.riot_api_key):
+            line("Riot key", "NOT SET -- add RIOT_API_KEY to .env (or run `tftlab local-set-key`)")
+        else:
+            with _local_riot_client(settings.riot_api_key, platform=settings.platform, region=settings.region) as client:
+                key = check_riot_key(client)
+            line("Riot key", "valid" if key.ok else ("EXPIRED or invalid -- refresh it in the Riot Developer Portal"
+                                                     if key.category == "unauthorized" else f"check failed ({key.category})"))
+    else:
+        line("Riot key", "configured (not checked; add --check-riot to test it)"
+             if lc.riot_key_configured(Settings.from_env().riot_api_key) else "NOT SET")
+
+
+@app.command("local-collect")
+def local_collect_command(
+    db: str = typer.Option(None, "--db", help="Local SQLite file (default: TFT_LOCAL_DB_PATH or data/local/theorylabs.sqlite3). "
+                                             "Database URLs are refused."),
+    challenger_seeds: int = typer.Option(15, min=0, max=100, help="Challenger seed players"),
+    grandmaster_seeds: int = typer.Option(15, min=0, max=100, help="Grandmaster seed players"),
+    master_seeds: int = typer.Option(20, min=0, max=100, help="Master seed players"),
+    diamond_seeds: int = typer.Option(25, min=0, max=100, help="Diamond seed players"),
+    platinum_seeds: int = typer.Option(25, min=0, max=100, help="Platinum seed players"),
+    matches_per_seed: int = typer.Option(10, min=1, max=10, help="Recent matches read per seed player"),
+    keep_backups: int = typer.Option(7, min=1, max=100, help="Local backups to keep (older ones are deleted after a new one succeeds)"),
+) -> None:
+    """Collect current-patch ranked TFT data into the local SQLite database.
+
+    The one command to run: checks everything first (database, disk, the
+    current trusted patch window, the Riot key, CommunityDragon), backs the
+    database up, collects a bounded sample (15/15/20/25/25 Challenger/
+    Grandmaster/Master/Diamond/Platinum seeds x 10 recent matches, current
+    patch only), validates it, prepares Discovery for the current patch and
+    prints a plain-language report. Never uses DATABASE_URL.
+    """
+    from . import local_collector as lc
+
+    had_env = Path(".env").exists()
+    _load_dotenv()
+    db_path = _local_db_or_exit(db)
+    settings = Settings.from_env()
+    if not had_env and not settings.riot_api_key:
+        console.print(f"[yellow]No .env file in {Path.cwd()}. Run this from the TheoryLabs folder "
+                      "(or run `tftlab local-init` there first).[/yellow]", highlight=False)
+    seeds = {"challenger": challenger_seeds, "grandmaster": grandmaster_seeds, "master": master_seeds,
+             "diamond": diamond_seeds, "platinum": platinum_seeds}
+    if sum(seeds.values()) < 1:
+        raise typer.BadParameter("request at least one seed player")
+    config = lc.CollectConfig(db_path=db_path, backup_dir=lc.local_dirs(db_path)["backups"],
+                              keep_backups=keep_backups, seed_allocation=seeds, matches_per_seed=matches_per_seed)
+    at_ms = lc.now_ms()
+    console.print("[bold]TheoryLabs local collection[/bold] -- checks before anything is changed:")
+    try:
+        with lc.collector_lock(db_path):
+            report = lc.run_local_collect(
+                config, api_key=settings.riot_api_key, platform=settings.platform, region=settings.region,
+                at_ms=at_ms, client_factory=_local_riot_client, fetch_metadata=_fetch_current_metadata,
+                database_url_set=bool(os.environ.get("DATABASE_URL")), progress=_print_check,
+            )
+    except lc.CollectorBusy as exc:
+        console.print(f"[bold red]{exc}[/bold red]", highlight=False)
+        raise typer.Exit(code=1) from None
+    except KeyboardInterrupt:
+        console.print("\n[bold red]Stopped (Ctrl+C).[/bold red] Matches already stored are kept (each one is saved "
+                      "completely or not at all); this run is recorded as incomplete and seed rotation did not "
+                      "advance. Run `tftlab local-collect` again whenever you like.")
+        raise typer.Exit(code=130) from None
+    report_path = lc.write_report(report, lc.local_dirs(db_path)["reports"], at_ms=at_ms) if db_path.parent.exists() else None
+    _print_collect_report(report, report_path)
+    raise typer.Exit(code=report.exit_code)
+
+
+@app.command("local-snapshot")
+def local_snapshot_command(
+    db: str = typer.Option(None, "--db", help="Local SQLite file (default: TFT_LOCAL_DB_PATH or data/local/theorylabs.sqlite3)"),
+    out: Path = typer.Option(None, "--out", help="Snapshot file (default: data/local/public/theorylabs-public-snapshot.sqlite3; "
+                                                 "a .gz copy is written next to it)"),
+    balance_window: list[str] = typer.Option(None, "--balance-window",
+                                             help="Trusted window(s) to export; default: the current trusted patch"),
+) -> None:
+    """Make a sanitized public website snapshot from the local database.
+
+    Uses the verified exporter (`export-public-snapshot`): real-ingestion
+    checks, no raw payloads, player ids or collection ledger, opaque match
+    ids, then an independent verification. Nothing is uploaded or deployed.
+    """
+    from . import local_collector as lc
+    from .public_snapshot import SnapshotExportError
+
+    _load_dotenv()
+    db_path = _local_db_or_exit(db)
+    out_path = out or lc.local_dirs(db_path)["public"] / lc.PUBLIC_SNAPSHOT_NAME
+    key = Settings.from_env().riot_api_key
+
+    def progress(text: str) -> None:
+        console.print(f"  {text}", markup=False, highlight=False)
+
+    try:
+        result, verification = lc.local_snapshot(db_path, out_path, at_ms=lc.now_ms(),
+                                                 balance_windows=balance_window or None,
+                                                 secrets=(key,) if lc.riot_key_configured(key) else (), progress=progress)
+    except (SnapshotExportError, lc.LocalSnapshotError) as exc:
+        console.print("[bold red]Public snapshot NOT created:[/bold red] ", end="")
+        console.print(str(exc), markup=False, highlight=False)
+        raise typer.Exit(code=1) from None
+    prov = result.provenance
+    console.print("\n[bold green]Public snapshot created and verified.[/bold green]")
+    console.print(f"  Windows: {', '.join(prov['balance_windows'])}; matches {prov['matches']}; boards {prov['boards']}; "
+                  f"latest game {prov['latest_game']}", markup=False, highlight=False)
+    for name, info in result.files.items():
+        console.print(f"  {name}: {lc.human_bytes(info['bytes'])} ({info['bytes']} bytes), sha256 {info['sha256']}",
+                      markup=False, highlight=False)
+    console.print(f"  Folder: {result.path.parent}", markup=False, highlight=False)
+    console.print(f"  Manifest: {result.manifest_path}", markup=False, highlight=False)
+    console.print(f"  Independent verification: {len(verification['checks'])} checks passed", markup=False)
+    console.print("  Nothing was uploaded or deployed. The .gz file is the one to publish when you decide to.",
+                  markup=False)
 
 
 @app.command("discovery-report")
