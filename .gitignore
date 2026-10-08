@@ -29,3 +29,8 @@ theorylabs-public-snapshot*
 *.sqlite3.building
 *.sqlite3.partial
 *.sqlite3.gz
+
+# Public snapshot downloaded at deploy time (tftlab fetch-snapshot) and its
+# one-time decompression cache; never committed.
+data/snapshot/
+data/snapshot-cache/

@@ -4,8 +4,16 @@ services:
     runtime: python
     plan: free
     region: ohio
-    buildCommand: pip install -e ".[postgres]"
-    startCommand: uvicorn tftlab.webapp:app --host 0.0.0.0 --port $PORT
+    # `tftlab fetch-snapshot` installs the published public snapshot when
+    # TFT_DATA_SOURCE=snapshot (download -> sha256 -> verify -> atomic rename)
+    # and does nothing in any other mode (e.g. demo). It runs at build time,
+    # so the verified file ships with the deploy and cold starts don't
+    # download it, and again before start, where it is a no-op when the file
+    # is already there with the expected sha256 (and re-installs it if not).
+    # Any failure exits non-zero, failing the deploy instead of serving data
+    # that isn't the configured snapshot.
+    buildCommand: pip install -e ".[postgres]" && tftlab fetch-snapshot
+    startCommand: tftlab fetch-snapshot && uvicorn tftlab.webapp:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
     envVars:
       - key: PYTHON_VERSION
@@ -21,6 +29,17 @@ services:
       # page) or "snapshot" (a bundled read-only snapshot of real matches).
       # Both require DATABASE_URL to be absent from this service.
       - key: TFT_DATA_SOURCE
+        sync: false
+      # Snapshot mode only (README: "Publishing a snapshot to the website"):
+      # the immutable GitHub Release asset URL of the sanitized .sqlite3.gz,
+      # its SHA-256, and the local .gz path the site reads it from
+      # (data/snapshot/theorylabs-public-snapshot.sqlite3.gz). Public values,
+      # no credentials; set on the service, not here.
+      - key: TFT_SNAPSHOT_URL
+        sync: false
+      - key: TFT_SNAPSHOT_SHA256
+        sync: false
+      - key: TFT_SNAPSHOT_PATH
         sync: false
       # Riot site verification string served at /riot.txt, exactly as the
       # Developer Portal provides it. Not a secret, and never the API key.

@@ -1062,6 +1062,44 @@ def verify_public_snapshot_command(
                   f"windows {', '.join(result['balance_windows'])}", markup=False)
 
 
+@app.command("fetch-snapshot")
+def fetch_snapshot_command() -> None:
+    """Install the configured public snapshot before the website starts.
+
+    Deployment helper (Render build and start commands). Only acts when
+    TFT_DATA_SOURCE=snapshot; otherwise (e.g. demo) it does nothing. Reads
+    TFT_SNAPSHOT_URL (https, public release asset), TFT_SNAPSHOT_SHA256 and
+    TFT_SNAPSHOT_PATH (.gz). Downloads to a temporary file, checks the
+    SHA-256, verifies the snapshot with the public-snapshot checks, and only
+    then renames it into place. Exits 1 on any failure, leaving no bad file
+    active. Needs no credentials and never contacts a database.
+    """
+    from .snapshot_fetch import SnapshotFetchError, fetch_configured_snapshot
+
+    def progress(text: str) -> None:
+        console.print(f"  {text}", markup=False, highlight=False)
+
+    try:
+        result = fetch_configured_snapshot(progress=progress)
+    except SnapshotFetchError as exc:
+        console.print("[bold red]Snapshot NOT installed:[/bold red] ", end="")
+        console.print(str(exc), markup=False, highlight=False)
+        raise typer.Exit(code=1) from None
+    if result.status == "not-snapshot-mode":
+        console.print("TFT_DATA_SOURCE is not 'snapshot': no snapshot needed, nothing downloaded.")
+        return
+    if result.status == "already-installed":
+        console.print(f"Snapshot already installed: {result.path} (sha256 {result.sha256}).", markup=False,
+                      highlight=False)
+        return
+    summary = result.summary
+    console.print(f"Snapshot installed and verified: {result.path} ({result.bytes} bytes, sha256 {result.sha256})",
+                  markup=False, highlight=False)
+    console.print(f"  windows {', '.join(summary.get('balance_windows') or [])}; matches {summary.get('matches')}; "
+                  f"boards {summary.get('boards')}; latest game {summary.get('latest_game')}; "
+                  f"{summary.get('checks')} verification checks passed", markup=False, highlight=False)
+
+
 # ---------------------------------------------------------------- local collector
 #
 # The zero-cost collector on one personal computer (see tftlab.local_collector):
