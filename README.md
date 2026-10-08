@@ -609,7 +609,7 @@ The deterministic demo dataset fails all of these (`DEMO_…` ids, `Version DEMO
 
 The output is one self-contained file (no WAL sidecars), a `<out>.manifest.json` with provenance, verification and sha256s, and with `--compress` a `<out>.gz`.
 
-**Size:** about 16 MB per 1,000 matches as SQLite, or about 3.4 MB gzipped, at about 8.5 units and 10 traits per board. Patch 18.3's ~11k matches give roughly 170 MB, or about 37 MB gzipped. That is too large to commit to git comfortably but fine on free Render's disk; serve the `.gz` and the website unpacks it once. A practical $0 publication path, not automated here, is to attach the `.gz` to a GitHub Release of this public repository, then have the Render build download it and check the manifest's sha256.
+**Size:** about 16 MB per 1,000 matches as SQLite, or about 3.4 MB gzipped, at about 8.5 units and 10 traits per board. Patch 18.3's ~11k matches give roughly 170 MB, or about 37 MB gzipped. That is too large to commit to git comfortably but fine on free Render's disk; serve the `.gz` and the website unpacks it once. It is published as a GitHub Release asset and downloaded by the Render build; see "Publishing a snapshot to the website" below.
 
 **From the encrypted backup:** `.github/workflows/public-snapshot-from-backup.yml` ("Build public snapshot from encrypted backup") is manual only, from `main`, with permissions `contents: read` and `actions: read`. It never contacts Neon. Its inputs name the backup run id and artifact; the defaults are the verified 2026-10-05 backup, run `37308579783`, artifact `theorylabs-postgres-backup-20261005T121811Z`. The workflow:
 1. downloads that artifact from this repository and checks its sha256;
@@ -620,17 +620,92 @@ The output is one self-contained file (no WAL sidecars), a `<out>.manifest.json`
 
 The plaintext dump is deleted right after `pg_restore`, by a trap even on failure. An always-run final step removes the container, the backup files and the private file holding the restore URL. Nothing is deployed.
 
+### Publishing a snapshot to the website
+
+This path is $0: the verified, sanitized `.sqlite3.gz` becomes an immutable **GitHub Release asset** of this public repository, and the free Render service downloads it at deploy time. There is no database service, no paid storage, and no binary in git.
+
+**1. Publish the release (manual workflow).** Run `.github/workflows/publish-public-snapshot-release.yml` ("Publish public snapshot release"). It is `workflow_dispatch` only, from `main`, with permissions `contents: write` (the release) and `actions: read` (the source artifact). Its inputs, with defaults for the verified 18.3 snapshot:
+
+| Input | Default |
+|---|---|
+| `source_run_id` | `37791848207` (a successful "Build public snapshot from encrypted backup" run on `main`) |
+| `source_artifact_name` | `theorylabs-public-snapshot-from-theorylabs-postgres-backup-20261005T121811Z` |
+| `release_tag` | `public-snapshot-18.3-20261005` (form `public-snapshot-<window>-<YYYYMMDD of the data>[-rN]`) |
+| `expected_sha256` | `ac3ff85abbc665ce177757df0c1c9e8c122bb2b74ffa17097ac9fbf41d19b4ed` |
+
+The workflow does the following, and nothing else:
+1. Refuses any artifact name that is not `theorylabs-public-snapshot-from-…`, so an encrypted production backup (`theorylabs-postgres-backup-…`) can never be selected.
+2. Confirms the source run is a successful run of the snapshot workflow on `main`.
+3. Downloads exactly that artifact, and requires it to contain exactly `theorylabs-public-snapshot.sqlite3.gz` and `theorylabs-public-snapshot.sqlite3.manifest.json`.
+4. Checks the `.gz` sha256 against the input and the manifest. It then decompresses it, checks the decompressed sha256 against the manifest, runs `tftlab verify-public-snapshot`, and compares the snapshot's provenance with the manifest.
+5. Creates the release with **only those two assets**, tagged at the workflow's `main` commit.
+
+An existing release is never overwritten:
+- re-running with identical files is a no-op;
+- a missing asset is added;
+- a different file fails, and needs a new tag such as `…-r2`.
+
+It never contacts Neon or any database, never deploys or changes Render, and uses only the job's `GITHUB_TOKEN`. A later convenience alias (e.g. `public-snapshot-current`) may point at an immutable release, but the versioned tag stays the provenance anchor.
+
+**2. Render fetches it: `tftlab fetch-snapshot`.** It acts only when `TFT_DATA_SOURCE=snapshot`; in any other mode (e.g. `demo`) it does nothing and needs nothing. It needs no credentials, because the asset is public. It reads:
+- `TFT_SNAPSHOT_URL`: an https URL;
+- `TFT_SNAPSHOT_SHA256`: required, since a download is never trusted without it;
+- `TFT_SNAPSHOT_PATH`: must end in `.gz`.
+
+Each run:
+1. If the file at `TFT_SNAPSHOT_PATH` already has the expected sha256, it does nothing (no network).
+2. Otherwise it streams the URL into a temporary file next to the target. It follows the GitHub redirect, refuses HTTP errors, short reads and oversize files, and retries transient network/5xx failures twice (a 404 is final).
+3. It compares the sha256.
+4. It decompresses into a scratch file and runs `verify_public_snapshot`, which includes the exporter's observed-data provenance.
+5. Only then does it rename the file into place atomically.
+
+Any failure exits 1, removes the temporary files and leaves the previously active file untouched. URLs are printed without query strings.
+
+**Build-time or startup? Both, with build-time doing the work.** `render.yaml` uses:
+
+```
+buildCommand: pip install -e ".[postgres]" && tftlab fetch-snapshot
+startCommand: tftlab fetch-snapshot && uvicorn tftlab.webapp:app --host 0.0.0.0 --port $PORT
+```
+
+The reasons:
+- Render documents that a service's environment variables are available at build time as well as runtime.
+- The running service uses what the build command produced; it imports the packages `pip install` built.
+- A build-time download ships the verified file with the deploy, so the free instance's frequent cold starts (spin-down after idling) never re-download 46 MB.
+- The start-time call costs one sha256 of the local file. It also covers the case where the built file is not present at runtime: it downloads and verifies it again before Uvicorn starts.
+- If either step fails, the deploy fails. The website itself still refuses anything but an exporter-certified snapshot: `/api/health`, Render's health check, returns 503 and never demo data.
+- The `.gz` is decompressed once per instance start, into `TFT_SNAPSHOT_CACHE_DIR` (default `data/snapshot-cache`), by the website's existing `.gz` support.
+
+**Render environment for the 18.3 snapshot** (after this is merged and the release is published):
+
+| Variable | Value |
+|---|---|
+| `TFT_DATA_SOURCE` | `snapshot` |
+| `TFT_SNAPSHOT_PATH` | `data/snapshot/theorylabs-public-snapshot.sqlite3.gz` |
+| `TFT_SNAPSHOT_URL` | `https://github.com/alienheadbill/tft-theorylab/releases/download/public-snapshot-18.3-20261005/theorylabs-public-snapshot.sqlite3.gz` |
+| `TFT_SNAPSHOT_SHA256` | `ac3ff85abbc665ce177757df0c1c9e8c122bb2b74ffa17097ac9fbf41d19b4ed` |
+| `DATABASE_URL` | **absent** (snapshot mode refuses it) |
+| `RIOT_API_KEY` | absent (the website makes no Riot calls) |
+
+The service's **Build Command** and **Start Command** must be the two commands above (Settings → Build & Deploy) if the service doesn't sync `render.yaml`. In demo mode they behave exactly as before. After the deploy, `/api/source` should report all of the following, read from the snapshot file itself:
+- `mode: snapshot`, `observed: true`, `synthetic: false`;
+- balance window `18.3`;
+- 12,348 matches and 98,784 boards;
+- latest game `2026-10-05T06:12:03.635Z`.
+
 ## Deploying on Render
 
 The repo includes a `render.yaml` Blueprint that runs the FastAPI app with:
 
 ```
-uvicorn tftlab.webapp:app --host 0.0.0.0 --port $PORT
+tftlab fetch-snapshot && uvicorn tftlab.webapp:app --host 0.0.0.0 --port $PORT
 ```
+
+(`tftlab fetch-snapshot` is a no-op unless `TFT_DATA_SOURCE=snapshot`.)
 
 **Public snapshot (real data, still no cloud database):** see "Public website snapshots" below.
 
-**Zero-cloud-database public site:** set `TFT_DATA_SOURCE=demo` (synthetic, labelled on every page) and leave `DATABASE_URL` unset. The site then needs no database service at all, so it keeps working when a cloud database is unavailable or out of quota. When a real analytics snapshot is available, ship it at `TFT_SNAPSHOT_PATH` and switch to `TFT_DATA_SOURCE=snapshot`; the frontend is unchanged. Heavy ingestion and analytics are meant to run on the owner's machine, which is never exposed to the Internet; that is a separate follow-up.
+**Zero-cloud-database public site:** set `TFT_DATA_SOURCE=demo` (synthetic, labelled on every page) and leave `DATABASE_URL` unset. The site then needs no database service at all, so it keeps working when a cloud database is unavailable or out of quota. To serve real data, publish a verified snapshot as a GitHub Release and set the four `TFT_SNAPSHOT_*`/`TFT_DATA_SOURCE` variables (see "Publishing a snapshot to the website"); the frontend is unchanged. Heavy ingestion and analytics are meant to run on the owner's machine, which is never exposed to the Internet; that is a separate follow-up.
 
 With no `DATABASE_URL` and no `TFT_DATA_SOURCE` configured, the app automatically falls back to a generated demo dataset, so it boots and serves data even with zero configuration. `/api/health` and `/api/carries` report `"demo"` (true/false) and `"backend"` (`"sqlite"`/`"postgres"`) so it's always clear which one is live. Once `DATABASE_URL` **is** set, that changes: see "Production safety" above -- an unreachable configured database now fails loudly (HTTP 503 from every endpoint, including `/api/health`) instead of quietly serving demo data. Since `render.yaml`'s `healthCheckPath` points at `/api/health`, this means Render will correctly flag the service as unhealthy if the configured database goes down -- that's the intended behavior, not a bug to work around.
 

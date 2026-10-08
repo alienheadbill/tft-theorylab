@@ -1,0 +1,244 @@
+name: Publish public snapshot release
+
+# MANUAL ONLY. Publishes one already-verified, sanitized public snapshot (an
+# artifact of "Build public snapshot from encrypted backup",
+# public-snapshot-from-backup.yml) as the two assets of an immutable GitHub
+# Release of this public repository, the zero-cost durable source the Render
+# website downloads at deploy time (`tftlab fetch-snapshot`):
+#
+#   theorylabs-public-snapshot.sqlite3.gz             (sanitized snapshot)
+#   theorylabs-public-snapshot.sqlite3.manifest.json  (public provenance + sha256s)
+#
+# Nothing else is ever uploaded. The source run and artifact are explicit
+# inputs (never "latest"); the run must be a successful run of the snapshot
+# workflow on main, and the artifact must contain exactly those two files.
+# The .gz is checked against the expected sha256 and the manifest, then
+# decompressed and verified with `tftlab verify-public-snapshot` before
+# anything is published. An existing release is never overwritten: re-running
+# with identical files is a no-op, different files fail.
+#
+# Never contacts Neon or any database, never deploys or changes Render, and
+# uses no secret besides the job's own GITHUB_TOKEN.
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Run ID of the successful 'Build public snapshot from encrypted backup' run (default: the verified 18.3 snapshot)"
+        required: true
+        default: "37791848207"
+      source_artifact_name:
+        description: "Sanitized snapshot artifact name from that run"
+        required: true
+        default: "theorylabs-public-snapshot-from-theorylabs-postgres-backup-20261005T121811Z"
+      release_tag:
+        description: "Immutable release/tag name: public-snapshot-<window>-<YYYYMMDD of the data>"
+        required: true
+        default: "public-snapshot-18.3-20261005"
+      expected_sha256:
+        description: "Expected SHA-256 of theorylabs-public-snapshot.sqlite3.gz (from the source run's verified summary)"
+        required: true
+        default: "ac3ff85abbc665ce177757df0c1c9e8c122bb2b74ffa17097ac9fbf41d19b4ed"
+
+permissions:
+  contents: write  # create the release + tag and upload its two assets
+  actions: read  # read the source run and download its artifact
+
+concurrency:
+  group: publish-public-snapshot-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOURCE_RUN_ID: ${{ github.event.inputs.source_run_id }}
+      SOURCE_ARTIFACT: ${{ github.event.inputs.source_artifact_name }}
+      RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+      EXPECTED_SHA256: ${{ github.event.inputs.expected_sha256 }}
+      SNAPSHOT_GZ: theorylabs-public-snapshot.sqlite3.gz
+      SNAPSHOT_MANIFEST: theorylabs-public-snapshot.sqlite3.manifest.json
+    steps:
+      # Before checkout. Static messages only.
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::Run this workflow from main (got ${GITHUB_REF})." >&2
+            exit 1
+          fi
+          if ! printf '%s' "${SOURCE_RUN_ID}" | grep -Eq '^[0-9]{1,20}$'; then
+            echo "::error::source_run_id must be a numeric workflow run ID." >&2
+            exit 1
+          fi
+          # Only sanitized snapshot artifacts; an encrypted production backup
+          # artifact (theorylabs-postgres-backup-*) can never be selected.
+          if ! printf '%s' "${SOURCE_ARTIFACT}" | grep -Eq '^theorylabs-public-snapshot-from-[A-Za-z0-9._-]{1,200}$'; then
+            echo "::error::source_artifact_name must be a sanitized snapshot artifact (theorylabs-public-snapshot-from-...)." >&2
+            exit 1
+          fi
+          if ! printf '%s' "${RELEASE_TAG}" | grep -Eq '^public-snapshot-[0-9]{1,3}\.[0-9]{1,3}[a-z]?-[0-9]{8}(-r[0-9]{1,3})?$'; then
+            echo "::error::release_tag must look like public-snapshot-18.3-20261005 (optionally -r2)." >&2
+            exit 1
+          fi
+          if ! printf '%s' "${EXPECTED_SHA256}" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "::error::expected_sha256 must be 64 lowercase hex characters." >&2
+            exit 1
+          fi
+          echo "Inputs valid."
+
+      - name: Confirm the source is a successful snapshot run on main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          read -r WORKFLOW_PATH CONCLUSION BRANCH < <(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}" \
+            --jq '[.path, .conclusion, .head_branch] | join(" ")')
+          if [ "${WORKFLOW_PATH}" != ".github/workflows/public-snapshot-from-backup.yml" ] \
+             || [ "${CONCLUSION}" != "success" ] || [ "${BRANCH}" != "main" ]; then
+            echo "::error::Run ${SOURCE_RUN_ID} is not a successful 'Build public snapshot from encrypted backup' run on main." >&2
+            exit 1
+          fi
+          echo "Source run ${SOURCE_RUN_ID}: ${WORKFLOW_PATH} on ${BRANCH}, ${CONCLUSION}."
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Download the selected sanitized snapshot artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ github.event.inputs.source_artifact_name }}
+          run-id: ${{ github.event.inputs.source_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/snapshot-artifact
+
+      - name: Check the artifact holds exactly the snapshot and its manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}/snapshot-artifact"
+          FOUND="$(find . -type f -printf '%P\n' | LC_ALL=C sort)"
+          EXPECTED="$(printf '%s\n' "${SNAPSHOT_GZ}" "${SNAPSHOT_MANIFEST}" | LC_ALL=C sort)"
+          if [ "${FOUND}" != "${EXPECTED}" ]; then
+            echo "::error::The artifact must contain exactly ${SNAPSHOT_GZ} and ${SNAPSHOT_MANIFEST} (found $(printf '%s\n' "${FOUND}" | grep -c .) file(s)); nothing is published." >&2
+            exit 1
+          fi
+          echo "Artifact contents: exactly the sanitized snapshot and its manifest."
+
+      - name: Verify SHA-256 and the snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          IN="${RUNNER_TEMP}/snapshot-artifact"
+          WORK="${RUNNER_TEMP}/snapshot-verify"
+          mkdir -p "${WORK}"
+          ACTUAL="$(sha256sum "${IN}/${SNAPSHOT_GZ}" | cut -d' ' -f1)"
+          if [ "${ACTUAL}" != "${EXPECTED_SHA256}" ]; then
+            echo "::error::${SNAPSHOT_GZ} sha256 ${ACTUAL} does not match the expected ${EXPECTED_SHA256}." >&2
+            exit 1
+          fi
+          gunzip -c "${IN}/${SNAPSHOT_GZ}" > "${WORK}/theorylabs-public-snapshot.sqlite3"
+          tftlab verify-public-snapshot "${WORK}/theorylabs-public-snapshot.sqlite3"
+          python - "${IN}" "${WORK}" >> "${GITHUB_STEP_SUMMARY}" <<'PY'
+          import hashlib, json, os, sys
+          from pathlib import Path
+          from tftlab.public_snapshot import read_snapshot_provenance
+          from tftlab.storage import Database
+
+          src, work = Path(sys.argv[1]), Path(sys.argv[2])
+          gz, man = os.environ["SNAPSHOT_GZ"], os.environ["SNAPSHOT_MANIFEST"]
+          manifest = json.loads((src / man).read_text())
+          sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+          plain = work / "theorylabs-public-snapshot.sqlite3"
+          files = manifest["files"]
+          checks = {
+              "gz sha256 = manifest": files[gz]["sha256"] == sha(src / gz),
+              "gz bytes = manifest": files[gz]["bytes"] == (src / gz).stat().st_size,
+              "decompressed sha256 = manifest": files[plain.name]["sha256"] == sha(plain),
+          }
+          with Database.open_existing(plain) as db:
+              prov = read_snapshot_provenance(db)
+          for key in ("balance_windows", "matches", "boards", "units", "traits", "latest_game", "exported_at"):
+              checks[f"provenance {key} = manifest"] = prov.get(key) == manifest["provenance"].get(key)
+          failed = [name for name, ok in checks.items() if not ok]
+          if failed:
+              print(f"::error::manifest/snapshot mismatch: {', '.join(failed)}", file=sys.stderr)
+              sys.exit(1)
+          notes = "\n".join([
+              f"Sanitized TheoryLabs public website snapshot, balance window(s) {', '.join(prov['balance_windows'])}.",
+              "",
+              f"- Matches: {prov['matches']:,}; boards: {prov['boards']:,}; units: {prov['units']:,}; traits: {prov['traits']:,}",
+              f"- Latest game: {prov['latest_game']}; exported: {prov['exported_at']}",
+              f"- `{gz}`: {files[gz]['bytes']:,} bytes, sha256 `{files[gz]['sha256']}`",
+              f"- Built and verified by run {os.environ['SOURCE_RUN_ID']} (Build public snapshot from encrypted backup); "
+              f"re-verified by run {os.environ['GITHUB_RUN_ID']} before publication.",
+              "",
+              "Contents: only what the public website reads, with opaque match ids. No PUUIDs, Riot match ids, raw "
+              "Match-V1 payloads, collection ledger, credentials or production backup. The manifest holds the full "
+              "public provenance and sha256s.",
+              "",
+              "Website use: `TFT_DATA_SOURCE=snapshot`, `TFT_SNAPSHOT_URL` = this asset's download URL, "
+              f"`TFT_SNAPSHOT_SHA256={files[gz]['sha256']}` (see README, 'Public website snapshots').",
+          ])
+          (work / "release-notes.md").write_text(notes + "\n")
+          print("### Public snapshot verified for release\n")
+          print("\n".join(f"- {name}: ok" for name in checks))
+          print("\n" + notes)
+          PY
+
+      - name: Create the immutable release (or confirm it is unchanged)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          IN="${RUNNER_TEMP}/snapshot-artifact"
+          WORK="${RUNNER_TEMP}/snapshot-verify"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${SNAPSHOT_GZ}"
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            # Never overwrite: an existing release must already hold these exact files.
+            EXISTING="${RUNNER_TEMP}/snapshot-existing"
+            mkdir -p "${EXISTING}"
+            for asset in "${SNAPSHOT_GZ}" "${SNAPSHOT_MANIFEST}"; do
+              if gh release download "${RELEASE_TAG}" --pattern "${asset}" --dir "${EXISTING}" 2>/dev/null; then
+                if ! cmp -s "${EXISTING}/${asset}" "${IN}/${asset}"; then
+                  echo "::error::Release ${RELEASE_TAG} already has a different ${asset}; it is never overwritten. Use a new tag (e.g. ${RELEASE_TAG}-r2)." >&2
+                  exit 1
+                fi
+                echo "${asset}: already published, identical."
+              else
+                gh release upload "${RELEASE_TAG}" "${IN}/${asset}"
+                echo "${asset}: was missing, uploaded."
+              fi
+            done
+          else
+            gh release create "${RELEASE_TAG}" "${IN}/${SNAPSHOT_GZ}" "${IN}/${SNAPSHOT_MANIFEST}" \
+              --target "${GITHUB_SHA}" \
+              --title "Public snapshot ${RELEASE_TAG#public-snapshot-}" \
+              --notes-file "${WORK}/release-notes.md"
+            echo "Created release ${RELEASE_TAG}."
+          fi
+          {
+            echo
+            echo "### Release ${RELEASE_TAG}"
+            echo
+            echo "- Snapshot URL (TFT_SNAPSHOT_URL): ${URL}"
+            echo "- TFT_SNAPSHOT_SHA256: ${EXPECTED_SHA256}"
+            echo "- Nothing was deployed; Render is unchanged."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Remove working files
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          rm -rf "${RUNNER_TEMP}/snapshot-artifact" "${RUNNER_TEMP}/snapshot-verify" "${RUNNER_TEMP}/snapshot-existing"
+          echo "Working files removed."
