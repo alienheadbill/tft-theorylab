@@ -232,7 +232,14 @@ Riot access currently uses a **development key that must be regenerated regularl
   - `tftlab export-public-snapshot` builds a sanitized, verified SQLite snapshot: opaque match ids, no PUUIDs, raw payloads or collection ledger, and versioned provenance.
   - It is fail-closed: synthetic or demo data can never be exported or served as observed.
   - The manual workflow "Build public snapshot from encrypted backup" turns the 2026-10-05 encrypted backup (artifact expires 2026-10-13) into a downloadable snapshot artifact, without Neon.
-  - Next steps: dispatch it, inspect the size and contents, choose the publication path (for example a GitHub Release asset), and only then switch Render to `TFT_DATA_SOURCE=snapshot`.
+  - **Done:** run `37791848207` produced the verified 18.3 snapshot: 12,348 matches, 98,784 boards, `.gz` 45,992,565 bytes, sha256 `ac3ff85a…`.
+  - **Distribution bridge (IMPLEMENTED; release and switch PENDING):**
+    - the manual "Publish public snapshot release" workflow publishes a verified snapshot artifact as an immutable GitHub Release (`public-snapshot-18.3-20261005`) with only the `.gz` and its manifest;
+    - `tftlab fetch-snapshot` (Render build and start) downloads it, checks the sha256, verifies it, then installs it atomically; it is a no-op in demo mode.
+  - **Next:**
+    1. dispatch the release before the artifact expires (2026-10-15T14:24Z);
+    2. set the four Render variables, with `DATABASE_URL` absent;
+    3. confirm `/api/source`.
 - **Before applying for a production key (PENDING):**
   - publish a real analytics snapshot (built by the owner's local data engine) so the reviewed site shows observed evidence rather than demo data;
   - register the product, then set `RIOT_SITE_VERIFICATION` from the Developer Portal;

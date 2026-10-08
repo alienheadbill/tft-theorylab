@@ -6,3 +6,8 @@ __pycache__/
 .env
 data/*.sqlite3
 data/*.db
+
+# Public snapshot downloaded at deploy time (tftlab fetch-snapshot) and its
+# one-time decompression cache; never committed.
+data/snapshot/
+data/snapshot-cache/
