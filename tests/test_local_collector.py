@@ -850,3 +850,15 @@ def test_local_status_explains_an_unreadable_database(tmp_path: Path, monkeypatc
     result = CliRunner().invoke(cli.app, ["local-status"])
     assert result.exit_code == 0, result.output
     assert "could not be read (SchemaUnavailable)" in re.sub(r"\s+", " ", result.output)
+
+
+def test_run_ids_are_local_even_inside_ci(tmp_path: Path, monkeypatch) -> None:
+    """GITHUB_RUN_ID must not leak into local run ids (it would give every
+    run in one CI job the same id and make the second run fail)."""
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    h = Harness(tmp_path)
+    assert h.run().outcome == lc.SUCCESS
+    assert h.run(at_ms=AT_MS + 60_000).outcome == lc.SUCCESS
+    assert [r[0] for r in _rows(h.db, "SELECT run_id FROM ingest_runs ORDER BY started_at")] == \
+        [f"local-{AT_MS}", f"local-{AT_MS + 60_000}"]

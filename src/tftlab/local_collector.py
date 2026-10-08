@@ -40,7 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
-from .ingest import DEFAULT_MAX_LADDER_PAGES, default_run_id, ingest_ladder
+from .ingest import DEFAULT_MAX_LADDER_PAGES, ingest_ladder
 from .prepared_discovery import lookup_prepared, prepare_window
 from .riot import RiotApiError, check_riot_key, classify_riot_error, is_fatal_riot_error
 from .storage import Database
@@ -546,7 +546,9 @@ def run_local_collect(
         check("Collection", "info",
               f"bounded: {', '.join(f'{c} {n}' for c, n in config.seed_allocation.items())} seeds x "
               f"{config.matches_per_seed} recent matches, patch {window.client_patch} only (this can take 10-25 minutes)")
-        run_id = default_run_id(at_ms)
+        # Always `local-<ms>`: never derived from CI variables (GITHUB_RUN_ID would give
+        # every run in one job the same id), and unique per run on one computer.
+        run_id = f"local-{at_ms}"
         with Database(db_path) as db:
             if db.dialect != "sqlite":  # pragma: no cover - resolve_local_db makes this unreachable
                 raise LocalTargetError("the local collector only writes to SQLite")
