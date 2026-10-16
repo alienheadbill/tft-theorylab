@@ -1,0 +1,80 @@
+/* TheoryLabs Collector (local control panel). Builds on /static/app.css's
+   tokens (colours, fonts, focus ring) so it looks like the rest of TheoryLabs. */
+
+.collector-header .cover-top { align-items: center; }
+.collector-lede { max-width: 64ch; color: var(--graphite); margin: 10px 0 0; }
+.collector-main { display: grid; gap: 22px; padding-bottom: 40px; }
+.collector-footer { color: var(--graphite); font-size: 14px; padding-bottom: 32px; }
+
+.panel {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 6px 10px 7px 9px;
+  padding: 18px 20px 20px;
+}
+.panel-primary { border-color: var(--ink-blue); }
+.panel h2 { margin: 0 0 12px; font: 650 22px/1.2 var(--serif); }
+.panel h3 { margin: 18px 0 8px; font: 650 18px/1.2 var(--serif); }
+
+.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px 22px; margin: 0; }
+.facts div { min-width: 0; }
+.facts dt { font: 12px var(--mono); color: var(--graphite); text-transform: uppercase; letter-spacing: 0.05em; }
+.facts dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+
+.help { color: var(--graphite); font-size: 15px; max-width: 72ch; }
+.muted { color: var(--graphite); }
+code, pre { font-family: var(--mono); font-size: 13px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--ink-bg); padding: 10px; border: 1px solid var(--rule-soft); }
+
+.btn {
+  font: 600 15px var(--sans);
+  color: var(--ink-bg);
+  background: var(--ink-blue);
+  border: 1px solid var(--ink-blue);
+  border-radius: 6px;
+  padding: 9px 16px;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) { filter: brightness(1.1); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-quiet { background: transparent; color: var(--text); border-color: var(--rule); }
+.btn-big { font-size: 18px; padding: 12px 26px; margin: 6px 0 2px; background: var(--ink-green); border-color: var(--ink-green); }
+
+.key-form label { display: block; margin-bottom: 6px; }
+.key-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.key-row input {
+  flex: 1 1 280px; min-width: 0; font: 15px var(--mono); color: var(--text);
+  background: var(--ink-bg); border: 1px solid var(--rule); border-radius: 6px; padding: 9px 10px;
+}
+.key-state { font-weight: 650; margin: 0 0 12px; }
+
+.state-ok { color: var(--ink-green); }
+.state-warn { color: var(--amber); }
+.state-bad { color: var(--pencil); }
+
+.notice { border-left: 3px solid var(--ink-blue); padding: 8px 12px; background: var(--paper-warm); margin: 10px 0; }
+.notice-ok { border-color: var(--ink-green); }
+.notice-warn { border-color: var(--amber); }
+.notice-error { border-color: var(--pencil); }
+
+.preflight { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 4px; }
+.preflight li::before { content: attr(data-mark); display: inline-block; width: 1.6em; font-family: var(--mono); }
+
+.job { margin-top: 16px; border-top: 1px dashed var(--rule); padding-top: 12px; }
+.job-phase { font-size: 18px; margin: 0; }
+.steps { margin: 10px 0 0; padding-left: 22px; font-size: 15px; display: grid; gap: 2px; }
+.steps .s-fail { color: var(--pencil); }
+.steps .s-warn { color: var(--amber); }
+
+.spinner {
+  display: inline-block; width: 0.9em; height: 0.9em; margin-right: 6px; vertical-align: -0.1em;
+  border: 2px solid var(--rule); border-top-color: var(--ink-blue); border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+@media (max-width: 640px) {
+  .cover, main, .colophon { padding-left: 0; }
+  .panel { padding: 14px; }
+}

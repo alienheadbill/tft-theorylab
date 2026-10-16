@@ -8,7 +8,28 @@ other cloud service.
 **The only thing to install is Python 3.11 or newer.** Everything else comes
 with TheoryLabs.
 
-## The short version (every day)
+## The easy way: the TheoryLabs Collector app (Windows)
+
+After the one-time setup below, you never need a terminal:
+
+1. **Double-click `TheoryLabs Collector.cmd`** in the TheoryLabs folder. Your browser opens the dashboard at `http://127.0.0.1:8765/`; the small black window closes by itself.
+2. **Riot development key:** paste a fresh key into the hidden box and click **Save key**, then **Check key**. Keys expire about every 24 hours. The key is never shown again, and it only goes into `.env` on this computer.
+3. **Click _Collect Data_** and watch the progress. It shows each step (checking, validating the key, backing up, collecting, validating the data, preparing Discovery) and the number of Riot requests so far. A collection takes about 10–25 minutes. You can close or reload the page; it keeps going.
+4. **Read the result:** new matches, already-stored matches skipped, totals, Riot requests, validation, Discovery, backup and report file.
+5. **When you want a website snapshot, click _Create Public Snapshot_.** It writes a sanitized, verified file in `data/local/public/`. Nothing is uploaded or deployed.
+6. **When you're done,** click **Stop the collector app** at the top of the page, or double-click `Stop TheoryLabs Collector.cmd`.
+
+Double-clicking `TheoryLabs Collector.cmd` again while the app is running simply reopens the dashboard; it never starts a second copy. Only one collection or snapshot can run at a time, and the app refuses to stop while one is running.
+
+**What it is.** A small, separate program that runs **only on this computer**. It listens on 127.0.0.1, so other devices on your network cannot reach it. It is not part of the public website and is never deployed. It uses exactly the same collector as `tftlab local-collect`, so the CLI below keeps working and both share one lock: a collection started in a terminal blocks the app's buttons, and the other way round.
+
+**Where its files are.**
+- `data/local/collector-ui.log` is the app's log (keys are scrubbed).
+- `data/local/.collector-ui.json` records the running app's port and its private control token, so the stop launcher can find it. The file is deleted when the app stops.
+
+**macOS / Linux:** run `./scripts/collector-ui.sh` (or `tftlab collector-ui`). It stays attached to the terminal; stop it with Ctrl+C or the stop button.
+
+## The short version with the command line (every day)
 
 1. Get a fresh Riot development key from the [Riot Developer Portal](https://developer.riotgames.com/). Development keys stop working after about 24 hours.
 2. Save it: `tftlab local-set-key`, then paste it. The key is hidden while you type.
@@ -68,7 +89,7 @@ The rest of this page explains each part.
    .\.venv\Scripts\tftlab local-collect
    ```
 
-   From then on you can simply double-click `scripts\local-collect.cmd`.
+   From then on you can simply double-click **`TheoryLabs Collector.cmd`** (the dashboard; see "The easy way" above), or `scripts\local-collect.cmd` for the plain terminal version.
 
 > If PowerShell says "running scripts is disabled on this system" for `.\scripts\local-collect.ps1`, use the `.cmd` file instead, or run
 > `powershell -ExecutionPolicy Bypass -File .\scripts\local-collect.ps1`.

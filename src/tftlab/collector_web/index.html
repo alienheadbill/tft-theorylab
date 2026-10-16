@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TheoryLabs Collector</title>
+  <meta name="color-scheme" content="dark" />
+  <meta name="collector-token" content="{{CONTROL_TOKEN}}" />
+  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="/ui/collector.css" />
+</head>
+<body class="collector-body">
+  <a class="skip-link" href="#main-content">Skip to the content</a>
+
+  <header class="cover cover-compact collector-header">
+    <div class="cover-top">
+      <p class="cover-kicker">local control panel · this computer only</p>
+      <button type="button" id="stop-app" class="btn btn-quiet">Stop the collector app</button>
+    </div>
+    <h1><span class="scribble">TheoryLabs Collector</span></h1>
+    <p class="collector-lede">Collect current-patch ranked TFT data into the database on this computer, then make a
+      sanitized snapshot for the website when you choose to. Nothing here uploads anything.</p>
+  </header>
+
+  <main id="main-content" class="collector-main">
+    <p id="global-error" class="notice notice-error" role="alert" hidden></p>
+
+    <section class="panel" aria-labelledby="status-title">
+      <h2 id="status-title">Collector status</h2>
+      <dl id="status-list" class="facts" aria-live="polite">
+        <div><dt>Loading…</dt><dd></dd></div>
+      </dl>
+    </section>
+
+    <section class="panel" aria-labelledby="key-title">
+      <h2 id="key-title">Riot development key</h2>
+      <p class="key-state" id="key-state" role="status" aria-live="polite">Checking…</p>
+      <form id="key-form" class="key-form" autocomplete="off">
+        <label for="api-key">Paste a new key (it is hidden and never shown again)</label>
+        <div class="key-row">
+          <input id="api-key" name="api_key" type="password" inputmode="text" spellcheck="false"
+                 autocomplete="off" placeholder="RGAPI-…" aria-describedby="key-help" />
+          <button type="submit" class="btn" id="save-key">Save key</button>
+          <button type="button" class="btn btn-quiet" id="check-key">Check key</button>
+        </div>
+        <p id="key-help" class="help">Development keys expire about every 24 hours. Get a new one at
+          developer.riotgames.com, paste it here and click “Save key”, then “Check key”.</p>
+        <p id="key-message" class="notice" role="status" aria-live="polite" hidden></p>
+      </form>
+    </section>
+
+    <section class="panel panel-primary" aria-labelledby="collect-title">
+      <h2 id="collect-title">Collect data</h2>
+      <ul id="preflight" class="preflight" aria-label="Before collecting"></ul>
+      <button type="button" id="collect" class="btn btn-big">Collect Data</button>
+      <p class="help">A collection takes about 10–25 minutes. You can close or reload this page; it keeps running as
+        long as the collector app is running.</p>
+
+      <div id="job" class="job" aria-live="polite" hidden>
+        <p class="job-phase"><span id="job-spinner" class="spinner" aria-hidden="true"></span>
+          <strong id="job-phase-text"></strong> <span id="job-elapsed" class="muted"></span></p>
+        <p id="job-live" class="muted"></p>
+        <ol id="job-steps" class="steps"></ol>
+      </div>
+
+      <div id="collect-result" class="result" hidden>
+        <h3 id="collect-result-title">Last collection</h3>
+        <p id="collect-result-message" class="notice"></p>
+        <dl id="collect-result-facts" class="facts"></dl>
+        <details id="collect-result-details" hidden>
+          <summary>Technical details (for troubleshooting)</summary>
+          <pre id="collect-result-detail"></pre>
+        </details>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="snapshot-title">
+      <h2 id="snapshot-title">Create public snapshot</h2>
+      <p class="help">Makes a <strong>sanitized</strong> copy of the current patch's data for the website, in
+        <code>data/local/public/</code>: no raw Riot data, no player identifiers. It is checked twice. It is
+        <strong>not uploaded or deployed</strong>; publishing it is a separate, deliberate step.</p>
+      <button type="button" id="snapshot" class="btn">Create Public Snapshot</button>
+      <div id="snapshot-result" class="result" hidden>
+        <p id="snapshot-result-message" class="notice"></p>
+        <dl id="snapshot-result-facts" class="facts"></dl>
+        <details id="snapshot-result-details" hidden>
+          <summary>Technical details (for troubleshooting)</summary>
+          <pre id="snapshot-result-detail"></pre>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="colophon collector-footer">
+    <p>Runs only on this computer (127.0.0.1). The public TheoryLabs website is a separate app.</p>
+  </footer>
+  <script src="/ui/collector.js"></script>
+</body>
+</html>
