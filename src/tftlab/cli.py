@@ -1124,6 +1124,50 @@ def _local_db_or_exit(db: str | None) -> Path:
         raise typer.Exit(code=2) from None
 
 
+def run_local_collection(db_path: Path, config, *, progress, at_ms: int | None = None, client_factory=None):
+    """One local collection: the lock, the collector run and its saved report.
+
+    Shared by `tftlab local-collect` and the local control panel
+    (`tftlab.collector_ui`) so both run exactly the same code path. Returns
+    `(report, report_path)`; raises `local_collector.CollectorBusy` when
+    another collection holds the database lock. The Riot client factory and
+    CommunityDragon fetch are resolved here at call time (tests replace
+    them); `client_factory` may wrap `_local_riot_client`.
+    """
+    from . import local_collector as lc
+
+    settings = Settings.from_env()
+    at_ms = lc.now_ms() if at_ms is None else at_ms
+    with lc.collector_lock(db_path):
+        report = lc.run_local_collect(
+            config, api_key=settings.riot_api_key, platform=settings.platform, region=settings.region,
+            at_ms=at_ms, client_factory=client_factory or _local_riot_client, fetch_metadata=_fetch_current_metadata,
+            database_url_set=bool(os.environ.get("DATABASE_URL")), progress=progress,
+        )
+    report_path = lc.write_report(report, lc.local_dirs(db_path)["reports"], at_ms=at_ms) if db_path.parent.exists() else None
+    return report, report_path
+
+
+def run_local_snapshot(db_path: Path, out_path: Path | None = None, *, balance_windows=None,
+                       progress=lambda _line: None):
+    """One sanitized public snapshot of the local database (never uploaded).
+
+    Shared by `tftlab local-snapshot` and the local control panel. Holds the
+    collection lock while it reads, so it can never overlap a collection
+    that is writing the same database. Returns `(result, verification)`;
+    raises SnapshotExportError, LocalSnapshotError or CollectorBusy.
+    """
+    from contextlib import nullcontext
+
+    from . import local_collector as lc
+
+    out_path = out_path or lc.local_dirs(db_path)["public"] / lc.PUBLIC_SNAPSHOT_NAME
+    key = Settings.from_env().riot_api_key
+    with lc.collector_lock(db_path) if db_path.exists() else nullcontext():
+        return lc.local_snapshot(db_path, out_path, at_ms=lc.now_ms(), balance_windows=balance_windows or None,
+                                 secrets=(key,) if lc.riot_key_configured(key) else (), progress=progress)
+
+
 _CHECK_STYLE = {"ok": "[green]OK[/green]  ", "warn": "[yellow]WARN[/yellow]", "fail": "[bold red]FAIL[/bold red]",
                 "info": "[cyan]INFO[/cyan]"}
 
@@ -1329,15 +1373,9 @@ def local_collect_command(
         raise typer.BadParameter("request at least one seed player")
     config = lc.CollectConfig(db_path=db_path, backup_dir=lc.local_dirs(db_path)["backups"],
                               keep_backups=keep_backups, seed_allocation=seeds, matches_per_seed=matches_per_seed)
-    at_ms = lc.now_ms()
     console.print("[bold]TheoryLabs local collection[/bold] -- checks before anything is changed:")
     try:
-        with lc.collector_lock(db_path):
-            report = lc.run_local_collect(
-                config, api_key=settings.riot_api_key, platform=settings.platform, region=settings.region,
-                at_ms=at_ms, client_factory=_local_riot_client, fetch_metadata=_fetch_current_metadata,
-                database_url_set=bool(os.environ.get("DATABASE_URL")), progress=_print_check,
-            )
+        report, report_path = run_local_collection(db_path, config, progress=_print_check)
     except lc.CollectorBusy as exc:
         console.print(f"[bold red]{exc}[/bold red]", highlight=False)
         raise typer.Exit(code=1) from None
@@ -1346,7 +1384,6 @@ def local_collect_command(
                       "completely or not at all); this run is recorded as incomplete and seed rotation did not "
                       "advance. Run `tftlab local-collect` again whenever you like.")
         raise typer.Exit(code=130) from None
-    report_path = lc.write_report(report, lc.local_dirs(db_path)["reports"], at_ms=at_ms) if db_path.parent.exists() else None
     _print_collect_report(report, report_path)
     raise typer.Exit(code=report.exit_code)
 
@@ -1370,17 +1407,13 @@ def local_snapshot_command(
 
     _load_dotenv()
     db_path = _local_db_or_exit(db)
-    out_path = out or lc.local_dirs(db_path)["public"] / lc.PUBLIC_SNAPSHOT_NAME
-    key = Settings.from_env().riot_api_key
 
     def progress(text: str) -> None:
         console.print(f"  {text}", markup=False, highlight=False)
 
     try:
-        result, verification = lc.local_snapshot(db_path, out_path, at_ms=lc.now_ms(),
-                                                 balance_windows=balance_window or None,
-                                                 secrets=(key,) if lc.riot_key_configured(key) else (), progress=progress)
-    except (SnapshotExportError, lc.LocalSnapshotError) as exc:
+        result, verification = run_local_snapshot(db_path, out, balance_windows=balance_window, progress=progress)
+    except (SnapshotExportError, lc.LocalSnapshotError, lc.CollectorBusy) as exc:
         console.print("[bold red]Public snapshot NOT created:[/bold red] ", end="")
         console.print(str(exc), markup=False, highlight=False)
         raise typer.Exit(code=1) from None
@@ -1396,6 +1429,29 @@ def local_snapshot_command(
     console.print(f"  Independent verification: {len(verification['checks'])} checks passed", markup=False)
     console.print("  Nothing was uploaded or deployed. The .gz file is the one to publish when you decide to.",
                   markup=False)
+
+
+@app.command("collector-ui")
+def collector_ui_command(
+    port: int = typer.Option(None, "--port", min=1024, max=65535, help="Local port (default 8765, or the next free one)"),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Do not open the browser"),
+    stop: bool = typer.Option(False, "--stop", help="Stop a running TheoryLabs Collector app"),
+) -> None:
+    """Open the TheoryLabs Collector: a local-only control panel for local-collect.
+
+    A browser dashboard on http://127.0.0.1 (this computer only; there is no
+    host option) for the local collector: status, the Riot key, Collect
+    Data with progress, and Create Public Snapshot. A separate app from the
+    public website; it never uploads or deploys anything. If it is already
+    running, this just opens the browser again. Windows: double-click
+    "TheoryLabs Collector.cmd" instead.
+    """
+    from .collector_ui import serve, stop_running
+
+    if stop:
+        console.print(stop_running(), markup=False, highlight=False)
+        return
+    raise typer.Exit(code=serve(port=port, open_browser=not no_browser))
 
 
 @app.command("discovery-report")

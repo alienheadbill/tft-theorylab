@@ -29,7 +29,7 @@ tftlab = "tftlab.cli:app"
 where = ["src"]
 
 [tool.setuptools.package-data]
-tftlab = ["web/*.html", "web/static/*", "web/static/game/*/*.png", "data/*.json"]
+tftlab = ["web/*.html", "web/static/*", "web/static/game/*/*.png", "data/*.json", "collector_web/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

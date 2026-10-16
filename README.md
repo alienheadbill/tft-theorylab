@@ -35,6 +35,9 @@ tftlab local-collect     # THE daily command (or scripts/local-collect.cmd / .ps
 tftlab local-snapshot    # optional: sanitized public website snapshot (never uploaded)
 ```
 
+**Or without a terminal:** `tftlab collector-ui` (Windows: double-click `TheoryLabs Collector.cmd`) opens the **TheoryLabs Collector**. It is a local-only browser dashboard on `http://127.0.0.1:8765/` for the same workflow: status, saving and checking the Riot key, *Collect Data* with live progress, the result, and *Create Public Snapshot*. It is a separate app from the public website (`tftlab.collector_ui`, never deployed) and is described in "The TheoryLabs Collector control panel" below.
+
+
 `local-collect` runs these steps in order:
 
 1. **Preflight**, before anything changes:
@@ -55,6 +58,36 @@ Safety rules:
 - `DATABASE_URL` is never read, and database URLs are refused, so these commands cannot write to a cloud database.
 - An expired key, a missing key or no current trusted window stops the run before the database is touched.
 - A severe validation failure keeps the data, but blocks the "success" outcome and snapshot readiness.
+
+### The TheoryLabs Collector control panel (local only)
+
+`tftlab.collector_ui` is a second, **separate** FastAPI app. Nothing in it is imported or mounted by the public `tftlab.webapp`, and Render never runs it. It drives the local collector from a browser:
+
+- **Start/stop:**
+  - Start it with `tftlab collector-ui [--port N] [--no-browser]` or `python -m tftlab.collector_ui`.
+  - On Windows, `TheoryLabs Collector.cmd` starts it with `.venv\Scripts\pythonw.exe` (no console window) and opens the browser.
+  - Stop it with the page's stop button, `Stop TheoryLabs Collector.cmd`, or `tftlab collector-ui --stop`.
+  - A second launch reopens the browser instead of starting a second server. It finds the first through `data/local/.collector-ui.json` and a ping.
+- **Local only:**
+  - It binds `127.0.0.1` (no host option) on port 8765, or the next free port up to 8774.
+  - It refuses non-loopback clients, and any `Host` other than 127.0.0.1/localhost on that port (DNS-rebinding protection).
+  - Every action is a POST carrying a random per-start token in a custom header; only the served page knows it (CSRF protection). Cross-origin `Origin`s are refused.
+  - Responses carry `frame-ancestors 'none'`, a strict CSP and `no-store`; there are no API docs.
+- **Same code as the CLI:** collections and snapshots run `cli.run_local_collection` / `cli.run_local_snapshot`, which `tftlab local-collect` / `local-snapshot` also use. Both hold the collector's database lock, so the app, the CLI and snapshots can never overlap.
+- **Jobs:**
+  - An in-memory job manager runs one job at a time (collection or snapshot) in a background thread.
+  - Status polling (`GET /api/state`) is read-only.
+  - A reload shows the same job.
+  - Every outcome, including a crash, frees the slot.
+- **Progress:** the collector's own step callbacks plus the live Riot request counter; there is no invented percentage.
+- **The Riot key:**
+  - accepted only in a POST body;
+  - checked against the `RGAPI-…` format;
+  - written with `local_collector.set_env_key` (creating `.env` from `.env.example` first if needed);
+  - checked with the shared `riot.check_riot_key`.
+
+  It is never returned, rendered, logged (the log file scrubs key-shaped strings) or echoed in validation errors.
+- **Inputs:** there are no shell, file-path or database-URL inputs; the database is the local collector's own.
 
 ### Run without a Riot API key
 
@@ -351,6 +384,7 @@ Every page shows this in a banner at the top (`static/site.js`):
 
 ## Operational CLI commands
 
+- `tftlab collector-ui [--port N] [--no-browser] [--stop]` -- the local-only TheoryLabs Collector dashboard (see above).
 - `tftlab local-init` / `local-set-key` / `local-status [--check-riot]` / `local-collect` / `local-snapshot [--balance-window W]` -- the zero-cost local collector on one SQLite file (see "Collect data on your own computer" above and [docs/local-collector.md](docs/local-collector.md)). They never use `DATABASE_URL` and refuse database URLs.
 - `tftlab verify-riot` -- one minimal authenticated Riot request to confirm `RIOT_API_KEY` works, without ingesting anything.
 - `tftlab ingest-riot [--challenger-seeds N] [--grandmaster-seeds N] [--master-seeds N] [--diamond-seeds N] [--platinum-seeds N] [--max-ladder-pages N] | [--players N] [--sampling challenger|high_elo]; [--matches-per-player N] [--current-trusted-window | --start-time ISO8601] [--allow-degraded-costs]` -- see "Run on live Riot data" above.
