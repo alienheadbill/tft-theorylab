@@ -468,3 +468,177 @@ def test_windows_launchers_start_the_panel_detached_and_stop_it() -> None:
             assert forbidden not in text, forbidden
     sh = (ROOT / "scripts" / "collector-ui.sh").read_text()
     assert "collector-ui" in sh and "0.0.0.0" not in sh
+
+
+# ---------------------------------------------------------------- dashboard reliability (the "blink" fix)
+
+
+def test_a_page_from_before_a_restart_gets_a_clear_stale_page_error(env) -> None:
+    """The cause of the 'blink': every Collector start has a new control token, so a
+    tab left open across a restart is refused. That refusal is now machine-readable
+    (the page shows a persistent 'reload' banner) and the page can see the restart."""
+    client, app = env["client"], env["app"]
+    page = client.get("/").text
+    assert f'name="collector-instance" content="{app.state.instance}"' in page
+    assert client.get("/api/state").json()["instance"] == app.state.instance
+    refused = client.post("/api/collect", json={}, headers={ui.TOKEN_HEADER: "token-from-an-earlier-run"})
+    assert refused.status_code == 403
+    assert refused.json() == {"error": ui.STALE_PAGE_MESSAGE, "code": "stale_page"}
+    assert app.state.jobs.snapshot() == {"current": None, "last": {}}  # nothing was started
+    restarted = ui.create_collector_app(root=env["root"], port=PORT, token="test-token")
+    assert restarted.state.instance != app.state.instance
+
+
+def test_collect_start_is_visible_in_state_right_away(env) -> None:
+    client, app = env["client"], env["app"]
+    _save_key(client)
+    blocking = _Blocking(_payloads_18_4(6))
+    env["stub"]["riot"] = blocking
+    started = _post(client, "/api/collect").json()["job"]
+    assert started["kind"] == "collect" and started["state"] == "running"
+    assert blocking.entered.wait(10)
+    current = client.get("/api/state").json()["jobs"]["current"]
+    assert current["id"] == started["id"] and current["state"] == "running"
+    assert current["phase"] == "Collecting matches from Riot" and current["elapsed_s"] >= 0
+    assert [s["name"] for s in current["steps"]][:3] == ["Local database", "Disk space", "Riot routing"]
+    blocking.release.set()
+    assert _wait(app)["last"]["collect"]["state"] == "succeeded"
+
+
+def test_an_immediate_worker_failure_stays_visible_as_failed(env, monkeypatch, caplog) -> None:
+    """POST /api/collect succeeds, then the worker fails in preflight within moments:
+    the job must end FAILED (state + phase + failing step + plain reason) and stay in
+    /api/state across polls instead of the page drifting back to 'nothing running'."""
+    caplog.set_level(logging.INFO)
+    client, app = env["client"], env["app"]
+    _save_key(client)
+    env["stub"]["riot"] = StubRiot([], key_error="401")
+    assert _post(client, "/api/collect").status_code == 200
+    _wait(app)
+    for _ in range(3):
+        jobs = client.get("/api/state").json()["jobs"]
+        assert jobs["current"] is None
+        failed = jobs["last"]["collect"]
+        assert failed["state"] == "failed" and failed["phase"] == "Failed"
+        assert failed["failed_step"]["name"] == "Riot key valid"
+        assert failed["message"].startswith("Your Riot development key has expired")
+    log = caplog.text
+    assert f"collect job {failed['id']} requested" in log and f"collect job {failed['id']} started" in log
+    assert f"collect job {failed['id']} failed" in log and "at step 'Riot key valid'" in log
+    assert FAKE_KEY not in log
+
+
+def test_job_completion_is_logged_without_secrets_or_identifiers(env, caplog) -> None:
+    caplog.set_level(logging.INFO)
+    _save_key(env["client"])
+    _post(env["client"], "/api/collect")
+    job = _wait(env["app"])["last"]["collect"]
+    assert f"collect job {job['id']} completed" in caplog.text
+    assert FAKE_KEY not in caplog.text and "PUUID-" not in caplog.text and "NA1_" not in caplog.text
+
+
+def test_a_crashing_worker_is_logged_with_a_sanitized_description(env, monkeypatch, caplog) -> None:
+    caplog.set_level(logging.INFO)
+    _save_key(env["client"])
+
+    def crash(*a, **k):
+        raise FileNotFoundError(2, "No such file or directory", f"/moved/certifi/cacert.pem?k={FAKE_KEY}")
+
+    monkeypatch.setattr(cli, "run_local_collection", crash)
+    _post(env["client"], "/api/collect")
+    job = _wait(env["app"])["last"]["collect"]
+    assert job["state"] == "failed" and job["message"] == ui.UNEXPECTED_MESSAGE
+    assert "FileNotFoundError" in job["detail"] and "cacert.pem" in job["detail"]
+    for text in (job["detail"], caplog.text):
+        assert FAKE_KEY not in text and "[redacted" in text
+    assert "crashed during" in caplog.text
+
+
+def test_an_unexpected_key_check_problem_is_diagnosable_and_redacted(env, monkeypatch, caplog) -> None:
+    caplog.set_level(logging.INFO)
+    client = env["client"]
+    _save_key(client)
+
+    def missing_file(*a, **k):
+        raise FileNotFoundError(2, "No such file or directory", "/old/drive/.venv/certifi/cacert.pem")
+
+    monkeypatch.setattr(cli, "_local_riot_client", missing_file)
+    body = _post(client, "/api/key/validate").json()
+    assert body["key"]["state"] == "error" and "missing a file it needs" in body["key"]["detail"]
+    assert "key check could not run: FileNotFoundError" in caplog.text and "cacert.pem" in caplog.text
+
+    def leaky(*a, **k):
+        raise RuntimeError(f"boom while using {FAKE_KEY}")
+
+    monkeypatch.setattr(cli, "_local_riot_client", leaky)
+    body = _post(client, "/api/key/validate").json()
+    assert body["key"]["state"] == "error" and "RuntimeError" in body["key"]["detail"]
+    for text in (json.dumps(body), caplog.text):
+        assert FAKE_KEY not in text
+    assert "[redacted key]" in caplog.text
+
+
+def test_missing_dashboard_files_are_explained_not_a_crash(env, monkeypatch, tmp_path: Path) -> None:
+    gone = tmp_path / "moved-away" / "collector_web"
+    monkeypatch.setattr(ui, "UI_DIR", gone)
+    monkeypatch.setattr(ui, "REQUIRED_UI_FILES", (gone / "index.html", gone / "collector.js"))
+    app = ui.create_collector_app(root=env["root"], port=PORT, token="test-token")  # must not raise
+    client = TestClient(app, base_url=BASE, client=LOCAL)
+    page = client.get("/")
+    assert page.status_code == 500 and "cannot show its dashboard" in page.text
+    assert str(gone / "index.html") in page.text and "data, backups and settings are not affected" in page.text
+    files = client.get("/api/state").json()["app_files"]
+    assert files["ok"] is False and str(gone / "index.html") in files["missing"]
+    assert "moved" in files["message"]
+
+
+def test_a_vanished_working_folder_is_explained(env, monkeypatch) -> None:
+    monkeypatch.setattr(ui, "_working_folder_ok", lambda: False)
+    state = env["client"].get("/api/state")
+    assert state.status_code == 200
+    body = state.json()
+    assert body["collector"]["error"] == ui.FOLDER_MISSING_MESSAGE and body["app_files"]["ok"] is False
+
+
+def test_the_port_probe_matches_how_the_server_binds(env) -> None:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        busy = listener.getsockname()[1]
+        assert ui._port_free(busy) is False  # a running server is never shared
+    assert ui._port_free(busy) is True  # released again (reuse-address on POSIX, like uvicorn)
+
+
+def test_opening_the_dashboard_never_changes_the_database(env) -> None:
+    db = env["root"] / "data/local/theorylabs.sqlite3"
+    build_live_ingest_like_source(db, 6)
+    before = {p.name: p.read_bytes() for p in db.parent.iterdir() if p.is_file()}
+    client = env["client"]
+    for _ in range(3):
+        assert client.get("/").status_code == 200
+        assert client.get("/api/state").status_code == 200
+    after = {p.name: p.read_bytes() for p in db.parent.iterdir() if p.is_file()}
+    assert after[db.name] == before[db.name]  # the database file itself is byte-for-byte unchanged
+    sidecars = {db.name + "-wal", db.name + "-shm"}
+    for name, content in after.items():  # SQLite's read-only access may only add (empty) WAL/SHM sidecars
+        if name not in before:
+            assert name in sidecars and (name.endswith("-shm") or content == b""), name
+        elif name not in sidecars:
+            assert content == before[name], name
+
+
+def test_a_collection_result_updates_the_key_status(env) -> None:
+    client, app = env["client"], env["app"]
+    _save_key(client)
+    assert client.get("/api/state").json()["key"]["state"] == "unchecked"
+    env["stub"]["riot"] = StubRiot([], key_error="401")
+    _post(client, "/api/collect")
+    _wait(app)
+    key = client.get("/api/state").json()["key"]
+    assert key["state"] == "invalid" and "has expired" in key["detail"]
+    env["stub"]["riot"] = StubRiot(_payloads_18_4(4))
+    _post(client, "/api/collect")
+    _wait(app)
+    assert client.get("/api/state").json()["key"]["state"] == "valid"

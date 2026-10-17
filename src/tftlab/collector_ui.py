@@ -69,6 +69,10 @@ PUBLIC_STATIC_DIR = Path(__file__).resolve().parent / "web" / "static"
 STATE_FILE_NAME = ".collector-ui.json"
 LOG_FILE_NAME = "collector-ui.log"
 _LOOPBACK_CLIENTS = frozenset({"127.0.0.1", "::1"})
+#: Files the dashboard cannot work without (resolved from this package's own
+#: location, never a machine-specific path).
+REQUIRED_UI_FILES = (UI_DIR / "index.html", UI_DIR / "collector.js", UI_DIR / "collector.css",
+                     PUBLIC_STATIC_DIR / "app.css")
 _KEY_PATTERN = re.compile(r"RGAPI-[0-9A-Za-z-]{8,}")
 
 log = logging.getLogger("tftlab.collector_ui")
@@ -84,6 +88,30 @@ def redact(text: str, *extra: str | None) -> str:
         if value and len(value) >= 8:
             text = text.replace(value, "[redacted]")
     return text
+
+
+def describe_exception(exc: BaseException) -> str:
+    """A sanitized one-line description for logs and technical details: the
+    exception type and message (which includes the missing path for file
+    errors), with anything key-shaped removed. Never the Riot key."""
+    text = redact(f"{type(exc).__name__}: {exc}", os.environ.get("RIOT_API_KEY"))
+    return text if len(text) <= 500 else text[:497] + "..."
+
+
+def missing_ui_files() -> list[str]:
+    """Required dashboard files that are not where this package expects them
+    (e.g. the TheoryLabs folder was moved or is incomplete). Checked on every
+    page load, not cached, so a move while the app runs is noticed."""
+    return [str(path) for path in REQUIRED_UI_FILES if not path.is_file()]
+
+
+def _working_folder_ok() -> bool:
+    """False when the folder the app was started from no longer exists
+    (moved or renamed while the app was running)."""
+    try:
+        return Path(os.getcwd()).is_dir()
+    except OSError:
+        return False
 
 
 class _RedactingFilter(logging.Filter):
@@ -104,7 +132,8 @@ class _RedactingFilter(logging.Filter):
 # ---------------------------------------------------------------- user-facing messages
 
 KEY_EXPIRED_MESSAGE = ("Your Riot development key has expired (or is not valid). Get a new key from the Riot "
-                       "Developer Portal (developer.riotgames.com) and paste it above.")
+                       "Developer Portal (developer.riotgames.com) and paste it into the “Riot development key” "
+                       "box on this page.")
 NO_WINDOW_MESSAGE = ("TheoryLabs does not yet have a trusted window for the current patch, so it will not collect. "
                      "A TheoryLabs update has to add the new patch window first.")
 BUSY_MESSAGE = "A collection or snapshot is already running. Wait for it to finish."
@@ -114,6 +143,15 @@ VALIDATION_FAILED_MESSAGE = ("The collected data failed validation. The matches 
                              "public snapshot until this has been reviewed.")
 UNEXPECTED_MESSAGE = ("Something unexpected went wrong. Nothing was published. The details below can help when "
                       "asking for help.")
+STALE_PAGE_MESSAGE = ("This page was opened before the TheoryLabs Collector app was last restarted, so it cannot "
+                      "send commands. Reload the page (press F5) and try again.")
+FOLDER_MISSING_MESSAGE = ("The TheoryLabs folder this collector app was started from is no longer available (was it "
+                          "moved or renamed?). Stop the collector app (Stop TheoryLabs Collector.cmd) and start it "
+                          "again from the TheoryLabs folder.")
+UI_FILES_MISSING_MESSAGE = ("Some of the TheoryLabs Collector's own files are missing, so the dashboard cannot work "
+                            "properly. This usually means the TheoryLabs folder was moved, renamed or is incomplete "
+                            "while the collector app was running. Stop the collector app (Stop TheoryLabs "
+                            "Collector.cmd), make sure the folder is complete, and start it again.")
 
 
 def _friendly_collect_message(report: Any) -> str:
@@ -159,6 +197,10 @@ class Job:
     live: dict[str, Any] = field(default_factory=dict)
     client: Any = None  # the live Riot client, for request counters only
 
+    def failed_step(self) -> dict[str, str] | None:
+        """The collector step that reported a failure, if any."""
+        return next((dict(step) for step in reversed(self.steps) if step.get("status") == "fail"), None)
+
     def public(self) -> dict[str, Any]:
         live = dict(self.live)
         telemetry = getattr(self.client, "telemetry", None)
@@ -170,7 +212,8 @@ class Job:
                 "started_at": int(self.started_at * 1000),
                 "finished_at": int(self.finished_at * 1000) if self.finished_at else None,
                 "elapsed_s": round(end - self.started_at, 1), "steps": list(self.steps), "message": self.message,
-                "detail": self.detail, "result": dict(self.result), "live": live}
+                "detail": self.detail, "result": dict(self.result), "live": live,
+                "failed_step": self.failed_step()}
 
 
 class JobBusy(RuntimeError):
@@ -198,6 +241,7 @@ class JobManager:
                 raise JobBusy(BUSY_MESSAGE)
             job = Job(kind)
             self.current = job
+        log.info("%s job %s requested", kind, job.id)
         thread = threading.Thread(target=self._run, args=(job, work), name=f"collector-ui-{kind}", daemon=True)
         try:
             thread.start()
@@ -208,6 +252,7 @@ class JobManager:
         return job
 
     def _run(self, job: Job, work: Callable[[Job], None]) -> None:
+        log.info("%s job %s started", job.kind, job.id)
         try:
             work(job)
             if job.state == "running":
@@ -215,13 +260,22 @@ class JobManager:
         except BaseException as exc:  # never leave the slot taken
             job.state = "failed"
             job.message = job.message or UNEXPECTED_MESSAGE
-            job.detail = redact(f"{type(exc).__name__}: {exc}"[:600], os.environ.get("RIOT_API_KEY"))
-            log.exception("%s job %s crashed", job.kind, job.id)
+            job.detail = describe_exception(exc)
+            log.exception("%s job %s crashed during '%s': %s", job.kind, job.id, job.phase, job.detail)
         finally:
             job.finished_at = time.time()
             job.client = None
             if job.phase not in ("Complete", "Failed"):
                 job.phase = "Complete" if job.state == "succeeded" else "Failed"
+            elapsed = job.finished_at - job.started_at
+            if job.state == "succeeded":
+                log.info("%s job %s completed in %.0fs: %s", job.kind, job.id, elapsed,
+                         redact(job.message, os.environ.get("RIOT_API_KEY")))
+            else:
+                step = job.failed_step()
+                log.warning("%s job %s failed after %.0fs%s: %s", job.kind, job.id, elapsed,
+                            f" at step '{step['name']}'" if step else "",
+                            redact(job.message or job.detail, os.environ.get("RIOT_API_KEY")))
             with self._lock:
                 self.last[job.kind] = job
                 self.current = None
@@ -356,10 +410,15 @@ def _latest_report(db_path: Path) -> dict[str, Any] | None:
 
 
 def _collector_status(at_ms: int) -> dict[str, Any]:
+    if not _working_folder_ok():
+        return {"error": FOLDER_MISSING_MESSAGE}
     try:
         db_path = lc.resolve_local_db(None)
     except lc.LocalTargetError as exc:
         return {"error": str(exc)}
+    except OSError as exc:
+        log.warning("cannot resolve the local database: %s", describe_exception(exc))
+        return {"error": FOLDER_MISSING_MESSAGE}
     try:
         status = lc.local_status(db_path, at_ms=at_ms)
     except Exception as exc:  # unreadable database etc.: show it, never crash the page
@@ -383,13 +442,17 @@ def create_collector_app(*, root: Path | None = None, port: int = DEFAULT_PORT, 
     lives; default: the current directory)."""
     root = (root or Path.cwd()).resolve()
     token = token or secrets.token_urlsafe(32)
+    #: Not a secret: identifies this run of the app so a page left open across a
+    #: restart can tell (its control token is then stale) and say so.
+    instance = uuid.uuid4().hex[:12]
     jobs = jobs or JobManager()
     key_status = KeyStatus()
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     app = FastAPI(title="TheoryLabs Collector (local)", docs_url=None, redoc_url=None, openapi_url=None)
-    app.state.jobs, app.state.token = jobs, token
-    app.mount("/static", StaticFiles(directory=PUBLIC_STATIC_DIR), name="static")  # shared visual style only
-    app.mount("/ui", StaticFiles(directory=UI_DIR), name="ui")
+    app.state.jobs, app.state.token, app.state.instance = jobs, token, instance
+    # check_dir=False: a missing folder must not crash the app at start-up; the page explains it instead.
+    app.mount("/static", StaticFiles(directory=PUBLIC_STATIC_DIR, check_dir=False), name="static")  # style only
+    app.mount("/ui", StaticFiles(directory=UI_DIR, check_dir=False), name="ui")
 
     @app.middleware("http")
     async def local_only(request: Request, call_next):
@@ -404,7 +467,9 @@ def create_collector_app(*, root: Path | None = None, port: int = DEFAULT_PORT, 
             if origin is not None and origin.lower() not in {f"http://{h}" for h in allowed_hosts}:
                 return JSONResponse({"error": "Cross-site request refused."}, status_code=403)
             if not secrets.compare_digest(request.headers.get(TOKEN_HEADER, ""), token):
-                return JSONResponse({"error": "Missing or invalid control token; reload the page."}, status_code=403)
+                log.info("refused %s %s: missing or stale control token (page opened before a restart?)",
+                         request.method, request.url.path)
+                return JSONResponse({"error": STALE_PAGE_MESSAGE, "code": "stale_page"}, status_code=403)
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Frame-Options"] = "DENY"
@@ -427,8 +492,12 @@ def create_collector_app(*, root: Path | None = None, port: int = DEFAULT_PORT, 
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
+        missing = missing_ui_files()
+        if missing:
+            log.error("dashboard files missing: %s", ", ".join(missing))
+            return HTMLResponse(_missing_files_page(missing), status_code=500)
         html = (UI_DIR / "index.html").read_text(encoding="utf-8")
-        return HTMLResponse(html.replace("{{CONTROL_TOKEN}}", token))
+        return HTMLResponse(html.replace("{{CONTROL_TOKEN}}", token).replace("{{INSTANCE_ID}}", instance))
 
     @app.get("/api/ping")
     def ping() -> dict[str, str]:
@@ -438,7 +507,13 @@ def create_collector_app(*, root: Path | None = None, port: int = DEFAULT_PORT, 
     def state() -> dict[str, Any]:
         """Read-only: never starts, changes or contacts anything."""
         at_ms = lc.now_ms()
-        return {"app": APP_ID, "now": at_ms, "root": str(root), "env_file_exists": (root / ".env").exists(),
+        missing = missing_ui_files()
+        folder_ok = _working_folder_ok()
+        return {"app": APP_ID, "instance": instance, "now": at_ms, "root": str(root),
+                "env_file_exists": folder_ok and (root / ".env").exists(),
+                "app_files": {"ok": not missing and folder_ok, "missing": missing,
+                              "message": FOLDER_MISSING_MESSAGE if not folder_ok else
+                              (UI_FILES_MISSING_MESSAGE if missing else "")},
                 "collector": _collector_status(at_ms), "key": _key_view(), "jobs": jobs.snapshot()}
 
     @app.post("/api/key")
@@ -470,8 +545,10 @@ def create_collector_app(*, root: Path | None = None, port: int = DEFAULT_PORT, 
                                         region=settings.region) as client:
                 check = check_riot_key(client)
         except Exception as exc:
-            check = None
-            log.warning("key check failed to run: %s", type(exc).__name__)
+            check, problem = None, describe_exception(exc)
+            log.warning("key check could not run: %s", problem)
+        else:
+            problem = ""
         key_status.checked_at = lc.now_ms()
         if check is not None and check.ok:
             key_status.state, key_status.detail = "valid", "Riot accepted the key."
@@ -483,13 +560,35 @@ def create_collector_app(*, root: Path | None = None, port: int = DEFAULT_PORT, 
                                  "network_error": "Could not reach Riot (network problem). Check the internet "
                                                   "connection and try again."}.get(
                 getattr(check, "category", None), "The key could not be checked right now; try again later.")
+            if check is not None and not check.ok:
+                log.warning("key check failed: %s", check.category or "unknown error")
+            if problem.startswith("FileNotFoundError"):
+                key_status.detail = ("The collector app is missing a file it needs, so the key could not be "
+                                     "checked. If the TheoryLabs folder was moved while the app was running, stop "
+                                     "the collector app and start it again.")
+            elif problem:
+                key_status.detail = f"The key could not be checked because of an unexpected problem ({problem})."
         return {"ok": key_status.state == "valid", "key": _key_view()}
+
+    def collect_and_note_key(job: Job) -> None:
+        """Run the collection; what its own Riot key step found also updates the key status
+        (a collection that hit an expired key must not leave the key showing 'not checked')."""
+        _collect_work(job)
+        key_step = next((s for s in job.steps if s.get("name") == "Riot key valid"), None)
+        if key_step is None:
+            return
+        key_status.checked_at = lc.now_ms()
+        if key_step.get("status") == "ok":
+            key_status.state, key_status.detail = "valid", "Riot accepted the key."
+        elif key_step.get("detail") in ("unauthorized", "forbidden"):
+            key_status.state, key_status.detail = "invalid", KEY_EXPIRED_MESSAGE
 
     @app.post("/api/collect")
     def collect() -> dict[str, Any]:
         try:
-            job = jobs.start("collect", _collect_work)
+            job = jobs.start("collect", collect_and_note_key)
         except JobBusy as exc:
+            log.info("collection request refused: another job is running")
             raise HTTPException(409, str(exc)) from None
         return {"ok": True, "job": job.public()}
 
@@ -498,6 +597,7 @@ def create_collector_app(*, root: Path | None = None, port: int = DEFAULT_PORT, 
         try:
             job = jobs.start("snapshot", _snapshot_work)
         except JobBusy as exc:
+            log.info("snapshot request refused: another job is running")
             raise HTTPException(409, str(exc)) from None
         return {"ok": True, "job": job.public()}
 
@@ -521,6 +621,20 @@ def create_collector_app(*, root: Path | None = None, port: int = DEFAULT_PORT, 
                             status_code=422)
 
     return app
+
+
+def _missing_files_page(missing: list[str]) -> str:
+    from html import escape
+
+    items = "".join(f"<li><code>{escape(path)}</code></li>" for path in missing)
+    return ("<!doctype html><html lang='en'><head><meta charset='utf-8'><title>TheoryLabs Collector: files missing"
+            "</title><meta name='viewport' content='width=device-width, initial-scale=1'></head>"
+            "<body style='font-family:system-ui,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;"
+            "line-height:1.5;background:#151618;color:#ece7dc'>"
+            "<h1>TheoryLabs Collector cannot show its dashboard</h1>"
+            f"<p>{escape(UI_FILES_MISSING_MESSAGE)}</p>"
+            f"<p>Missing files:</p><ul>{items}</ul>"
+            "<p>Your collected data, backups and settings are not affected.</p></body></html>")
 
 
 # ---------------------------------------------------------------- running it
@@ -550,6 +664,11 @@ def _port_free(port: int) -> bool:
     import socket
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        if os.name != "nt":
+            # uvicorn binds with SO_REUSEADDR; without it a port still in TIME_WAIT right after
+            # a restart would look busy and the app would needlessly move to the next port.
+            # (Not on Windows, where SO_REUSEADDR means something else: sharing a bound port.)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((HOST, port))
         except OSError:
@@ -608,6 +727,9 @@ def serve(*, port: int | None = None, open_browser: bool = True, root: Path | No
             webbrowser.open(url)
         return 0
 
+    missing = missing_ui_files()
+    if missing:
+        log.error("dashboard files missing at start-up (the page will explain): %s", ", ".join(missing))
     requested = port or int(os.environ.get(PORT_ENV) or DEFAULT_PORT)
     chosen = next((p for p in range(requested, requested + 10) if _port_free(p)), None)
     if chosen is None:
