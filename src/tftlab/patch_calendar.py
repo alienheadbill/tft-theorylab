@@ -29,8 +29,8 @@ code change, while keeping every guarantee of `tftlab.unreal_patch`:
   if Riot later edits the schedule. Only frozen windows are installed into
   `unreal_patch` (`install_frozen`), so every window that ever classified a
   match is frozen. Every change also writes a versioned copy under
-  `FROZEN_BACKUP_DIR`; a missing or damaged record is restored from the newest
-  good copy (never re-derived), and if none is left while stored matches
+  `FROZEN_BACKUP_DIR` (written first, so the newest valid copy is the reference);
+  a missing, damaged or differing record is restored from it (never re-derived), and if none is left while stored matches
   carry a patch the record no longer knows, collection pauses
   (`check_stored_patches`). (A sidecar instead of a database migration: the windows
   are configuration of the classifier, not collected data, and are needed
@@ -570,27 +570,45 @@ class FrozenRead:
     problem: str | None = None  # what was wrong with the primary, when recovered
 
 
+def _newest_valid_backup(local_dir: Path) -> tuple[Path, list[FrozenWindow]] | None:
+    for backup in frozen_backups(local_dir):
+        try:
+            return backup, _parse_frozen(backup)
+        except ScheduleError:
+            continue
+    return None
+
+
+def _same_windows(a: list[FrozenWindow], b: list[FrozenWindow]) -> bool:
+    return [w.as_dict() for w in a] == [w.as_dict() for w in b]
+
+
 def read_frozen(local_dir: Path) -> FrozenRead:
-    """Read-only. Raises ScheduleError only when the record cannot be
-    trusted AND no valid versioned copy exists (collection then pauses)."""
+    """Read-only. The newest valid versioned copy is the durable truth (it is
+    written before the primary): the primary is used only when it matches
+    that copy, or when no valid copy exists yet. A primary that is missing,
+    damaged or merely *different* (even a structurally valid edit, or a
+    write interrupted after the copy) yields the copy instead. Raises
+    ScheduleError only when the record cannot be trusted AND no valid copy
+    exists (collection then pauses)."""
     local_dir = Path(local_dir)
     primary = local_dir / FROZEN_NAME
-    backups = frozen_backups(local_dir)
-    problem = None
+    newest = _newest_valid_backup(local_dir)
     if primary.exists():
         try:
-            return FrozenRead(_parse_frozen(primary), "primary")
+            windows = _parse_frozen(primary)
         except ScheduleError as exc:
             problem = str(exc)
-    elif not backups:
+        else:
+            if newest is None or _same_windows(windows, newest[1]):
+                return FrozenRead(windows, "primary")
+            problem = f"{FROZEN_NAME} differs from its newest copy"
+    elif not frozen_backups(local_dir):
         return FrozenRead([], "none")
     else:
         problem = f"{FROZEN_NAME} is missing"
-    for backup in backups:
-        try:
-            return FrozenRead(_parse_frozen(backup), "backup", backup, problem)
-        except ScheduleError:
-            continue
+    if newest is not None:
+        return FrozenRead(newest[1], "backup", newest[0], problem)
     raise ScheduleError(f"{problem}, and no valid copy was found in {FROZEN_BACKUP_DIR.as_posix()}/")
 
 
@@ -621,24 +639,22 @@ def _write_frozen_backup(local_dir: Path, doc: dict[str, Any], *, at_ms: int) ->
 
 
 def ensure_frozen_backup(local_dir: Path, *, at_ms: int) -> Path | None:
-    """Make sure the newest versioned copy holds exactly the current record
-    (writes one if not). No-op when there is no record."""
+    """Write the first versioned copy of a valid record that has none yet
+    (e.g. every older copy is damaged). Never writes a copy that disagrees
+    with an existing valid copy: `read_frozen` treats such a primary as
+    damaged, and `restore_frozen` replaces it."""
     current = read_frozen(local_dir)
     if current.source != "primary" or not current.windows:
         return None
-    backups = frozen_backups(local_dir)
-    if backups:
-        try:
-            if [w.as_dict() for w in _parse_frozen(backups[0])] == [w.as_dict() for w in current.windows]:
-                return backups[0]
-        except ScheduleError:
-            pass
+    newest = _newest_valid_backup(local_dir)
+    if newest is not None:  # it matches the primary, or read_frozen would not have said "primary"
+        return newest[0]
     return _write_frozen_backup(local_dir, _frozen_doc(current.windows), at_ms=at_ms)
 
 
 def restore_frozen(local_dir: Path, *, at_ms: int) -> str | None:
-    """Recover a missing or damaged primary record from the newest valid
-    versioned copy (a damaged file is kept aside, never discarded). Returns
+    """Recover a missing, damaged or differing primary record from the newest
+    valid versioned copy (the replaced file is kept aside, never discarded). Returns
     what was done, or None. Raises ScheduleError when recovery is impossible.
     Call from write paths only (collection preflight, app start-up)."""
     local_dir = Path(local_dir)
@@ -649,7 +665,11 @@ def restore_frozen(local_dir: Path, *, at_ms: int) -> str | None:
     primary = local_dir / FROZEN_NAME
     if primary.exists():
         stamp = datetime.fromtimestamp(at_ms / 1000, tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        primary.replace(local_dir / f"{FROZEN_NAME}.damaged-{stamp}")
+        aside, n = local_dir / f"{FROZEN_NAME}.damaged-{stamp}", 0
+        while aside.exists():
+            n += 1
+            aside = local_dir / f"{FROZEN_NAME}.damaged-{stamp}-{n}"
+        primary.replace(aside)
     _write_json_atomic(primary, json.loads(current.backup.read_text(encoding="utf-8")))
     note = f"{current.problem}; restored {FROZEN_NAME} from {current.backup.name}"
     log.warning("frozen patch windows: %s", note)

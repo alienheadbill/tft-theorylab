@@ -318,6 +318,54 @@ def test_a_lost_or_damaged_record_is_restored_without_rederiving_history(tmp_pat
     assert len(damaged) == (0 if damage == "deleted" else 1)  # a damaged file is kept aside, never discarded
 
 
+def test_a_valid_but_edited_record_is_not_blessed_as_new_history(tmp_path: Path) -> None:
+    primary = _freeze_18_5(tmp_path)
+    path = tmp_path / pc.FROZEN_NAME
+    # A structurally valid, non-overlapping boundary edit: 18.5 "ends" an hour earlier.
+    edited = json.loads(primary)
+    edited["windows"][0]["ends_at"] = W18_5[1] - 3_600_000
+    path.write_text(json.dumps(edited))
+    pc._parse_frozen(path)  # it really is valid on its own
+    # Riot then moves 18.6, so re-deriving 18.5 would also give something else.
+    later = W18_5[0] + 86_400_000
+    _seed(tmp_path, later, _move(HTML, "18.6", "November 6, 2026 (Friday)"))
+    st = pc.calendar_state(tmp_path, now_ms=later)
+    assert (st.current.starts_at, st.current.ends_at) == W18_5 and st.current_origin == "frozen"
+    assert any("differs from its newest copy" in d for d in st.diagnostics)
+    window, _st = pc.collection_window(tmp_path, now_ms=later)
+    assert (window.starts_at, window.ends_at) == W18_5
+    assert path.read_bytes() == primary  # the exact original, not re-backed-up and not re-derived
+    copies = pc.frozen_backups(tmp_path)
+    assert len(copies) == 1 and copies[0].read_bytes() == primary  # the edit never became a copy
+    aside = list(tmp_path.glob(pc.FROZEN_NAME + ".damaged-*"))
+    assert len(aside) == 1 and json.loads(aside[0].read_text()) == edited  # kept for inspection
+
+
+def test_an_interrupted_freeze_is_completed_from_the_copy(tmp_path: Path) -> None:
+    _freeze_18_5(tmp_path)
+    only_18_5 = (tmp_path / pc.FROZEN_NAME).read_bytes()
+    _seed(tmp_path, W18_6[0] + 60_000)
+    pc.collection_window(tmp_path, now_ms=W18_6[0] + 3_600_000)  # freezes 18.6: copy first, then primary
+    both = (tmp_path / pc.FROZEN_NAME).read_bytes()
+    (tmp_path / pc.FROZEN_NAME).write_bytes(only_18_5)  # as if the primary write never happened
+    st = pc.calendar_state(tmp_path, now_ms=W18_6[0] + 7_200_000)
+    assert [f.client_patch for f in st.frozen] == ["18.5", "18.6"]
+    pc.collection_window(tmp_path, now_ms=W18_6[0] + 7_200_000)
+    assert (tmp_path / pc.FROZEN_NAME).read_bytes() == both
+    assert len(pc.frozen_backups(tmp_path)) == 2
+
+
+def test_a_valid_record_whose_copies_are_all_damaged_gets_a_fresh_copy(tmp_path: Path) -> None:
+    primary = _freeze_18_5(tmp_path)
+    for copy in pc.frozen_backups(tmp_path):
+        copy.write_text("damaged")
+    st = pc.calendar_state(tmp_path, now_ms=W18_5[0] + 7_200_000)
+    assert st.ready and st.current_origin == "frozen"
+    pc.collection_window(tmp_path, now_ms=W18_5[0] + 7_200_000)
+    newest = pc.frozen_backups(tmp_path)[0]
+    assert newest.read_bytes() == primary and (tmp_path / pc.FROZEN_NAME).read_bytes() == primary
+
+
 def test_when_no_valid_copy_is_left_collection_pauses(tmp_path: Path) -> None:
     _freeze_18_5(tmp_path)
     (tmp_path / pc.FROZEN_NAME).write_text("{not json")

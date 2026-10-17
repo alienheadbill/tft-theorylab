@@ -230,7 +230,7 @@ The command prints the match and board counts, file sizes and SHA-256 checksums.
 | `data/local/patch-calendar.json` | Saved copy of Riot's public patch schedule, with its source, fetch time and fingerprints | Yes |
 | `data/local/patch-calendar-check.json` | When Riot's schedule was last checked and whether that worked | Yes |
 | `data/local/patch-windows-frozen.json` | The patch windows already used for collection. **Never edit or delete it**: stored matches were classified with these windows | Yes |
-| `data/local/backups/patch-windows/patch-windows-frozen-<UTC time>-<n>.json` | Automatic copies of that record, one each time it changes (newest 30 kept). If the record goes missing or is damaged, the collector restores it from the newest good copy before collecting; a damaged file is kept aside as `patch-windows-frozen.json.damaged-<time>` | Yes |
+| `data/local/backups/patch-windows/patch-windows-frozen-<UTC time>-<n>.json` | Automatic copies of that record, one each time it changes (newest 30 kept). The newest good copy is the reference: if the record goes missing, is damaged, or differs from that copy (for example after a hand edit), the collector restores the copy before collecting and keeps the replaced file aside as `patch-windows-frozen.json.damaged-<time>` | Yes |
 
 `.env` and everything under `data/local/` are excluded from git, so they cannot be committed by accident.
 
@@ -258,7 +258,7 @@ TheoryLabs only collects inside a **trusted patch window**, because Riot's match
 - **Example.** 18.4's window ends Oct 19, 17:00 PT. 18.5 (Oct 21) is trusted from Oct 22, 00:00 PT to Nov 2, 17:00 PT (18.6 is Nov 4). Collection says NOT READY in between and resumes by itself.
 - **Balance updates** such as **18.6B** are not new client patches. Since TheoryLabs cannot separate matches before and after one, collection pauses from two days before it until the next patch's window starts (for 18.6B: Nov 9, 17:00 PT until 19.1's window on Dec 2).
 - **Frozen once used.** The first collection in a new window records it in `data/local/patch-windows-frozen.json`, with a copy in `data/local/backups/patch-windows/`. From then on it never moves, even if Riot later edits the schedule. If Riot moves the next patch *earlier* than a window already in use allows, collection pauses rather than changing history.
-- **If the record is lost.** The collector restores it from the newest good copy, never by working it out again. If no good copy is left and stored matches were classified with a window that is now unknown, collection pauses until the record is restored by hand.
+- **If the record is lost or changed.** The collector restores it from the newest good copy, never by working it out again, and never accepts an edited record as new history. If no good copy is left and stored matches were classified with a window that is now unknown, collection pauses until the record is restored by hand.
 - **No schedule, no new window.** If Riot's page cannot be read or looks different than expected, the last good copy is kept. A new window is only started from a copy checked within the last 48 hours. The last patch Riot lists has no window until Riot lists the one after it.
 
 ## Updating TheoryLabs
