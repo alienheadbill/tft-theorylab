@@ -83,6 +83,68 @@ def test_the_ui_starts_and_reports_without_modifying_anything(env) -> None:
     assert _files(root) == set()  # no database, .env, backup or folder was created
 
 
+SCHEDULE_PAGE = (Path(__file__).parent / "fixtures" / "riot_tft_patch_schedule_2026-10-17.html").read_bytes()
+
+
+def _schedule_getter(calls: list):
+    def get(url: str):
+        calls.append(url)
+        return 200, "text/html; charset=utf-8", SCHEDULE_PAGE, url
+    return get
+
+
+def test_state_shows_current_and_next_patch_and_freshness_without_fetching(env, monkeypatch) -> None:
+    import tftlab.patch_calendar as pc
+
+    calls: list[str] = []
+    monkeypatch.setattr(pc, "_http_get", _schedule_getter(calls))
+    ui._refresh_patch_schedule()  # what start-up does (in a background thread)
+    assert calls == [pc.SOURCE_URL]
+    for _ in range(10):  # the page polls every few seconds
+        state = env["client"].get("/api/state").json()
+    assert calls == [pc.SOURCE_URL]  # polls only read the saved copy
+    view = state["collector"]["patch_calendar"]
+    assert view["ready"] and view["current"] == {"patch": "18.4", "starts_at": 1_791_442_800_000,
+                                                 "ends_at": 1_792_454_400_000, "origin": "built-in",
+                                                 "source": pc.SOURCE_URL}
+    assert view["next"] == {"label": "18.5", "kind": "patch", "base_patch": "18.5", "scheduled_date": "2026-10-21",
+                            "timezone": "America/Los_Angeles"}
+    assert view["freshness"]["state"] == "fresh" and view["freshness"]["label"] == "Riot — checked today"
+    prov = view["provenance"]
+    assert prov["source_url"] == pc.SOURCE_URL and prov["policy_version"] == pc.POLICY_VERSION
+    assert prov["events_sha256"].startswith("sha256:") and prov["content_sha256"].startswith("sha256:")
+    assert [w["client_patch"] for w in prov["planned_windows"]] == ["18.5", "18.6", "19.1"]
+    assert FAKE_KEY not in json.dumps(state)
+    # A second start-up within the hour does not ask Riot again.
+    ui._refresh_patch_schedule()
+    assert calls == [pc.SOURCE_URL]
+
+
+def test_not_ready_between_patches_explains_and_collect_checks_the_schedule_once(env, monkeypatch) -> None:
+    import tftlab.patch_calendar as pc
+
+    calls: list[str] = []
+    monkeypatch.setattr(pc, "_http_get", _schedule_getter(calls))
+    gap = 1_792_454_400_000 + 3_600_000  # an hour after 18.4's window ended
+    monkeypatch.setattr(lc, "now_ms", lambda: gap)
+    client = env["client"]
+    _save_key(client)
+    state = client.get("/api/state").json()
+    assert calls == [] and state["collector"]["trusted_window"]["inside"] is False
+    assert "could not read Riot's official patch schedule" in state["collector"]["trusted_window"]["reason"]
+    _post(client, "/api/collect")
+    job = _wait(env["app"])["last"]["collect"]
+    assert calls == [pc.SOURCE_URL]  # collection preflight refreshed the schedule
+    assert job["state"] == "failed" and "starts trusting patch 18.5 at Oct 22, 2026 00:00 Pacific" in job["message"]
+    assert not (env["root"] / "data/local/theorylabs.sqlite3").exists()
+    state = client.get("/api/state").json()
+    view = state["collector"]["patch_calendar"]
+    assert view["code"] == "between_patches" and view["next_window"]["client_patch"] == "18.5"
+    _post(client, "/api/collect")
+    _wait(env["app"])
+    assert calls == [pc.SOURCE_URL]  # throttled: at most one request an hour
+
+
 def test_bind_defaults_are_localhost_only(monkeypatch, tmp_path: Path) -> None:
     import uvicorn
 
@@ -358,7 +420,8 @@ def test_failures_release_the_slot_with_readable_messages(env, monkeypatch) -> N
     monkeypatch.setattr(lc, "now_ms", lambda: AT_MS + 30 * 86_400_000)  # after 18.4 ends
     _post(client, "/api/collect")
     job = _wait(app)["last"]["collect"]
-    assert job["state"] == "failed" and "does not yet have a trusted window" in job["message"]
+    assert job["state"] == "failed" and "Collection is paused rather than mixing patches" in job["message"]
+    assert not job["message"].startswith(lc.NO_WINDOW_MESSAGE)  # the calendar's own plain explanation
 
     monkeypatch.setattr(lc, "now_ms", lambda: AT_MS)
 

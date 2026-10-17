@@ -16,7 +16,7 @@ After the one-time setup below, you never need a terminal:
 2. **Riot development key:** paste a fresh key into the hidden box and click **Save key**, then **Check key**. Keys expire about every 24 hours. The key is never shown again, and it only goes into `.env` on this computer.
 3. **Click _Collect Data_.** The large status at the top of the page always says what is happening:
    - **READY**: you can collect.
-   - **NOT READY**: says why, for example no key or no trusted patch window.
+   - **NOT READY**: says why, for example no key, or the pause TheoryLabs makes around every patch change (see "Patch changes").
    - **COLLECTING**: shows the current step, elapsed time, Riot requests so far and rate-limit events.
    - **COMPLETE**: shows new matches, current-patch matches, boards and validation.
    - **FAILED**: gives a plain-language reason and the step that failed. It stays until you retry or click **OK**.
@@ -29,6 +29,8 @@ After the one-time setup below, you never need a terminal:
 Double-clicking `TheoryLabs Collector.cmd` again while the app is running simply reopens the dashboard; it never starts a second copy. Only one collection or snapshot can run at a time, and the app refuses to stop while one is running.
 
 **What it is.** A small, separate program that runs **only on this computer**. It listens on 127.0.0.1, so other devices on your network cannot reach it. It is not part of the public website and is never deployed. It uses exactly the same collector as `tftlab local-collect`, so the CLI below keeps working and both share one lock: a collection started in a terminal blocks the app's buttons, and the other way round.
+
+**Patch information.** The "Your data" panel shows the current trusted patch, the next scheduled patch with its date (from Riot's official patch schedule), and how fresh that schedule is: **Riot — checked today**, or **cached — refresh failed** when Riot's page could not be reached and the saved copy is used. Its source, fingerprints and window rule are under **Technical details**.
 
 **Where its files are.**
 - `data/local/collector-ui.log` is the app's log (keys are scrubbed).
@@ -167,7 +169,10 @@ Warnings such as "board(s) Riot sent without units" or "id(s) not in CommunityDr
 |---|---|
 | **Riot development key is expired (or invalid)…** | The key expired (about every 24 hours). Get a new one in the Developer Portal, run `tftlab local-set-key`, run again. Nothing was collected. |
 | **RIOT_API_KEY is not set** | Run `tftlab local-set-key` (or edit `.env`). Make sure you are in the TheoryLabs folder. |
-| **TheoryLabs does not currently have a verified collection window** | The current patch's exact start/end has not been verified and registered yet. TheoryLabs never guesses patch boundaries. Wait for a TheoryLabs update that adds the new patch window, update your copy (see "Updating TheoryLabs"), then run again. Nothing was collected. |
+| **TheoryLabs does not currently have a trusted collection window.** … starts trusting patch 18.5 at … | The normal pause around a patch change (see "Patch changes"). Run again after the time given; nothing needs updating. Nothing was collected. |
+| … **balance update (18.6B)** … collection pauses across it | Riot scheduled a mid-patch balance update. Collection resumes automatically when the next patch's window starts (the time is in the message). |
+| … **could not read Riot's official patch schedule and has no usable saved copy** | A new patch needs Riot's schedule, and neither Riot's page nor a saved copy was available. Check the internet connection; it is tried again when the app starts and before each collection. |
+| … **found the next scheduled patch but cannot create a trusted collection window safely yet** | Riot's schedule is too old to trust for a new patch (not checked for 48 hours), or Riot moved a date in a way that conflicts with a window already used. Get online so the schedule refreshes; if it persists, ask the maintainer (the details are in `tftlab local-patch-schedule`). |
 | **Collection stopped early … The local database is still valid** | The connection or the key failed mid-run. Matches saved before the failure are kept. The run is marked incomplete and does not count for player rotation, so the next run simply retries. Fix the cause (new key, internet) and run again. |
 | **Collection completed, but validation found severe integrity problems** | Nothing was deleted. Do **not** make a public snapshot. Ask the maintainer to look at the saved report and `tftlab validate-live-data --db data/local/theorylabs.sqlite3`. |
 | **Another collection is already running** | Wait for it to finish. If the computer restarted mid-run, the file named in the message can be deleted (stale locks are cleared automatically after 6 hours). |
@@ -184,7 +189,7 @@ The exit code is 0 only for SUCCESS, so scripts can tell success from failure.
 - **collection runs:** how many completed and how many are incomplete, plus the size of the player-sampling ledger;
 - **prepared Discovery:** its status for the current and recent patches;
 - **backups:** the latest local backup;
-- **the patch:** the current trusted patch, and whether the current time is inside it;
+- **the patch:** the current trusted patch, whether the current time is inside it, the next scheduled patch, any upcoming balance update, and how fresh the saved patch schedule is (it reads the saved copy only);
 - **the Riot key:** whether it is set.
 
 It never prints the key, player identifiers or match identifiers.
@@ -222,6 +227,9 @@ The command prints the match and board counts, file sizes and SHA-256 checksums.
 | `data/local/backups/theorylabs-<UTC time>.sqlite3` | Pre-run backups (newest 7 kept) | No |
 | `data/local/reports/local-collect-<UTC time>.json` | Each run's report (counts only, no ids or key) | Yes, if the maintainer asks |
 | `data/local/public/theorylabs-public-snapshot.sqlite3.gz` | Sanitized public snapshot | Yes, this is the publishable file |
+| `data/local/patch-calendar.json` | Saved copy of Riot's public patch schedule, with its source, fetch time and fingerprints | Yes |
+| `data/local/patch-calendar-check.json` | When Riot's schedule was last checked and whether that worked | Yes |
+| `data/local/patch-windows-frozen.json` | The patch windows already used for collection. **Never edit or delete it**: stored matches were classified with these windows. It is small; keep it with the database (backups of the folder include it) | Yes |
 
 `.env` and everything under `data/local/` are excluded from git, so they cannot be committed by accident.
 
@@ -242,14 +250,21 @@ To restore a backup:
 
 ## Patch changes
 
-TheoryLabs only collects inside **verified** patch windows. They are listed in the code (`UNREAL_PATCH_REGISTRY` in `src/tftlab/unreal_patch.py`), each with its source. When the current window ends, `local-collect` stops with the "does not currently have a verified collection window" message until the next window is verified and added. This is deliberate: Riot's match data currently masks the exact patch version, so TheoryLabs refuses to guess boundaries rather than mix two patches.
+TheoryLabs only collects inside a **trusted patch window**, because Riot's match data currently masks the exact patch version and TheoryLabs refuses to mix two patches. New patches no longer need a TheoryLabs update:
+
+- **Riot's official schedule.** The collector reads Riot's public "Patch Schedule - Teamfight Tactics" support article (one HTTPS request, no key, at most once an hour: when the app starts and before a collection). The dashboard and `local-status` only read the saved copy. `tftlab local-patch-schedule` shows what it saw; add `--refresh` to check Riot now.
+- **The rule.** A patch scheduled on Pacific date D, followed in the schedule by an entry on date N, is trusted from **00:00 Pacific Time on D+1** until **17:00 Pacific Time on N−2**. Daylight saving is handled by the time-zone database. Around every patch change about two days of matches stay unclassified; that is deliberate. This rule reproduces the 18.3 and 18.4 windows exactly. 18.2, 18.3 and 18.4 stay fixed in the code.
+- **Example.** 18.4's window ends Oct 19, 17:00 PT. 18.5 (Oct 21) is trusted from Oct 22, 00:00 PT to Nov 2, 17:00 PT (18.6 is Nov 4). Collection says NOT READY in between and resumes by itself.
+- **Balance updates** such as **18.6B** are not new client patches. Since TheoryLabs cannot separate matches before and after one, collection pauses from two days before it until the next patch's window starts (for 18.6B: Nov 9, 17:00 PT until 19.1's window on Dec 2).
+- **Frozen once used.** The first collection in a new window records it in `data/local/patch-windows-frozen.json`. From then on it never moves, even if Riot later edits the schedule. If Riot moves the next patch *earlier* than a window already in use allows, collection pauses rather than changing history.
+- **No schedule, no new window.** If Riot's page cannot be read or looks different than expected, the last good copy is kept. A new window is only started from a copy checked within the last 48 hours. The last patch Riot lists has no window until Riot lists the one after it.
 
 ## Updating TheoryLabs
 
 - **GitHub Desktop or git:** pull the latest `main` (`git pull`). Your `.env` and `data/local/` are not touched.
 - **ZIP download:** download and extract the new ZIP into a new folder, then move your `.env` file and the whole `data\local` folder from the old folder into the new one. Then run the setup steps 4 and onwards in the new folder (`local-init` will leave your files unchanged).
 
-After updating, running `.\.venv\Scripts\pip install -e .` again is harmless and picks up any new requirements.
+After updating, run `.\.venv\Scripts\pip install -e .` again: it is harmless and picks up new requirements. (On Windows this adds the `tzdata` package, the time-zone data the patch calendar needs; without it new patch windows are not created and the dashboard says so.)
 
 ## Options (rarely needed)
 
@@ -258,6 +273,7 @@ tftlab local-collect [--db PATH] [--keep-backups 7]
                      [--challenger-seeds 15] [--grandmaster-seeds 15] [--master-seeds 20]
                      [--diamond-seeds 25] [--platinum-seeds 25] [--matches-per-seed 10]
 tftlab local-status [--db PATH] [--check-riot]
+tftlab local-patch-schedule [--db PATH] [--refresh] [--json]
 tftlab local-snapshot [--db PATH] [--out PATH] [--balance-window W ...]
 tftlab local-init
 tftlab local-set-key
@@ -272,3 +288,4 @@ The defaults are the bounded settings that worked in production. Collection is a
 - **Sleep and network.** The computer must stay awake and online during a run. An interrupted run is safe to repeat.
 - **Windows PowerShell script policy** may block `.ps1` files. Use `scripts\local-collect.cmd` or the `-ExecutionPolicy Bypass` line above.
 - **One collection at a time** per database. A second one is refused while the first runs.
+- **Patch dates come from Riot's schedule, not from the matches.** If Riot ships a patch more than about two days off its scheduled date without updating the page, a window can still contain a few matches from the wrong side of the change. Riot says it posts an alert on that page for delays within 48 hours; TheoryLabs does not read such alerts yet.

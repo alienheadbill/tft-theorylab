@@ -92,15 +92,22 @@ Riot access currently uses a **development key that must be regenerated regularl
 - **Scheduled collection code (IMPLEMENTED):** `live-ingest.yml` is on `main` with a six-hour schedule and fixed conservative settings. It uses **bounded** mode, not maximum: both production maximum-mode runs failed with 401 during deep ladder enumeration, so maximum stays manual-only until that is diagnosed. 401/403 now fail a bounded run with no ledger progress, as in maximum mode.
 - **Operational verification (IMPLEMENTED):** a scheduled production run was observed successfully on 2026-09-30 (`36718342282`), including persisted ingest provenance. After the Neon cutover, an owner-only bounded smoke also succeeded against Neon (`36763413989`): 3 Challenger seeds × 3 histories, 10/10 Riot requests returned 200, 4 new ranked matches were inserted, validation passed and Discovery smoke passed.
 - **Next (ACCEPTED/CURRENT):** monitor scheduled-run yield/error/storage telemetry over multiple runs, then diagnose the maximum-mode deep-ladder 401 before any change to scheduled bounded mode. Do not build a new ingestion system.
-- **Zero-cost local collector (IMPLEMENTED; first real local run PENDING):**
+- **Zero-cost local collector (OPERATIONAL):** the owner has run real collections with it on Windows.
   - `tftlab local-collect` turns a personal computer into the collector, using one SQLite file (`data/local/theorylabs.sqlite3`). There is no Postgres, Docker, Neon or other cloud database.
   - The run: preflight (local target, disk, current trusted window, Riot key, CommunityDragon), a consistent backup with retention, the existing bounded `ingest_ladder` (15/15/20/25/25 × 10, current trusted window, `10:10` ceiling), validation, then Discovery preparation for the current window only. It ends with a plain-language report.
   - Also: `local-status` (offline), `local-snapshot` (verified sanitized export), `local-init`, `local-set-key`, and launchers in `scripts/`. Guide: `docs/local-collector.md`.
   - It never reads `DATABASE_URL`, refuses database URLs, and has no scheduling.
-- **Patch 18.4 window (REGISTERED):** `2026-10-08T07:00:00Z` .. `2026-10-20T00:00:00Z` (exclusive), from Riot's patch schedule. 18.4 is scheduled for 2026-10-07 PT and 18.5 for 2026-10-21 PT.
-  - The 18.3 → 18.4 transition (`2026-10-06T00:00Z` .. `2026-10-08T07:00Z`) stays unresolved.
-  - `--current-trusted-window` collection works again from 2026-10-08T07:00Z, locally against SQLite. The scheduled GitHub ingest uses Neon, so disable it or keep it disabled if Neon should not be written.
-  - 18.5 needs its own reviewed window before 2026-10-20.
+  - **TheoryLabs Collector dashboard (IMPLEMENTED; Windows-verified by the owner):** a local-only browser control panel (`tftlab collector-ui`, `TheoryLabs Collector.cmd`) with READY / NOT READY / COLLECTING / COMPLETE / FAILED states.
+  - **Public snapshots (producible locally):** `local-snapshot` or the dashboard's *Create Public Snapshot* writes a verified, sanitized snapshot under `data/local/public/`. Publishing stays a separate, deliberate step.
+- **Patch windows (fixed history):** 18.2, 18.3 and 18.4 are registered in `UNREAL_PATCH_REGISTRY` and never regenerated. 18.4 is `2026-10-08T07:00:00Z` .. `2026-10-20T00:00:00Z` (exclusive). The 18.3 → 18.4 transition (`2026-10-06T00:00Z` .. `2026-10-08T07:00Z`) stays unresolved. The scheduled GitHub ingest uses Neon and only the fixed registry, so disable it or keep it disabled if Neon should not be written.
+- **Automatic patch-cycle handling, stage 1 (CURRENT; IMPLEMENTED in review, with Track 6):** the local collector no longer needs a per-patch code entry.
+  - `tftlab.patch_calendar` reads Riot's official TFT patch schedule page, validates it, and caches it with its provenance in `data/local/`.
+  - It derives each new window with the versioned rule [00:00 PT the day after the scheduled date, 17:00 PT two days before the next entry). The rule reproduces 18.3 and 18.4 exactly.
+  - A window is frozen in a sidecar the first time collection uses it.
+  - Collection fails closed (NOT READY) in transition gaps, across balance updates such as 18.6B, and when the schedule is missing, too old or conflicting.
+  - The dashboard shows the current patch, the next scheduled patch and its date, and how fresh the schedule is.
+  - **Expected:** 18.5 becomes trusted automatically at 2026-10-22 00:00 PT (until 2026-11-02 17:00 PT). 18.6 runs from 2026-11-05 00:00 PT to 2026-11-09 17:00 PT. Collection then pauses across 18.6B until 19.1 (2026-12-02 00:00 PT).
+  - **Not yet:** reading Riot's "delayed" alerts, observing real rollout timestamps, community sources, or using the calendar in the cloud ingest path.
 - **Preserve:**
   - request, time and match-fetch budgets;
   - concurrency protection;
@@ -225,6 +232,7 @@ Riot access currently uses a **development key that must be regenerated regularl
   - Set 18 champions, traits or assets into production architecture;
   - Set 18 research anchors into production architecture. For example, `FAMILY_ANCHORS` and `REGRESSION_ANCHORS` are research lookups only.
 - Today the shipped roster, item-intent and art data are single-set files. Moving to per-set static data is part of this track.
+- **Patch automation (CURRENT, with Track 1):** new client patches now come from Riot's published schedule (`tftlab.patch_calendar`; see Track 1) instead of a code change per patch. Balance updates (suffix events such as `18.6B`) are recognized and surfaced, and pause collection; they do not yet create balance windows. Next stages, still to be designed: per-set dataset partitioning when 19.1 starts a new set, and any balance-window support for suffix events.
 - **Current static-data monitor issue (ACCEPTED/CURRENT):** the scheduled CommunityDragon live smoke is red because the current feed exposes both Set 18 `DA_Component_*` and standard `TFT_Item_*` component entries with duplicate display names (for example B.F. Sword and Chain Vest), while the integrity test assumes cached item display names are unique. Inspect and correct the selection/test assumption without hiding real source entries or weakening provenance.
 
 ### Track 7: Riot production readiness
@@ -297,9 +305,10 @@ Riot access currently uses a **development key that must be regenerated regularl
 
 1. **Make Champion Investigation practically useful (IMPLEMENTED):** the source-faithful "How to play {champion}" layer is the default tab, covering recipe-derived component direction, common items/pairs/builds (10+ boards, most used first), frequent teammates, buildable trait directions and the 3★ signal, with item/champion/trait icons; the deeper evidence lives in the Items/Teammates/Traits/Evidence tabs. Recurring cores followed (item 2).
 2. **Develop recurring core evidence (IMPLEMENTED):** observed 3–4 unit cores around a carry, from complete co-occurrence on the same final boards, selected by recurrence, shown in How to play and the Teammates tab. Next for Champion Intelligence: composition-family/variant evidence once trustworthy (Track 3).
-3. **Monitor scheduled live ingestion** across multiple runs: inspect yield, duplicate rate, collection lag, Riot errors/429s and storage growth; keep maximum mode manual until the deep-ladder 401 is understood (Track 1).
-4. **Repair the CommunityDragon live smoke** by resolving the duplicate-component namespace/test assumption without discarding legitimate source data (Track 6).
-5. **In parallel, run the instrumented (unchanged) S2 report** from `main` on Patch 18.3 with `report_mode: s2-diagnostics` to quantify recursive lock-in and order dependence. Status:
+3. **Review and verify automatic patch-cycle handling** (Track 1/Track 6). It is in review. Then confirm on the owner's Windows machine that 18.5 becomes READY on 2026-10-22 without a code update, and that collection pauses around 18.6B.
+4. **Monitor scheduled live ingestion** across multiple runs: inspect yield, duplicate rate, collection lag, Riot errors/429s and storage growth; keep maximum mode manual until the deep-ladder 401 is understood (Track 1).
+5. **Repair the CommunityDragon live smoke** by resolving the duplicate-component namespace/test assumption without discarding legitimate source data (Track 6).
+6. **In parallel, run the instrumented (unchanged) S2 report** from `main` on Patch 18.3 with `report_mode: s2-diagnostics` to quantify recursive lock-in and order dependence. Status:
    - instrumentation IMPLEMENTED;
    - full run #8 timed out before S2;
    - focused mode and exact speedups IMPLEMENTED;
@@ -308,9 +317,9 @@ Riot access currently uses a **development key that must be regenerated regularl
    - versioned candidate `C_S2_centroid_candidate_v1` IMPLEMENTED, with its production evaluation run (`s2-candidate-c-centroid-v1`) PENDING.
 
    Canonical S2, Condition 1 and C's production cap stay unchanged. The candidate is not user-facing until it is frozen and checked on a held-out window (Track 2).
-6. Keep set-transition readiness in new work and move toward Riot production access as the product matures (Tracks 6/7).
-7. Build the **Reference / game knowledge** tab incrementally after the current Champion Investigation cleanup/redesign, starting only with subsections whose sources and refresh requirements are verified (Track 9).
-8. After cores and trustworthy family evidence are ready, connect Champion Investigation to composition boards/families and practical alternatives—the bridge into TheoryLabs' long-term composition discovery/theorycrafting differentiator (Track 8).
+7. Keep set-transition readiness in new work and move toward Riot production access as the product matures (Tracks 6/7).
+8. Build the **Reference / game knowledge** tab incrementally after the current Champion Investigation cleanup/redesign, starting only with subsections whose sources and refresh requirements are verified (Track 9).
+9. After cores and trustworthy family evidence are ready, connect Champion Investigation to composition boards/families and practical alternatives—the bridge into TheoryLabs' long-term composition discovery/theorycrafting differentiator (Track 8).
 
 **Continuous collection, Champion Investigation/performance work, static-data monitoring and S2 research are parallel workstreams.** This list is not a sequence in which all research must finish before product work proceeds.
 

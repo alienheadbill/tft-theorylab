@@ -7,7 +7,7 @@ from .analytics import default_balance_window
 from .cdragon import SetMetadata
 from .riot import RANKED_TFT_QUEUE_ID
 from .storage import Database
-from .unreal_patch import UNREAL_PATCH_REGISTRY, UNRESOLVED_UNREAL_PATCH
+from .unreal_patch import UNRESOLVED_UNREAL_PATCH, active_registry
 
 
 @dataclass(frozen=True)
@@ -345,8 +345,9 @@ def validate_live_data(
     unresolved_unreal_earliest_game_datetime, unresolved_unreal_latest_game_datetime = db.query_one(
         "SELECT MIN(game_datetime), MAX(game_datetime) FROM matches WHERE patch = ?", (UNRESOLVED_UNREAL_PATCH,)
     ) or (None, None)
-    unreal_registry_total_windows = len(UNREAL_PATCH_REGISTRY)
-    unreal_registry_usable_windows = sum(1 for w in UNREAL_PATCH_REGISTRY if w.is_usable)
+    registry = active_registry()  # the fixed windows plus any frozen calendar windows installed locally
+    unreal_registry_total_windows = len(registry)
+    unreal_registry_usable_windows = sum(1 for w in registry if w.is_usable)
     game_version_distribution = {
         str(v): int(n) for v, n in db.query_all("SELECT game_version, COUNT(*) FROM matches GROUP BY game_version")
     }

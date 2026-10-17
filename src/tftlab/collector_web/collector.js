@@ -37,7 +37,36 @@
     return d.toLocaleString() + " (" + d.toISOString().replace("T", " ").slice(0, 16) + " UTC)";
   }
 
+  // A Pacific calendar date "2026-10-21" -> "Oct 21, 2026" (no time-zone shift).
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function fmtDay(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
+    return m ? MONTHS[Number(m[2]) - 1] + " " + Number(m[3]) + ", " + m[1] : "—";
+  }
+
   // ------------------------------------------------------------ view logic (pure)
+
+  // Patch facts from the server's patch calendar (read from the saved copy of
+  // Riot's schedule; the page itself never contacts Riot).
+  function scheduleView(state) {
+    const pc = ((state || {}).collector || {}).patch_calendar;
+    if (!pc) return null;
+    const cur = pc.current, next = pc.next, bal = pc.upcoming_balance, fresh = pc.freshness || {};
+    const kindText = (e) => e.kind === "balance" ? "balance update " + e.label + " (patch " + e.base_patch + ")"
+      : "patch " + e.label;
+    return {
+      ready: !!pc.ready,
+      message: pc.message || "",
+      current: cur ? "Patch " + cur.patch : "None",
+      next: next ? kindText(next).replace(/^./, (c) => c.toUpperCase()) + " — " + fmtDay(next.scheduled_date) +
+        " (Pacific Time)" : "Not listed yet",
+      balance: bal ? "Balance update " + bal.label + " — " + fmtDay(bal.scheduled_date) +
+        ": collection pauses around it" : null,
+      nextIsBalance: !!(next && next.kind === "balance"),
+      freshness: fresh.label || "unknown",
+      freshnessTone: fresh.state === "fresh" ? "ok" : fresh.state === "none" ? "warn" : "bad",
+    };
+  }
 
   const KEY_LABELS = {
     not_configured: ["No key saved", "bad"],
@@ -93,6 +122,32 @@
     return ui;
   }
 
+  // Provenance for the Technical details list.
+  function scheduleTechRows(pc) {
+    if (!pc) return [];
+    const p = pc.provenance || {};
+    const win = (w) => w.client_patch + ": " + (w.starts_at_utc || "") + " → " + (w.ends_at_utc || "");
+    const origin = { "built-in": "fixed history (in the code)", frozen: "from Riot's schedule, frozen when first used",
+      planned: "from Riot's schedule; frozen when collection starts" };
+    const notes = [p.schedule_error, p.frozen_error].concat(p.conflicts || [], p.diagnostics || []).filter(Boolean);
+    return [
+      ["Patch window origin", pc.current ? origin[pc.current.origin] || pc.current.origin : "—"],
+      ["Schedule source", (p.source_name || "") + " — " + (p.source_url || "")],
+      ["Schedule fetched", p.fetched_at ? fmtTime(p.fetched_at) : "never"],
+      ["Last schedule check", (pc.freshness || {}).last_check_at ? fmtTime(pc.freshness.last_check_at) +
+        ((pc.freshness.last_check_ok === false) ? " — failed: " + (pc.freshness.last_check_error || "unknown") : " — ok")
+        : "never"],
+      ["Schedule fingerprint", p.events_sha256 || "—"],
+      ["Page fingerprint", p.content_sha256 || "—"],
+      ["Parser / window rule", (p.parser_version || "—") + " / " + (p.policy_version || "—")],
+      ["Scheduled entries", (p.events || []).slice(-6).map((e) => e.label + " " + e.scheduled_date +
+        (e.kind === "balance" ? " (balance)" : "")).join(", ") || "—"],
+      ["Planned windows", (p.planned_windows || []).map(win).join("; ") || "none"],
+      ["Frozen windows", (p.frozen_windows || []).map(win).join("; ") || "none"],
+      ["Schedule notes", notes.join(" ") || "none"],
+    ];
+  }
+
   function readiness(state) {
     const reasons = [];
     if (!state) return { ready: false, reasons: ["Reading the collector's status…"] };
@@ -101,7 +156,8 @@
     const key = state.key || {};
     if (state.app_files && state.app_files.ok === false) reasons.push(state.app_files.message);
     if (c.error) reasons.push(c.error);
-    if (!tw.inside) reasons.push("TheoryLabs does not yet have a trusted window for the current patch.");
+    const pc = c.patch_calendar;
+    if (!tw.inside) reasons.push((pc && pc.message) || tw.reason || "TheoryLabs does not have a trusted window for collection right now.");
     if (!key.configured) reasons.push("No Riot key saved yet — paste your development key below.");
     else if (key.state === "invalid") reasons.push("Your Riot key has expired or is invalid — save a new one below.");
     return { ready: reasons.length === 0, reasons };
@@ -180,13 +236,19 @@
     const ready = readiness(state);
     const tw = (state.collector || {}).trusted_window || {};
     const lastReport = (state.collector || {}).last_report;
+    const sched = scheduleView(state);
     if (!ready.ready) {
-      return Object.assign(view, { tone: "notready", label: "NOT READY", headline: "Not ready to collect",
-        lines: ready.reasons });
+      const lines = ready.reasons.slice();
+      if (sched && !tw.inside) lines.push("Next scheduled: " + sched.next, "Patch schedule: " + sched.freshness);
+      return Object.assign(view, { tone: "notready", label: "NOT READY", headline: "Not ready to collect", lines });
     }
     const keyText = keyLabel(state.key).text; // "Key valid" -> "Riot key valid"; else "Riot key: saved — not checked"
     view.lines = ["Patch " + tw.patch, /^Key /.test(keyText) ? "Riot key " + keyText.slice(4)
       : "Riot key: " + keyText.charAt(0).toLowerCase() + keyText.slice(1)];
+    if (sched) {
+      view.lines.push("Next scheduled: " + sched.next);
+      if (sched.nextIsBalance) view.lines.push("Collection pauses before this balance update, then resumes with the next patch");
+    }
     if (lastReport) {
       view.lines.push("Last collection: " + (lastReport.outcome === "success" ? "succeeded" : "did not succeed") +
         (lastReport.new_matches != null ? ", " + fmtNum(lastReport.new_matches) + " new matches" : ""));
@@ -241,8 +303,8 @@
     return null;
   }
 
-  const api = { fmtNum, fmtBytes, fmtDuration, keyLabel, newUiState, applyPoll, readiness, primaryView,
-    buttonsView, bannerView, validationSummary };
+  const api = { fmtNum, fmtBytes, fmtDuration, fmtDay, keyLabel, newUiState, applyPoll, readiness, primaryView,
+    buttonsView, bannerView, validationSummary, scheduleView, scheduleTechRows };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   if (typeof document === "undefined") return;
 
@@ -342,9 +404,12 @@
     const health = c.error ? "Problem: " + c.error
       : c.read_error ? "Problem: the database could not be read (" + c.read_error + ")"
       : c.exists ? "OK" : "No database yet — the first collection creates it";
+    const sched = scheduleView(state);
     facts($("status-list"), [
       ["Trusted patch", tw.patch || "none"],
-      ["Collection allowed now", tw.inside ? "Yes" : "No — " + (tw.patch ? "outside the patch window" : "no trusted window")],
+      ["Collection allowed now", tw.inside ? "Yes" : "No — paused between trusted patch windows"],
+      ...(sched ? [["Next scheduled", sched.next], ["Patch schedule", sched.freshness]] : []),
+      ...(sched && sched.balance ? [["Heads-up", sched.balance]] : []),
       ["Current-patch matches", tw.patch ? fmtNum(cur.matches) : "—"],
       ["Current-patch boards", tw.patch ? fmtNum(cur.boards) : "—"],
       ["Latest game", fmtTime(cur.latest_game != null ? cur.latest_game : store.latest_game)],
@@ -360,12 +425,13 @@
       ["All matches stored", c.exists ? fmtNum(store.matches) : "—"],
       ["Collection runs", c.exists ? fmtNum(store.runs_completed) + " completed, " +
         fmtNum(store.runs_incomplete) + " incomplete" : "—"],
-      ["Patch window", tw.patch ? fmtTime(tw.starts_at) + " → " + fmtTime(tw.ends_at) : (tw.reason || "—")],
+      ["Patch window", tw.patch ? fmtTime(tw.starts_at) + " → " + fmtTime(tw.ends_at) : "none (the reason is shown above)"],
       ["Latest backup", lb ? lb.name + " (" + fmtBytes(lb.bytes) + "), " + c.backups + " kept" : "none yet"],
       ["Backup folder", c.backup_dir || "—"],
       ["Discovery preparation", Object.keys(prepared).length
         ? Object.entries(prepared).map(([w, st]) => w + ": " + st).join(", ") : "—"],
       ["Last report file", last ? last.file : "—"],
+      ...scheduleTechRows(c.patch_calendar),
       ["TheoryLabs folder", state.root],
       ["App run", state.instance],
     ]);

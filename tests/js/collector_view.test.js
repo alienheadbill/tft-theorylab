@@ -204,3 +204,71 @@ test("durations are formatted for people", () => {
   assert.equal(view.fmtDuration(222), "3m 42s");
   assert.equal(view.fmtDuration(3725), "1h 02m");
 });
+
+// ------------------------------------------------------------ patch schedule (from the saved copy of Riot's page)
+
+function calendar(overrides = {}) {
+  return {
+    ready: true, code: "ready", message: "Patch 18.4 is trusted until Oct 19, 2026 17:00 Pacific.",
+    current: { patch: "18.4", starts_at: 1791442800000, ends_at: 1792454400000, origin: "built-in" },
+    next: { label: "18.5", kind: "patch", base_patch: "18.5", scheduled_date: "2026-10-21" },
+    next_window: null, upcoming_balance: { label: "18.6B", base_patch: "18.6", scheduled_date: "2026-11-11" },
+    freshness: { state: "fresh", label: "Riot — checked today", last_check_at: T0, last_check_ok: true },
+    provenance: { source_name: "Riot Games Player Support: Patch Schedule - Teamfight Tactics",
+      source_url: "https://support.riotgames.com/en-us/tft/events/patch-schedule-teamfight-tactics/",
+      fetched_at: T0, events_sha256: "sha256:abc", content_sha256: "sha256:def",
+      parser_version: "riot-support-schedule-table/1", policy_version: "pt-d+1-0000_to_n-2-1700/1",
+      events: [{ label: "18.6B", scheduled_date: "2026-11-11", kind: "balance" }],
+      planned_windows: [{ client_patch: "18.5", starts_at_utc: "2026-10-22T07:00:00Z", ends_at_utc: "2026-11-03T01:00:00Z" }],
+      frozen_windows: [], conflicts: [], diagnostics: ["18.3: ambiguous"], schedule_error: null, frozen_error: null },
+    ...overrides,
+  };
+}
+
+test("READY shows the current patch, the next scheduled patch and its date", () => {
+  const s = state({ collector: { patch_calendar: calendar() } });
+  const p = view.primaryView(s, view.newUiState("run-a"), T0);
+  assert.equal(p.label, "READY");
+  assert.equal(p.lines[0], "Patch 18.4");
+  assert.ok(p.lines.includes("Next scheduled: Patch 18.5 — Oct 21, 2026 (Pacific Time)"));
+  const sv = view.scheduleView(s);
+  assert.equal(sv.freshness, "Riot — checked today");
+  assert.equal(sv.balance, "Balance update 18.6B — Nov 11, 2026: collection pauses around it");
+});
+
+test("NOT READY between patches gives the plain reason, the next patch and the schedule freshness", () => {
+  const msg = "Patch 18.5 is scheduled for Oct 21, 2026 (Pacific Time). TheoryLabs leaves a gap around every patch " +
+    "change and starts trusting patch 18.5 at Oct 22, 2026 00:00 Pacific, automatically. Collection is paused " +
+    "rather than mixing patches. No Riot data was collected.";
+  const pc = calendar({ ready: false, code: "between_patches", message: msg, current: null,
+    freshness: { state: "cached_refresh_failed", label: "cached — refresh failed (Riot checked yesterday)" } });
+  const s = state({ collector: { trusted_window: { patch: null, inside: false, reason: msg }, patch_calendar: pc } });
+  const ui = view.newUiState("run-a");
+  const p = view.primaryView(s, ui, T0);
+  assert.equal(p.label, "NOT READY");
+  assert.equal(p.lines[0], msg);
+  assert.ok(p.lines.includes("Next scheduled: Patch 18.5 — Oct 21, 2026 (Pacific Time)"));
+  assert.ok(p.lines.includes("Patch schedule: cached — refresh failed (Riot checked yesterday)"));
+  assert.equal(view.buttonsView(s, ui).collect.disabled, true);
+});
+
+test("an upcoming balance update is announced while its patch is current", () => {
+  const pc = calendar({ current: { patch: "18.6", origin: "frozen" },
+    next: { label: "18.6B", kind: "balance", base_patch: "18.6", scheduled_date: "2026-11-11" } });
+  const s = state({ collector: { trusted_window: { patch: "18.6", inside: true }, patch_calendar: pc } });
+  const p = view.primaryView(s, view.newUiState("run-a"), T0);
+  assert.ok(p.lines.includes("Next scheduled: Balance update 18.6B (patch 18.6) — Nov 11, 2026 (Pacific Time)"));
+  assert.ok(p.lines.some((l) => l.startsWith("Collection pauses before this balance update")));
+});
+
+test("provenance goes to the technical details", () => {
+  const rows = Object.fromEntries(view.scheduleTechRows(calendar()));
+  assert.match(rows["Schedule source"], /support\.riotgames\.com/);
+  assert.equal(rows["Schedule fingerprint"], "sha256:abc");
+  assert.equal(rows["Parser / window rule"], "riot-support-schedule-table/1 / pt-d+1-0000_to_n-2-1700/1");
+  assert.equal(rows["Patch window origin"], "fixed history (in the code)");
+  assert.equal(rows["Planned windows"], "18.5: 2026-10-22T07:00:00Z → 2026-11-03T01:00:00Z");
+  assert.equal(rows["Schedule notes"], "18.3: ambiguous");
+  assert.deepEqual(view.scheduleTechRows(undefined), []);
+  assert.equal(view.fmtDay("2026-12-01"), "Dec 1, 2026");
+});

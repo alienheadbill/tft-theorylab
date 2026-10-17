@@ -14,6 +14,9 @@ dependencies = [
   "rich>=13,<15",
   "fastapi>=0.110,<1",
   "uvicorn>=0.30,<1",
+  # IANA time zones for the patch calendar's America/Los_Angeles arithmetic;
+  # Windows has no system zone database (zoneinfo needs this package there).
+  "tzdata>=2024.1; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

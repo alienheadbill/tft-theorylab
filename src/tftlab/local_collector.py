@@ -13,8 +13,9 @@ this file.
 implementation instead of duplicating it:
 
   1. preflight -- local SQLite target, disk space, the current trusted
-     window (`unreal_patch.current_trusted_window`; never a hardcoded
-     patch), the Riot key (`riot.check_riot_key`, the `verify-riot` check)
+     window (`patch_calendar`: the fixed history in `unreal_patch` plus
+     windows derived from Riot's published schedule; never a hardcoded
+     patch, never open-ended), the Riot key (`riot.check_riot_key`, the `verify-riot` check)
      and CommunityDragon costs -- all before the database is modified;
   2. a consistent pre-run backup (SQLite's online backup API) with
      retention;
@@ -44,7 +45,8 @@ from .ingest import DEFAULT_MAX_LADDER_PAGES, ingest_ladder
 from .prepared_discovery import lookup_prepared, prepare_window
 from .riot import RiotApiError, check_riot_key, classify_riot_error, is_fatal_riot_error
 from .storage import Database
-from .unreal_patch import NoCurrentTrustedWindow, UnrealPatchWindow, current_trusted_window
+from . import patch_calendar as pcal
+from .unreal_patch import UnrealPatchWindow
 from .validate import validate_live_data
 
 #: Everything the local collector writes lives under here (git-ignored).
@@ -80,11 +82,9 @@ EXPIRED_KEY_MESSAGE = (
     "refresh it in the Riot Developer Portal (developer.riotgames.com), update RIOT_API_KEY in .env "
     "(or run `tftlab local-set-key`), and run this command again. No collection was performed."
 )
-NO_WINDOW_MESSAGE = (
-    "TheoryLabs does not currently have a verified collection window. No Riot data was collected. "
-    "A new patch window has to be verified and registered (tftlab.unreal_patch.UNREAL_PATCH_REGISTRY) "
-    "before collection can continue; TheoryLabs never guesses patch boundaries."
-)
+#: Prefix of every "no trusted window" stop; the reason itself comes from
+#: `patch_calendar` (between patches, balance update, no schedule, ...).
+NO_WINDOW_MESSAGE = "TheoryLabs does not currently have a trusted collection window."
 KEY_NOT_SET_MESSAGE = (
     "RIOT_API_KEY is not set. Copy your development key from the Riot Developer Portal "
     "(developer.riotgames.com) into the RIOT_API_KEY line of .env (or run `tftlab local-set-key`). "
@@ -374,6 +374,7 @@ class CollectReport:
     window_start: int | None = None
     window_end: int | None = None
     window_source: str | None = None
+    patch_calendar: dict[str, Any] = field(default_factory=dict)
     before: dict[str, Any] = field(default_factory=dict)
     after: dict[str, Any] = field(default_factory=dict)
     backup: dict[str, Any] = field(default_factory=dict)
@@ -442,8 +443,14 @@ def run_local_collect(
     prepare: Callable[..., Any] = prepare_window,
     database_url_set: bool = False,
     progress: Callable[[Check], None] = _noop,
+    refresh_calendar: Callable[..., Any] | None = None,
 ) -> CollectReport:
     """Preflight, back up, collect, validate, prepare, report (see module docstring).
+
+    `refresh_calendar(local_dir, now_ms=...)` (normally
+    `patch_calendar.refresh_schedule`, throttled) refreshes Riot's patch
+    schedule first; tests leave it out, so nothing here touches the network
+    unless asked.
 
     `client_factory(api_key, platform=..., region=...)` returns a context-
     managed Riot client (normally `RiotClient` with the production rate
@@ -480,16 +487,32 @@ def run_local_collect(
     check("Riot routing", "ok", f"platform {platform}, region {region}")
     check("Current time (UTC)", "info", iso(at_ms))
 
-    # 2. the current trusted patch window (from the registry; never guessed).
-    try:
-        window = current_trusted_window(at_ms)
-    except NoCurrentTrustedWindow as exc:
-        check("Trusted patch window", "fail", f"none: {exc}")
-        return stop(NO_WINDOW_MESSAGE)
+    # 2. the current trusted patch window (fixed history or Riot's schedule; never guessed).
+    calendar_dir = db_path.parent
+    if refresh_calendar is not None:
+        try:
+            refreshed = refresh_calendar(calendar_dir, now_ms=at_ms)
+        except Exception as exc:  # refresh_schedule never raises; never let a refresh stop preflight anyway
+            check("Patch schedule", "warn", f"refresh failed ({type(exc).__name__}); using the saved copy")
+        else:
+            if not refreshed.attempted:
+                check("Patch schedule", "ok", "checked with Riot within the last hour")
+            elif refreshed.ok:
+                check("Patch schedule", "ok", f"Riot's schedule checked now ({refreshed.message})")
+            else:
+                check("Patch schedule", "warn", f"refresh failed ({refreshed.message}); using the saved copy")
+    calendar = pcal.calendar_state(calendar_dir, now_ms=at_ms)
+    report.patch_calendar = calendar.public()
+    if not calendar.ready or calendar.current is None:
+        check("Trusted patch window", "fail", f"none ({calendar.code})")
+        return stop(f"{NO_WINDOW_MESSAGE} {calendar.message}")
+    window = calendar.current
     report.patch, report.window_start, report.window_end = window.client_patch, window.starts_at, window.ends_at
     report.window_source = window.source
+    origin = {"built-in": "fixed history", "frozen": "from Riot's schedule, frozen",
+              "planned": "from Riot's schedule; frozen when collection starts"}.get(calendar.current_origin or "", "")
     check("Trusted patch window", "ok",
-          f"patch {window.client_patch}: {iso(window.starts_at)} to {iso(window.ends_at)} (now inside it)")
+          f"patch {window.client_patch}: {iso(window.starts_at)} to {iso(window.ends_at)} (now inside it; {origin})")
 
     # 3. the Riot key -- before the database is opened at all.
     if not riot_key_configured(api_key):
@@ -549,6 +572,21 @@ def run_local_collect(
         # Always `local-<ms>`: never derived from CI variables (GITHUB_RUN_ID would give
         # every run in one job the same id), and unique per run on one computer.
         run_id = f"local-{at_ms}"
+        # Freeze the window now that it is really used (it never moves again)
+        # and install the frozen windows so new and backfilled matches are
+        # classified with exactly those windows.
+        try:
+            frozen_window, _state = pcal.collection_window(calendar_dir, now_ms=at_ms)
+        except (pcal.CalendarNotReady, pcal.ScheduleError, OSError) as exc:
+            check("Collection", "fail", f"the patch window could not be locked in ({type(exc).__name__})")
+            reason = str(exc) if isinstance(exc, pcal.CalendarNotReady) else \
+                f"The patch window record could not be written ({type(exc).__name__}). No Riot data was collected."
+            return stop(f"{NO_WINDOW_MESSAGE} {reason}")
+        if (frozen_window.client_patch, frozen_window.starts_at, frozen_window.ends_at) != \
+                (window.client_patch, window.starts_at, window.ends_at):
+            check("Collection", "fail", "the patch window changed during preflight")
+            return stop(f"{NO_WINDOW_MESSAGE} The patch window changed while preparing; run again. "
+                        "No Riot data was collected.")
         with Database(db_path) as db:
             if db.dialect != "sqlite":  # pragma: no cover - resolve_local_db makes this unreachable
                 raise LocalTargetError("the local collector only writes to SQLite")
@@ -735,13 +773,14 @@ def local_status(db_path: Path, *, at_ms: int, recent_windows: int = 3) -> dict[
     """Everything `tftlab local-status` shows. Read-only and network-free:
     no Riot, no CommunityDragon. Aggregates only -- no identifiers."""
     status: dict[str, Any] = {"db_path": str(db_path), "exists": db_path.exists(), "now": at_ms}
-    try:
-        window = current_trusted_window(at_ms)
+    calendar = pcal.calendar_state(db_path.parent, now_ms=at_ms)  # reads cached files only
+    status["patch_calendar"] = calendar.public()
+    window = calendar.current if calendar.ready else None
+    if window is not None:
         status["trusted_window"] = {"patch": window.client_patch, "starts_at": window.starts_at,
-                                    "ends_at": window.ends_at, "inside": True}
-    except NoCurrentTrustedWindow as exc:
-        window = None
-        status["trusted_window"] = {"patch": None, "inside": False, "reason": str(exc)}
+                                    "ends_at": window.ends_at, "inside": True, "origin": calendar.current_origin}
+    else:
+        status["trusted_window"] = {"patch": None, "inside": False, "reason": calendar.message}
     backups = list_backups(local_dirs(db_path)["backups"])
     status["backups"] = len(backups)
     status["latest_backup"] = (
@@ -784,11 +823,13 @@ class LocalSnapshotError(RuntimeError):
     pass
 
 
-def default_snapshot_windows(db: Database, *, at_ms: int) -> list[str]:
-    """The current trusted window's balance window(s) present in the store."""
-    try:
-        window = current_trusted_window(at_ms)
-    except NoCurrentTrustedWindow:
+def default_snapshot_windows(db: Database, *, at_ms: int, local_dir: Path | None = None) -> list[str]:
+    """The current trusted window's balance window(s) present in the store
+    (`local_dir`: where the patch calendar lives; the database's folder)."""
+    local_dir = local_dir if local_dir is not None else (db.path.parent if db.path is not None else DEFAULT_LOCAL_DIR)
+    calendar = pcal.calendar_state(local_dir, now_ms=at_ms)
+    window = calendar.current if calendar.ready else None
+    if window is None:
         raise LocalSnapshotError(
             "There is no current trusted patch window, so there is no default to export. "
             "Name a stored, trusted window explicitly with --balance-window (e.g. the previous patch)."
@@ -812,7 +853,8 @@ def local_snapshot(db_path: Path, out_path: Path, *, at_ms: int, balance_windows
     if not db_path.exists():
         raise LocalSnapshotError(f"There is no local database at {db_path} yet; run `tftlab local-collect` first.")
     with Database.open_existing(db_path) as db:
-        windows = list(balance_windows) if balance_windows else default_snapshot_windows(db, at_ms=at_ms)
+        windows = list(balance_windows) if balance_windows else \
+            default_snapshot_windows(db, at_ms=at_ms, local_dir=db_path.parent)
         result = export_public_snapshot(db, out_path, balance_windows=windows, compress=True, prepare=True,
                                         progress=progress, secrets=[str(db_path), *[s for s in secrets if s]])
     verification = verify_public_snapshot(result.path, secrets=[s for s in secrets if s] or None)

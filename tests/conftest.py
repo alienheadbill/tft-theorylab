@@ -31,3 +31,19 @@ def _no_real_riot_sleeping(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
     monkeypatch.setattr(riot, "_monotonic", clock)
     monkeypatch.setattr(riot, "_sleep", clock.sleep)
     return clock
+
+
+@pytest.fixture(autouse=True)
+def _no_real_patch_schedule_requests(monkeypatch: pytest.MonkeyPatch):
+    """CI never depends on Riot Support: the patch calendar's only network
+    call fails fast in every test (tests pass their own fixture pages), and
+    windows a test froze/installed never leak into the next test."""
+    import tftlab.patch_calendar as patch_calendar
+    import tftlab.unreal_patch as unreal_patch
+
+    def _blocked(url: str):
+        raise OSError(f"network disabled in tests: {url}")
+
+    monkeypatch.setattr(patch_calendar, "_http_get", _blocked)
+    yield
+    unreal_patch.install_frozen_windows(())

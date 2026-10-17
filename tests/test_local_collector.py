@@ -299,14 +299,14 @@ def test_a_missing_key_stops_before_riot_or_the_database(key, tmp_path: Path) ->
     "2026-10-07T12:00:00+00:00",  # the 18.3 -> 18.4 gap: neither patch
     "2026-10-08T06:59:59+00:00",  # one second before 18.4 starts
     "2026-10-20T00:00:00+00:00",  # 18.4's exclusive end
-    "2026-11-15T12:00:00+00:00",  # later: a new window must be registered first
+    "2026-11-15T12:00:00+00:00",  # later, with no saved patch schedule: no window
     "2031-01-01T00:00:00+00:00",
 ])
 def test_outside_a_trusted_window_nothing_is_collected(when: str, tmp_path: Path) -> None:
     h = Harness(tmp_path)
     report = h.run(at_ms=_ms(when))
-    assert report.outcome == lc.PREFLIGHT_FAILED and report.message == lc.NO_WINDOW_MESSAGE
-    assert "does not currently have a verified collection window" in report.message
+    assert report.outcome == lc.PREFLIGHT_FAILED and report.message.startswith(lc.NO_WINDOW_MESSAGE)
+    assert "Collection is paused rather than mixing patches" in report.message
     assert "No Riot data was collected" in report.message
     assert not h.factory_calls and not h.db.exists()
 
@@ -333,6 +333,94 @@ def test_the_window_comes_from_the_registry_never_a_hardcoded_patch(tmp_path: Pa
     assert seen[0]["history_end_time"] == future.ends_at // 1000
     source = Path(lc.__file__).read_text()
     assert "18.4" not in source and "1_791_442_800_000" not in source
+
+
+# ---------------------------------------------------------------- the patch calendar: new patches without code changes
+
+SCHEDULE_FIXTURE = Path(__file__).parent / "fixtures" / "riot_tft_patch_schedule_2026-10-17.html"
+START_18_5_MS = _ms("2026-10-22T07:00:00+00:00")  # 00:00 PDT the day after Riot's Oct 21
+END_18_5_MS = _ms("2026-11-03T01:00:00+00:00")  # 17:00 PST two days before 18.6 (Nov 4)
+
+
+def _seed_schedule(local_dir: Path, at_ms: int) -> None:
+    from tftlab import patch_calendar as pcal
+
+    page = SCHEDULE_FIXTURE.read_bytes()
+    assert pcal.refresh_schedule(local_dir, now_ms=at_ms, force=True,
+                                 http_get=lambda url: (200, "text/html", page, url)).ok
+
+
+def _payloads_at(start_ms: int, count: int = 16) -> list[dict]:
+    payloads = _payloads_18_4(count)
+    for i, p in enumerate(payloads):
+        p["info"]["game_datetime"] = start_ms + 60_000 * (i + 1)
+    return payloads
+
+
+def test_patch_18_5_collects_automatically_after_the_gap(tmp_path: Path) -> None:
+    from tftlab import patch_calendar as pcal
+
+    h = Harness(tmp_path, StubRiot(_payloads_at(START_18_5_MS)))
+    _seed_schedule(h.db.parent, _ms("2026-10-17T19:00:00+00:00"))
+    # The gap: NOT READY, nothing touched.
+    for when in ("2026-10-20T00:00:00+00:00", "2026-10-21T18:00:00+00:00", "2026-10-22T06:59:59+00:00"):
+        _seed_schedule(h.db.parent, _ms(when))
+        report = h.run(at_ms=_ms(when))
+        assert report.outcome == lc.PREFLIGHT_FAILED and "starts trusting patch 18.5" in report.message, when
+        assert not h.factory_calls and not h.db.exists()
+        assert report.patch_calendar["next"]["label"] in ("18.5", "18.6")
+    # After the gap: READY with no code change; the window is frozen as it is used.
+    at = START_18_5_MS + 3 * 3_600_000
+    _seed_schedule(h.db.parent, at)
+    seen = []
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs)
+        return ingest_module.ingest_ladder(*args, **kwargs)
+
+    report = h.run(at_ms=at, ingest=spy)
+    assert report.outcome == lc.SUCCESS, report.message
+    assert (report.patch, report.window_start, report.window_end) == ("18.5", START_18_5_MS, END_18_5_MS)
+    assert seen[0]["history_start_time"] == START_18_5_MS // 1000 and seen[0]["history_end_time"] == END_18_5_MS // 1000
+    frozen = json.loads((h.db.parent / pcal.FROZEN_NAME).read_text())["windows"]
+    assert [(w["client_patch"], w["starts_at"], w["ends_at"]) for w in frozen] == [("18.5", START_18_5_MS, END_18_5_MS)]
+    # The masked Unreal matches were classified with the frozen window, nothing else.
+    assert _rows(h.db, "SELECT patch, balance_window, COUNT(*) FROM matches GROUP BY patch, balance_window") == \
+        [("18.5", "18.5", 16)]
+    status = lc.local_status(h.db, at_ms=at + 60_000)
+    assert status["trusted_window"]["patch"] == "18.5" and status["trusted_window"]["origin"] == "frozen"
+    assert status["current"]["matches"] == 16
+    with Database.open_existing(h.db) as db:
+        assert lc.default_snapshot_windows(db, at_ms=at + 60_000, local_dir=h.db.parent) == ["18.5"]
+
+
+def test_without_a_schedule_a_new_patch_is_not_ready(tmp_path: Path) -> None:
+    from tftlab import patch_calendar as pcal
+
+    h = Harness(tmp_path, StubRiot(_payloads_at(START_18_5_MS)))
+    calls = []
+
+    def refresh(local_dir, *, now_ms):  # the real refresh; its network call is blocked in tests
+        calls.append(now_ms)
+        return pcal.refresh_schedule(local_dir, now_ms=now_ms)
+
+    report = h.run(at_ms=START_18_5_MS + 3_600_000, refresh_calendar=refresh)
+    assert calls == [START_18_5_MS + 3_600_000]  # preflight tried Riot's schedule once
+    assert report.outcome == lc.PREFLIGHT_FAILED and report.message.startswith(lc.NO_WINDOW_MESSAGE)
+    assert "could not read Riot's official patch schedule" in report.message
+    names = [c.name for c in report.checks]
+    assert "Patch schedule" in names and names.index("Patch schedule") < names.index("Trusted patch window")
+    assert not h.factory_calls and not h.db.exists()
+
+
+def test_a_balance_update_pauses_local_collection(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    when = _ms("2026-11-10T12:00:00+00:00")  # between 18.6's end and 19.1's start, across 18.6B
+    _seed_schedule(h.db.parent, when)
+    report = h.run(at_ms=when)
+    assert report.outcome == lc.PREFLIGHT_FAILED and "balance update (18.6B)" in report.message
+    assert "Collection is paused rather than mixing patches" in report.message
+    assert not h.factory_calls and not h.db.exists()
 
 
 # ---------------------------------------------------------------- 7-9: the existing ingest, bounded
@@ -625,7 +713,7 @@ def test_local_collect_cli_outside_a_window(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setattr(lc, "now_ms", lambda: _ms("2026-10-21T00:00:00+00:00"))
     result = CliRunner().invoke(cli.app, ["local-collect"])
     assert result.exit_code == 1
-    assert "does not currently have a verified collection window" in re.sub(r"\s+", " ", result.output)
+    assert "does not currently have a trusted collection window" in re.sub(r"\s+", " ", result.output)
     assert not (tmp_path / "data/local/theorylabs.sqlite3").exists()
 
 

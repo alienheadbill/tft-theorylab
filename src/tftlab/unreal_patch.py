@@ -136,13 +136,17 @@ class UnrealPatchWindow:
 # 2026-10-08T07:00:00Z: it is classified as neither patch, and 18.3 was NOT
 # widened to cover it.
 #
-# To extend this as new patches ship: read off the actual masked-Unreal
-# match timestamp range via `tftlab patch-diagnostics` (or
-# `validate-live-data`), cross-reference Riot's published patch schedule,
-# and add another conservative window following the same pattern -- margin
-# in from both the previous patch's scheduled end and this patch's
-# scheduled start, wide enough to exclude the rollout transition, backed
-# by the schedule URL as `source`.
+# These three entries are fixed history: they are never regenerated, and
+# nothing at runtime may move them. Later patches no longer need a code
+# change: the local collector reads Riot's published schedule
+# (`tftlab.patch_calendar`), derives each new window with a named,
+# versioned rule that reproduces the 18.3 and 18.4 windows above exactly
+# (18.2's earlier start is the one historical exception), and FREEZES a
+# derived window in a sidecar file next to the local database the moment
+# collection first uses it. Only those frozen windows are ever installed
+# into this module (`install_frozen_windows`) and so used to classify a
+# match; a window that is merely planned from the schedule classifies
+# nothing.
 UNREAL_PATCH_REGISTRY: tuple[UnrealPatchWindow, ...] = (
     UnrealPatchWindow(
         client_patch="18.2",
@@ -195,6 +199,52 @@ def is_masked_unreal_version(game_version: str | None) -> bool:
     return bool(game_version) and bool(_MASKED_PLACEHOLDER_RE.search(game_version))
 
 
+#: Windows frozen by `tftlab.patch_calendar` for the local database this
+#: process works on, installed explicitly by the local collector. Empty
+#: everywhere else (the public website, CI, the cloud ingest commands), so
+#: those use the fixed registry above only. See `install_frozen_windows`.
+_INSTALLED_WINDOWS: tuple[UnrealPatchWindow, ...] = ()
+
+
+def install_frozen_windows(windows: tuple[UnrealPatchWindow, ...] | list[UnrealPatchWindow]) -> None:
+    """Make frozen calendar windows part of the default registry for this
+    process (replacing any installed before).
+
+    Refuses (ValueError) anything that could change history: a window that
+    is not usable, re-defines a patch of the fixed registry, or overlaps a
+    fixed window or another installed one. Windows only ever add
+    classifications for timestamps that no fixed window covers.
+    """
+    global _INSTALLED_WINDOWS
+    windows = tuple(sorted(windows, key=lambda w: w.starts_at))
+    fixed_patches = {w.client_patch for w in UNREAL_PATCH_REGISTRY}
+    seen: set[str] = set()
+    for window in windows:
+        if not window.is_usable:
+            raise ValueError(f"window {window.client_patch} is not verified and sourced")
+        if window.starts_at >= window.ends_at:
+            raise ValueError(f"window {window.client_patch} is empty or inverted")
+        if window.client_patch in fixed_patches or window.client_patch in seen:
+            raise ValueError(f"patch {window.client_patch} already has a window")
+        seen.add(window.client_patch)
+    combined = sorted((*UNREAL_PATCH_REGISTRY, *windows), key=lambda w: w.starts_at)
+    for before, after in zip(combined, combined[1:]):
+        if after.starts_at < before.ends_at:
+            raise ValueError(f"windows {before.client_patch} and {after.client_patch} overlap")
+    _INSTALLED_WINDOWS = windows
+
+
+def installed_windows() -> tuple[UnrealPatchWindow, ...]:
+    """The frozen calendar windows currently installed (usually none)."""
+    return _INSTALLED_WINDOWS
+
+
+def active_registry() -> tuple[UnrealPatchWindow, ...]:
+    """The fixed registry plus any installed frozen windows: what
+    `resolve_unreal_patch` and `current_trusted_window` use by default."""
+    return UNREAL_PATCH_REGISTRY + _INSTALLED_WINDOWS
+
+
 def resolve_unreal_patch(
     game_datetime: int | None,
     *,
@@ -206,7 +256,8 @@ def resolve_unreal_patch(
     time (never "today's patch"; `registry` is the only input besides
     `game_datetime` itself).
 
-    `registry` defaults to the real, module-level `UNREAL_PATCH_REGISTRY`,
+    `registry` defaults to `active_registry()` -- the module-level
+    `UNREAL_PATCH_REGISTRY` plus any installed frozen calendar windows --
     looked up fresh on every call (not bound as a function-default value)
     specifically so that adding real cutover entries to that registry --
     the whole point of this module -- takes effect immediately, including
@@ -226,7 +277,7 @@ def resolve_unreal_patch(
     never a guess.
     """
     if registry is None:
-        registry = UNREAL_PATCH_REGISTRY
+        registry = active_registry()
     if game_datetime is None:
         return UNRESOLVED_UNREAL_PATCH
 
@@ -256,12 +307,12 @@ def current_trusted_window(
 
     Raises `NoCurrentTrustedWindow` rather than guessing when there is no
     usable window, when none has started, or when the latest one has
-    already ended (the next patch's window must be registered first) --
+    already ended (the next patch's window must exist first) --
     a crawl in "current trusted window" mode must never fall back to
     unbounded history or treat an expired window as open-ended.
     """
     if registry is None:
-        registry = UNREAL_PATCH_REGISTRY
+        registry = active_registry()
     started = [w for w in registry if w.is_usable and w.starts_at <= now_ms]
     if not started:
         raise NoCurrentTrustedWindow("no verified and sourced trusted window has started yet")
@@ -269,6 +320,6 @@ def current_trusted_window(
     if now_ms >= latest.ends_at:
         raise NoCurrentTrustedWindow(
             f"the latest trusted window ({latest.client_patch}) ended at {latest.ends_at} ms; "
-            "register the next patch's window before collecting in this mode"
+            "the next patch's window must exist before collecting in this mode"
         )
     return latest
