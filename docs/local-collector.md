@@ -14,7 +14,14 @@ After the one-time setup below, you never need a terminal:
 
 1. **Double-click `TheoryLabs Collector.cmd`** in the TheoryLabs folder. Your browser opens the dashboard at `http://127.0.0.1:8765/`; the small black window closes by itself.
 2. **Riot development key:** paste a fresh key into the hidden box and click **Save key**, then **Check key**. Keys expire about every 24 hours. The key is never shown again, and it only goes into `.env` on this computer.
-3. **Click _Collect Data_** and watch the progress. It shows each step (checking, validating the key, backing up, collecting, validating the data, preparing Discovery) and the number of Riot requests so far. A collection takes about 10–25 minutes. You can close or reload the page; it keeps going.
+3. **Click _Collect Data_.** The large status at the top of the page always says what is happening:
+   - **READY**: you can collect.
+   - **NOT READY**: says why, for example no key or no trusted patch window.
+   - **COLLECTING**: shows the current step, elapsed time, Riot requests so far and rate-limit events.
+   - **COMPLETE**: shows new matches, current-patch matches, boards and validation.
+   - **FAILED**: gives a plain-language reason and the step that failed. It stays until you retry or click **OK**.
+
+   A collection takes about 10–25 minutes. You can close or reload the page; it keeps going. If the page says the app was **restarted after this page was opened**, click **Reload the page**.
 4. **Read the result:** new matches, already-stored matches skipped, totals, Riot requests, validation, Discovery, backup and report file.
 5. **When you want a website snapshot, click _Create Public Snapshot_.** It writes a sanitized, verified file in `data/local/public/`. Nothing is uploaded or deployed.
 6. **When you're done,** click **Stop the collector app** at the top of the page, or double-click `Stop TheoryLabs Collector.cmd`.

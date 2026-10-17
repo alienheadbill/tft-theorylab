@@ -78,3 +78,53 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--ink-bg);
   .cover, main, .colophon { padding-left: 0; }
   .panel { padding: 14px; }
 }
+
+/* ---------- primary status area ---------- */
+
+.primary {
+  border: 2px solid var(--rule);
+  border-radius: 8px 12px 9px 11px;
+  padding: 18px 22px 20px;
+  background: var(--paper);
+}
+.primary-state {
+  margin: 0;
+  font: 700 clamp(28px, 4.2vw, 40px)/1.05 var(--sans);
+  letter-spacing: 0.06em;
+}
+.primary-headline { margin: 6px 0 4px; font: 650 22px/1.25 var(--serif); }
+.primary-lines { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 2px; font-size: 17px; }
+.primary-reason {
+  margin: 12px 0 0; padding: 10px 14px; font-size: 17px; max-width: 72ch;
+  background: var(--paper-warm); border-left: 4px solid var(--rule);
+}
+.primary-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 14px; }
+.steps-box { margin-top: 12px; }
+.steps-box summary, .tech summary { cursor: pointer; color: var(--graphite); }
+.tech { margin-top: 14px; }
+
+.primary.state-ready { border-color: var(--ink-green); }
+.primary.state-ready .primary-state { color: var(--ink-green); }
+.primary.state-notready { border-color: var(--amber); }
+.primary.state-notready .primary-state { color: var(--amber); }
+.primary.state-running { border-color: var(--ink-blue); }
+.primary.state-running .primary-state { color: var(--ink-blue); }
+.primary.state-running .primary-state::after {
+  content: ""; display: inline-block; width: 0.55em; height: 0.55em; margin-left: 0.4em; vertical-align: 0.08em;
+  border: 3px solid var(--rule); border-top-color: var(--ink-blue); border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+.primary.state-complete { border-color: var(--ink-green); }
+.primary.state-complete .primary-state { color: var(--ink-green); }
+.primary.state-failed { border-color: var(--pencil); }
+.primary.state-failed .primary-state { color: var(--pencil); }
+.primary.state-failed .primary-reason { border-left-color: var(--pencil); }
+.primary.state-complete .primary-reason { border-left-color: var(--ink-green); }
+
+.banner {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border: 2px solid var(--amber); border-radius: 8px; background: var(--paper-warm);
+}
+.banner p { margin: 0; max-width: 80ch; }
+.btn[aria-busy="true"] { cursor: progress; }
+@media (prefers-reduced-motion: reduce) { .primary.state-running .primary-state::after { animation: none; } }
