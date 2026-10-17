@@ -270,15 +270,82 @@ def test_a_frozen_window_never_moves(tmp_path: Path) -> None:
     assert resolve_unreal_patch(used_at) == "18.5"  # stored history keeps its classification
 
 
-def test_an_unreadable_frozen_record_pauses_collection(tmp_path: Path) -> None:
-    _seed(tmp_path, W18_5[0] + 60_000)
-    pc.collection_window(tmp_path, now_ms=W18_5[0] + 3_600_000)
+def _freeze_18_5(local: Path) -> bytes:
+    _seed(local, W18_5[0] + 60_000)
+    pc.collection_window(local, now_ms=W18_5[0] + 3_600_000)
+    return (local / pc.FROZEN_NAME).read_bytes()
+
+
+def test_freezing_writes_a_versioned_copy(tmp_path: Path) -> None:
+    primary = _freeze_18_5(tmp_path)
+    copies = pc.frozen_backups(tmp_path)
+    assert len(copies) == 1 and copies[0].parent == tmp_path / "backups" / "patch-windows"
+    assert copies[0].read_bytes() == primary
+    # Collecting again in the same window adds no copy; a new frozen window adds one.
+    pc.collection_window(tmp_path, now_ms=W18_5[0] + 7_200_000)
+    assert len(pc.frozen_backups(tmp_path)) == 1
+    _seed(tmp_path, W18_6[0] + 60_000)
+    pc.collection_window(tmp_path, now_ms=W18_6[0] + 3_600_000)
+    copies = pc.frozen_backups(tmp_path)
+    assert len(copies) == 2 and copies[0].read_bytes() == (tmp_path / pc.FROZEN_NAME).read_bytes()
+    assert [w["client_patch"] for w in json.loads(copies[0].read_text())["windows"]] == ["18.5", "18.6"]
+
+
+@pytest.mark.parametrize("damage", ["deleted", "corrupt", "tampered"])
+def test_a_lost_or_damaged_record_is_restored_without_rederiving_history(tmp_path: Path, damage: str) -> None:
+    primary = _freeze_18_5(tmp_path)
+    path = tmp_path / pc.FROZEN_NAME
+    if damage == "deleted":
+        path.unlink()
+    elif damage == "corrupt":
+        path.write_text("{not json")
+    else:  # someone "fixed" the window by hand so that it overlaps 18.4
+        data = json.loads(primary)
+        data["windows"][0]["starts_at"] = 1_792_000_000_000
+        path.write_text(json.dumps(data))
+    # Riot then moves 18.6: re-deriving 18.5 now would give a different end.
+    later = W18_5[0] + 86_400_000
+    _seed(tmp_path, later, _move(HTML, "18.6", "November 6, 2026 (Friday)"))
+    before = _files(tmp_path)
+    st = pc.calendar_state(tmp_path, now_ms=later)
+    assert _files(tmp_path) == before  # reading never writes
+    assert st.ready and st.current_origin == "frozen" and (st.current.starts_at, st.current.ends_at) == W18_5
+    assert any("using the copy" in d for d in st.diagnostics)
+    window, st = pc.collection_window(tmp_path, now_ms=later)
+    assert (window.starts_at, window.ends_at) == W18_5
+    assert path.read_bytes() == primary  # restored exactly, not re-derived
+    damaged = list(tmp_path.glob(pc.FROZEN_NAME + ".damaged-*"))
+    assert len(damaged) == (0 if damage == "deleted" else 1)  # a damaged file is kept aside, never discarded
+
+
+def test_when_no_valid_copy_is_left_collection_pauses(tmp_path: Path) -> None:
+    _freeze_18_5(tmp_path)
     (tmp_path / pc.FROZEN_NAME).write_text("{not json")
+    for copy in pc.frozen_backups(tmp_path):
+        copy.write_text("also damaged")
     st = pc.calendar_state(tmp_path, now_ms=W18_5[0] + 7_200_000)
-    assert not st.ready and st.code == "frozen_unreadable"
+    assert not st.ready and st.code == "frozen_unreadable" and "no valid copy" in st.message
     with pytest.raises(pc.CalendarNotReady):
         pc.collection_window(tmp_path, now_ms=W18_5[0] + 7_200_000)
     assert (tmp_path / pc.FROZEN_NAME).read_text() == "{not json"  # never overwritten
+
+
+def test_stored_matches_from_a_lost_window_pause_collection(tmp_path: Path) -> None:
+    _freeze_18_5(tmp_path)
+    (tmp_path / pc.FROZEN_NAME).unlink()
+    for copy in pc.frozen_backups(tmp_path):
+        copy.unlink()
+    st = pc.calendar_state(tmp_path, now_ms=W18_5[0] + 7_200_000)
+    assert st.ready and st.current_origin == "planned"  # without evidence it would simply be planned again...
+    st = pc.check_stored_patches(st, {"18.4", "18.5", UNRESOLVED_UNREAL_PATCH, MASKED})
+    assert not st.ready and st.code == "frozen_missing" and "patch 18.5" in st.message  # ...but matches say otherwise
+    with pytest.raises(pc.CalendarNotReady):
+        pc.collection_window(tmp_path, now_ms=W18_5[0] + 7_200_000, stored_patches={"18.5"})
+    assert not (tmp_path / pc.FROZEN_NAME).exists()
+    # Fixed history, the unresolved sentinel and legacy masked strings are never "missing".
+    ok = pc.check_stored_patches(pc.calendar_state(tmp_path, now_ms=OCT_17),
+                                 {"18.2", "18.3", "18.4", UNRESOLVED_UNREAL_PATCH, MASKED})
+    assert ok.ready
 
 
 # ---------------------------------------------------------------- 10-13: cache, failures, special events
@@ -404,50 +471,107 @@ def test_refreshes_are_throttled_and_status_reads_never_fetch(tmp_path: Path, mo
     assert len(calls) == 2
 
 
-def test_the_request_carries_no_key_and_the_files_hold_no_secrets(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("RIOT_API_KEY", FAKE_KEY)
-    sent: dict = {}
+class _FakeHttpx:
+    """Stands in for httpx.Client: answers each requested URL from `routes`."""
 
-    class FakeClient:
-        def __init__(self, **kwargs):
-            sent.update(kwargs)
+    def __init__(self, routes: dict, requested: list, sent: dict):
+        self.routes, self.requested, self.sent = routes, requested, sent
 
-        def __enter__(self):
-            return self
+    def __call__(self, **kwargs):
+        self.sent.update(kwargs)
+        return self
 
-        def __exit__(self, *_):
-            return False
+    def __enter__(self):
+        return self
 
-        def stream(self, method, url):
-            sent["method"], sent["url"] = method, url
+    def __exit__(self, *_):
+        return False
 
-            class Response:
-                status_code, headers, url = 200, {"content-type": "text/html"}, pc.SOURCE_URL
+    def stream(self, method, url):
+        self.requested.append((method, url))
+        status, headers, body = self.routes[url]
 
-                def __enter__(self):
-                    return self
+        class Response:
+            status_code = status
 
-                def __exit__(self, *_):
-                    return False
+            def __init__(self):
+                self.headers = headers
 
-                def iter_bytes(self):
-                    yield HTML.encode()
-            return Response()
+            def __enter__(self):
+                return self
 
+            def __exit__(self, *_):
+                return False
+
+            def iter_bytes(self):
+                yield body
+        return Response()
+
+
+def _fake_httpx(monkeypatch, routes: dict) -> tuple[list, dict]:
     import httpx
 
-    monkeypatch.setattr(httpx, "Client", FakeClient)
+    requested: list = []
+    sent: dict = {}
+    monkeypatch.setattr(httpx, "Client", _FakeHttpx(routes, requested, sent))
+    return requested, sent
+
+
+PAGE_OK = (200, {"content-type": "text/html"}, HTML.encode())
+
+
+def test_redirects_are_checked_before_every_hop(monkeypatch, tmp_path: Path) -> None:
+    moved = "https://support.riotgames.com/en-us/tft/events/patch-schedule/"
+    requested, sent = _fake_httpx(monkeypatch, {pc.SOURCE_URL: (301, {"location": "/en-us/tft/events/patch-schedule/"}, b""),
+                                                moved: PAGE_OK})
+    status, _ctype, _body, final = pc.fetch_schedule_page(pc.SOURCE_URL)
+    assert status == 200 and final == moved and sent["follow_redirects"] is False
+    assert [u for _m, u in requested] == [pc.SOURCE_URL, moved]
+    # An intermediate hop off Riot Support is refused before it is requested, even if it would come back.
+    for away in ("https://example.com/bounce?to=riot", "http://support.riotgames.com/x",
+                 "https://support.riotgames.com.evil.example/x", "https://user@support.riotgames.com/x",
+                 "https://support.riotgames.com:8443/x"):
+        requested, _sent = _fake_httpx(monkeypatch, {pc.SOURCE_URL: (302, {"location": away}, b""), away: PAGE_OK})
+        with pytest.raises(pc.ScheduleError, match="redirected away"):
+            pc.fetch_schedule_page(pc.SOURCE_URL)
+        assert [u for _m, u in requested] == [pc.SOURCE_URL], away
+    # A redirect loop stops.
+    requested, _sent = _fake_httpx(monkeypatch, {pc.SOURCE_URL: (307, {"location": pc.SOURCE_URL}, b"")})
+    with pytest.raises(pc.ScheduleError, match="too many"):
+        pc.fetch_schedule_page(pc.SOURCE_URL)
+    assert len(requested) == pc.MAX_REDIRECTS + 1
+    # Through refresh: the old cache is kept and the reason recorded.
+    _seed(tmp_path)
+    cache = (tmp_path / pc.CACHE_NAME).read_bytes()
+    _fake_httpx(monkeypatch, {pc.SOURCE_URL: (302, {"location": "https://example.com/"}, b"")})
+    result = pc.refresh_schedule(tmp_path, now_ms=OCT_17 + 7_200_000, http_get=pc.fetch_schedule_page)
+    assert not result.ok and "redirected away" in result.message
+    assert (tmp_path / pc.CACHE_NAME).read_bytes() == cache
+
+
+def test_the_request_carries_no_key_and_the_files_hold_no_secrets(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("RIOT_API_KEY", FAKE_KEY)
+    requested, sent = _fake_httpx(monkeypatch, {pc.SOURCE_URL: PAGE_OK})
     result = pc.refresh_schedule(tmp_path, now_ms=OCT_17, http_get=pc.fetch_schedule_page)  # the real getter
     assert result.ok
-    assert sent["method"] == "GET" and sent["url"] == pc.SOURCE_URL and sent["timeout"] == pc.HTTP_TIMEOUT_S
+    assert requested == [("GET", pc.SOURCE_URL)] and sent["timeout"] == pc.HTTP_TIMEOUT_S
     assert sent["headers"]["User-Agent"].startswith("TheoryLabs-Collector/")
     assert FAKE_KEY not in json.dumps(sent["headers"]) and "X-Riot-Token" not in sent["headers"]
     _seed(tmp_path, W18_5[0])
     pc.collection_window(tmp_path, now_ms=W18_5[0] + 1)
-    blob = b"".join(_files(tmp_path).values()) + json.dumps(
+    files = [p for p in tmp_path.rglob("*") if p.is_file()]
+    blob = b"".join(p.read_bytes() for p in files) + json.dumps(
         pc.calendar_state(tmp_path, now_ms=W18_5[0] + 2).public()).encode()
     assert FAKE_KEY.encode() not in blob and b"RGAPI" not in blob and b"puuid" not in blob.lower()
 
+
+def test_a_throttled_refresh_reports_the_last_outcome(tmp_path: Path) -> None:
+    assert not pc.refresh_schedule(tmp_path, now_ms=OCT_17).ok  # blocked network: a failed check
+    again = pc.refresh_schedule(tmp_path, now_ms=OCT_17 + 60_000)
+    assert not again.attempted and not again.ok and "could not reach Riot Support" in again.message
+    _seed(tmp_path, OCT_17 + 120_000)
+    again = pc.refresh_schedule(tmp_path, now_ms=OCT_17 + 180_000)
+    assert not again.attempted and again.ok and again.message == "checked recently"
 
 
 def test_without_time_zone_data_no_new_window_is_created(tmp_path: Path, monkeypatch) -> None:

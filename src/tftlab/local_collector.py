@@ -49,6 +49,8 @@ from . import patch_calendar as pcal
 from .unreal_patch import UnrealPatchWindow
 from .validate import validate_live_data
 
+#: Riot's masked Unreal-era `game_version` placeholder (see `unreal_patch`).
+MASKED_VERSION = "?.?.?.?"
 #: Everything the local collector writes lives under here (git-ignored).
 DEFAULT_LOCAL_DIR = Path("data/local")
 DEFAULT_LOCAL_DB = DEFAULT_LOCAL_DIR / "theorylabs.sqlite3"
@@ -175,6 +177,22 @@ def _window_balance_windows(db: Database, window: UnrealPatchWindow) -> list[str
         (window.starts_at, window.ends_at),
     )
     return [str(r[0]) for r in sorted(rows, key=lambda r: int(r[1] or 0), reverse=True)]
+
+
+def _stored_masked_patches(db_path: Path) -> set[str] | None:
+    """Distinct patches of the stored masked-Unreal matches (read-only), for
+    `patch_calendar.check_stored_patches`. None when unreadable (the
+    collection's own database checks report that)."""
+    try:
+        with Database.open_existing(db_path) as db:
+            return masked_patches(db)
+    except Exception:
+        return None
+
+
+def masked_patches(db: Database) -> set[str]:
+    rows = db.query_all("SELECT DISTINCT patch FROM matches WHERE game_version LIKE ?", (f"%{MASKED_VERSION}%",))
+    return {str(r[0]) for r in rows if r[0] is not None}
 
 
 def window_facts(db: Database, window: UnrealPatchWindow) -> dict[str, Any]:
@@ -495,13 +513,23 @@ def run_local_collect(
         except Exception as exc:  # refresh_schedule never raises; never let a refresh stop preflight anyway
             check("Patch schedule", "warn", f"refresh failed ({type(exc).__name__}); using the saved copy")
         else:
-            if not refreshed.attempted:
+            if not refreshed.attempted and refreshed.ok:
                 check("Patch schedule", "ok", "checked with Riot within the last hour")
+            elif not refreshed.attempted:
+                check("Patch schedule", "warn", f"the last check, within the last hour, failed ({refreshed.message}); "
+                      "not retried yet, using the saved copy if there is one")
             elif refreshed.ok:
                 check("Patch schedule", "ok", f"Riot's schedule checked now ({refreshed.message})")
             else:
                 check("Patch schedule", "warn", f"refresh failed ({refreshed.message}); using the saved copy")
-    calendar = pcal.calendar_state(calendar_dir, now_ms=at_ms)
+    try:
+        restored = pcal.restore_frozen(calendar_dir, at_ms=at_ms)
+    except (pcal.ScheduleError, OSError):
+        restored = None  # nothing trustworthy left: the calendar state below pauses collection
+    if restored:
+        check("Patch window record", "warn", restored)
+    stored_patches = _stored_masked_patches(db_path) if exists else None
+    calendar = pcal.check_stored_patches(pcal.calendar_state(calendar_dir, now_ms=at_ms), stored_patches)
     report.patch_calendar = calendar.public()
     if not calendar.ready or calendar.current is None:
         check("Trusted patch window", "fail", f"none ({calendar.code})")
@@ -576,7 +604,7 @@ def run_local_collect(
         # and install the frozen windows so new and backfilled matches are
         # classified with exactly those windows.
         try:
-            frozen_window, _state = pcal.collection_window(calendar_dir, now_ms=at_ms)
+            frozen_window, _state = pcal.collection_window(calendar_dir, now_ms=at_ms, stored_patches=stored_patches)
         except (pcal.CalendarNotReady, pcal.ScheduleError, OSError) as exc:
             check("Collection", "fail", f"the patch window could not be locked in ({type(exc).__name__})")
             reason = str(exc) if isinstance(exc, pcal.CalendarNotReady) else \
@@ -798,6 +826,11 @@ def local_status(db_path: Path, *, at_ms: int, recent_windows: int = 3) -> dict[
         status["read_error"] = type(exc).__name__
         return status
     with db:
+        stored = masked_patches(db)
+        if pcal.check_stored_patches(calendar, stored).code == "frozen_missing":
+            status["patch_calendar"] = calendar.public()
+            status["trusted_window"] = {"patch": None, "inside": False, "reason": calendar.message}
+            window = None
         status["store"] = store_facts(db)
         windows = available_balance_windows(db)
         status["windows"] = [{"balance_window": w, "matches": n, "latest_game": t} for w, n, t in windows]

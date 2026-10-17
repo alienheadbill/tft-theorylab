@@ -413,6 +413,52 @@ def test_without_a_schedule_a_new_patch_is_not_ready(tmp_path: Path) -> None:
     assert not h.factory_calls and not h.db.exists()
 
 
+def test_a_lost_patch_window_record_never_rederives_stored_history(tmp_path: Path) -> None:
+    from tftlab import patch_calendar as pcal
+
+    h = Harness(tmp_path, StubRiot(_payloads_at(START_18_5_MS)))
+    at = START_18_5_MS + 3 * 3_600_000
+    _seed_schedule(h.db.parent, at)
+    assert h.run(at_ms=at).outcome == lc.SUCCESS
+    frozen = h.db.parent / pcal.FROZEN_NAME
+    record = frozen.read_bytes()
+    # Lost primary: restored from the automatic copy before anything else, then collection proceeds as before.
+    frozen.unlink()
+    report = h.run(at_ms=at + 3_600_000)
+    assert report.outcome == lc.SUCCESS, report.message
+    assert frozen.read_bytes() == record
+    assert any(c.name == "Patch window record" and "restored" in c.detail for c in report.checks)
+    # Primary and every copy lost, and Riot edits the schedule: the stored 18.5 matches stop the collection.
+    frozen.unlink()
+    for copy in pcal.frozen_backups(h.db.parent):
+        copy.unlink()
+    page = SCHEDULE_FIXTURE.read_text().replace("November 4, 2026", "November 6, 2026 (Friday)")
+    pcal.refresh_schedule(h.db.parent, now_ms=at + 7_200_000, force=True,
+                          http_get=lambda url: (200, "text/html", page.encode(), url))
+    calls_before = len(h.factory_calls)
+    report = h.run(at_ms=at + 7_200_000)
+    assert report.outcome == lc.PREFLIGHT_FAILED and "patch 18.5" in report.message
+    assert report.patch_calendar["code"] == "frozen_missing"
+    assert len(h.factory_calls) == calls_before and not frozen.exists()
+    status = lc.local_status(h.db, at_ms=at + 7_200_000)
+    assert status["trusted_window"]["inside"] is False and status["patch_calendar"]["code"] == "frozen_missing"
+
+
+def test_a_recent_failed_schedule_check_is_not_reported_as_ok(tmp_path: Path) -> None:
+    from tftlab import patch_calendar as pcal
+
+    h = Harness(tmp_path)
+    assert not pcal.refresh_schedule(h.db.parent, now_ms=AT_MS - 600_000).ok  # e.g. the app's start-up check
+    report = h.run(refresh_calendar=pcal.refresh_schedule)
+    check = next(c for c in report.checks if c.name == "Patch schedule")
+    assert check.status == "warn" and "failed" in check.detail and "could not reach Riot Support" in check.detail
+    assert report.outcome == lc.SUCCESS  # inside the fixed 18.4 window the schedule is not needed
+    _seed_schedule(h.db.parent, AT_MS + 60_000)
+    report = h.run(at_ms=AT_MS + 120_000, refresh_calendar=pcal.refresh_schedule)
+    check = next(c for c in report.checks if c.name == "Patch schedule")
+    assert check.status == "ok" and check.detail == "checked with Riot within the last hour"
+
+
 def test_a_balance_update_pauses_local_collection(tmp_path: Path) -> None:
     h = Harness(tmp_path)
     when = _ms("2026-11-10T12:00:00+00:00")  # between 18.6's end and 19.1's start, across 18.6B

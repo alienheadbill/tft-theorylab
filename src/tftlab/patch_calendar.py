@@ -28,7 +28,11 @@ code change, while keeping every guarantee of `tftlab.unreal_patch`:
   next to the local database (`FROZEN_NAME`) and never changes again, even
   if Riot later edits the schedule. Only frozen windows are installed into
   `unreal_patch` (`install_frozen`), so every window that ever classified a
-  match is frozen. (A sidecar instead of a database migration: the windows
+  match is frozen. Every change also writes a versioned copy under
+  `FROZEN_BACKUP_DIR`; a missing or damaged record is restored from the newest
+  good copy (never re-derived), and if none is left while stored matches
+  carry a patch the record no longer knows, collection pauses
+  (`check_stored_patches`). (A sidecar instead of a database migration: the windows
   are configuration of the classifier, not collected data, and are needed
   before the database is opened; the public website never needs them
   because stored rows already carry their patch.)
@@ -38,7 +42,7 @@ code change, while keeping every guarantee of `tftlab.unreal_patch`:
   reason. A failed refresh never replaces a good cache.
 
 Network: one public HTTPS GET of `SOURCE_URL` (no key), with a timeout, a
-TheoryLabs user agent and a size limit, at most once per
+TheoryLabs user agent, a size limit and every redirect hop checked, at most once per
 `MIN_REFRESH_INTERVAL_MS`; only `refresh_schedule` touches the network, and
 only the local collector (start-up and collection preflight) calls it.
 Status reads (`calendar_state`) are read-only and network-free.
@@ -56,6 +60,7 @@ from datetime import date, datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urljoin, urlsplit
 
 from . import __version__
 from . import unreal_patch
@@ -91,9 +96,17 @@ CACHE_NAME = "patch-calendar.json"
 CHECK_NAME = "patch-calendar-check.json"
 FROZEN_NAME = "patch-windows-frozen.json"
 REJECTED_NAME = "patch-calendar-rejected.html"
+#: Versioned copies of the frozen record, written whenever it changes
+#: (relative to the local folder, next to the collector's database backups).
+FROZEN_BACKUP_DIR = Path("backups") / "patch-windows"
+FROZEN_BACKUP_RE = re.compile(r"^patch-windows-frozen-(\d{8}T\d{6}Z)-(\d+)\.json$")
+#: The record only ever grows, so the newest copy holds every window; older
+#: copies are kept as a fallback in case the newest one is damaged.
+FROZEN_BACKUPS_KEEP = 30
 
 HTTP_TIMEOUT_S = 15.0
 MAX_PAGE_BYTES = 2 * 1024 * 1024
+MAX_REDIRECTS = 3
 USER_AGENT = f"TheoryLabs-Collector/{__version__} (local patch-schedule check; at most hourly)"
 #: No more than one request per hour, successful or not.
 MIN_REFRESH_INTERVAL_MS = 3600 * 1000
@@ -109,6 +122,7 @@ _LABEL_RE = re.compile(r"^TFT\s+(\d{1,3})\.(\d{1,2})([A-Za-z])?$")
 _DATE_RE = re.compile(r"^([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})(?:\s*\(\s*([A-Za-z]+)\s*\))?$")
 
 ORDINARY, BALANCE = "patch", "balance"
+_PATCH_KEY_RE = re.compile(r"^\d+\.\d+$")
 
 
 class ScheduleError(ValueError):
@@ -515,26 +529,131 @@ class FrozenWindow:
         return window
 
 
-def load_frozen(local_dir: Path) -> list[FrozenWindow]:
-    """Frozen windows, checked against the fixed registry and each other.
-    Raises ScheduleError when the file exists but cannot be trusted (the
-    caller then pauses collection and never rewrites the file)."""
-    path = Path(local_dir) / FROZEN_NAME
-    if not path.exists():
-        return []
+def _parse_frozen(path: Path) -> list[FrozenWindow]:
+    """One frozen-record file, checked against the fixed registry and itself."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        raise ScheduleError(f"{FROZEN_NAME} could not be read ({type(exc).__name__})") from None
+        raise ScheduleError(f"{path.name} could not be read ({type(exc).__name__})") from None
     if not isinstance(data, dict) or data.get("format") != FROZEN_FORMAT \
             or data.get("format_version") != FROZEN_FORMAT_VERSION or not isinstance(data.get("windows"), list):
-        raise ScheduleError(f"{FROZEN_NAME} has an unknown format")
+        raise ScheduleError(f"{path.name} has an unknown format")
     windows = [FrozenWindow.from_dict(w) for w in data["windows"]]
     try:
         _check_installable(windows)
     except ValueError as exc:
-        raise ScheduleError(f"{FROZEN_NAME} is inconsistent: {exc}") from None
+        raise ScheduleError(f"{path.name} is inconsistent: {exc}") from None
     return windows
+
+
+def frozen_backups(local_dir: Path) -> list[Path]:
+    """Versioned copies of the frozen record, newest first."""
+    folder = Path(local_dir) / FROZEN_BACKUP_DIR
+    if not folder.is_dir():
+        return []
+    found = []
+    for path in folder.iterdir():
+        m = FROZEN_BACKUP_RE.match(path.name)
+        if m and path.is_file():
+            found.append(((m.group(1), int(m.group(2))), path))
+    return [p for _key, p in sorted(found, reverse=True)]
+
+
+@dataclass(frozen=True)
+class FrozenRead:
+    """The frozen record as read: from the primary file, or recovered from
+    the newest valid versioned copy when the primary is missing or damaged."""
+
+    windows: list[FrozenWindow]
+    source: str  # "primary" | "backup" | "none"
+    backup: Path | None = None
+    problem: str | None = None  # what was wrong with the primary, when recovered
+
+
+def read_frozen(local_dir: Path) -> FrozenRead:
+    """Read-only. Raises ScheduleError only when the record cannot be
+    trusted AND no valid versioned copy exists (collection then pauses)."""
+    local_dir = Path(local_dir)
+    primary = local_dir / FROZEN_NAME
+    backups = frozen_backups(local_dir)
+    problem = None
+    if primary.exists():
+        try:
+            return FrozenRead(_parse_frozen(primary), "primary")
+        except ScheduleError as exc:
+            problem = str(exc)
+    elif not backups:
+        return FrozenRead([], "none")
+    else:
+        problem = f"{FROZEN_NAME} is missing"
+    for backup in backups:
+        try:
+            return FrozenRead(_parse_frozen(backup), "backup", backup, problem)
+        except ScheduleError:
+            continue
+    raise ScheduleError(f"{problem}, and no valid copy was found in {FROZEN_BACKUP_DIR.as_posix()}/")
+
+
+def load_frozen(local_dir: Path) -> list[FrozenWindow]:
+    """The frozen windows (recovered from a versioned copy if needed).
+    Raises ScheduleError when nothing trustworthy is left."""
+    return read_frozen(local_dir).windows
+
+
+def _frozen_doc(windows: list[FrozenWindow]) -> dict[str, Any]:
+    return {"format": FROZEN_FORMAT, "format_version": FROZEN_FORMAT_VERSION,
+            "note": "Patch windows TheoryLabs has used for collection. Never edit or delete: stored matches were "
+                    f"classified with them. Versioned copies are kept in {FROZEN_BACKUP_DIR.as_posix()}/.",
+            "windows": [w.as_dict() for w in windows]}
+
+
+def _write_frozen_backup(local_dir: Path, doc: dict[str, Any], *, at_ms: int) -> Path:
+    folder = Path(local_dir) / FROZEN_BACKUP_DIR
+    stamp = datetime.fromtimestamp(at_ms / 1000, tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    n = 0
+    while (folder / f"patch-windows-frozen-{stamp}-{n}.json").exists():
+        n += 1
+    path = folder / f"patch-windows-frozen-{stamp}-{n}.json"
+    _write_json_atomic(path, doc)
+    for old in frozen_backups(local_dir)[FROZEN_BACKUPS_KEEP:]:
+        old.unlink(missing_ok=True)
+    return path
+
+
+def ensure_frozen_backup(local_dir: Path, *, at_ms: int) -> Path | None:
+    """Make sure the newest versioned copy holds exactly the current record
+    (writes one if not). No-op when there is no record."""
+    current = read_frozen(local_dir)
+    if current.source != "primary" or not current.windows:
+        return None
+    backups = frozen_backups(local_dir)
+    if backups:
+        try:
+            if [w.as_dict() for w in _parse_frozen(backups[0])] == [w.as_dict() for w in current.windows]:
+                return backups[0]
+        except ScheduleError:
+            pass
+    return _write_frozen_backup(local_dir, _frozen_doc(current.windows), at_ms=at_ms)
+
+
+def restore_frozen(local_dir: Path, *, at_ms: int) -> str | None:
+    """Recover a missing or damaged primary record from the newest valid
+    versioned copy (a damaged file is kept aside, never discarded). Returns
+    what was done, or None. Raises ScheduleError when recovery is impossible.
+    Call from write paths only (collection preflight, app start-up)."""
+    local_dir = Path(local_dir)
+    current = read_frozen(local_dir)
+    if current.source != "backup" or current.backup is None:
+        ensure_frozen_backup(local_dir, at_ms=at_ms)
+        return None
+    primary = local_dir / FROZEN_NAME
+    if primary.exists():
+        stamp = datetime.fromtimestamp(at_ms / 1000, tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        primary.replace(local_dir / f"{FROZEN_NAME}.damaged-{stamp}")
+    _write_json_atomic(primary, json.loads(current.backup.read_text(encoding="utf-8")))
+    note = f"{current.problem}; restored {FROZEN_NAME} from {current.backup.name}"
+    log.warning("frozen patch windows: %s", note)
+    return note
 
 
 def _check_installable(windows: list[FrozenWindow]) -> None:
@@ -546,8 +665,9 @@ def _check_installable(windows: list[FrozenWindow]) -> None:
 
 
 def freeze(local_dir: Path, window: DerivedWindow, schedule: Schedule, *, at_ms: int) -> FrozenWindow:
-    """Append `window` to the frozen sidecar (no-op if that patch is frozen).
-    Called only while the collection lock is held."""
+    """Append `window` to the frozen sidecar (no-op if that patch is frozen),
+    writing a versioned copy first. Called only while the collection lock
+    is held, after `restore_frozen`."""
     existing = load_frozen(local_dir)
     for frozen in existing:
         if frozen.client_patch == window.client_patch:
@@ -557,11 +677,9 @@ def freeze(local_dir: Path, window: DerivedWindow, schedule: Schedule, *, at_ms:
                         schedule.events_sha256, schedule.fetched_at)
     windows = [*existing, item]
     _check_installable(windows)
-    _write_json_atomic(Path(local_dir) / FROZEN_NAME, {
-        "format": FROZEN_FORMAT, "format_version": FROZEN_FORMAT_VERSION,
-        "note": "Patch windows TheoryLabs has used for collection. Never edit or delete: stored matches were "
-                "classified with them.",
-        "windows": [w.as_dict() for w in windows]})
+    doc = _frozen_doc(windows)
+    _write_frozen_backup(local_dir, doc, at_ms=at_ms)  # the copy first: a crash in between loses nothing
+    _write_json_atomic(Path(local_dir) / FROZEN_NAME, doc)
     log.info("froze patch %s window %s .. %s (%s)", item.client_patch, iso_utc(item.starts_at),
              iso_utc(item.ends_at), item.policy_version)
     return item
@@ -582,19 +700,38 @@ def install_frozen(local_dir: Path) -> list[FrozenWindow]:
 # ---------------------------------------------------------------- network
 
 
+def _require_riot_support(url: str) -> None:
+    parts = urlsplit(url)
+    if parts.scheme != "https" or parts.hostname != SOURCE_HOST or parts.port not in (None, 443) \
+            or parts.username or parts.password:
+        raise ScheduleError("the schedule page redirected away from Riot Support")
+
+
 def fetch_schedule_page(url: str) -> tuple[int, str, bytes, str]:
-    """(status, content type, body, final URL). The only network access."""
+    """(status, content type, body, final URL). The only network access.
+
+    Redirects are followed by hand, at most `MAX_REDIRECTS`, and every hop
+    is checked BEFORE it is requested: only https://support.riotgames.com/."""
     import httpx
 
     headers = {"User-Agent": USER_AGENT, "Accept": "text/html"}
-    with httpx.Client(timeout=HTTP_TIMEOUT_S, follow_redirects=True, headers=headers) as client:
-        with client.stream("GET", url) as response:
-            body = bytearray()
-            for chunk in response.iter_bytes():
-                body.extend(chunk)
-                if len(body) > MAX_PAGE_BYTES:
-                    raise ScheduleError("the schedule page is unexpectedly large")
-            return response.status_code, response.headers.get("content-type", ""), bytes(body), str(response.url)
+    with httpx.Client(timeout=HTTP_TIMEOUT_S, follow_redirects=False, headers=headers) as client:
+        for _hop in range(MAX_REDIRECTS + 1):
+            _require_riot_support(url)
+            with client.stream("GET", url) as response:
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ScheduleError(f"Riot Support answered HTTP {response.status_code} without a location")
+                    url = urljoin(url, location)
+                    continue
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    body.extend(chunk)
+                    if len(body) > MAX_PAGE_BYTES:
+                        raise ScheduleError("the schedule page is unexpectedly large")
+                return response.status_code, response.headers.get("content-type", ""), bytes(body), url
+    raise ScheduleError("the schedule page redirected too many times")
 
 
 #: What `refresh_schedule` calls by default (tests replace it).
@@ -620,14 +757,15 @@ def refresh_schedule(local_dir: Path, *, now_ms: int, force: bool = False,
     last = load_check(local_dir) or {}
     last_at = last.get("at")
     if not force and isinstance(last_at, int) and 0 <= now_ms - last_at < MIN_REFRESH_INTERVAL_MS:
-        return RefreshResult(False, bool(last.get("ok")), message="checked recently")
+        return RefreshResult(False, last.get("ok") is True,
+                             message="checked recently" if last.get("ok") is True
+                             else str(last.get("error") or "the last check failed"))
     get = http_get or _http_get
     try:
         status, content_type, body, final_url = get(SOURCE_URL)
         if status != 200:
             raise ScheduleError(f"Riot Support answered HTTP {status}")
-        if not final_url.startswith(f"https://{SOURCE_HOST}/"):
-            raise ScheduleError("the schedule page redirected away from Riot Support")
+        _require_riot_support(final_url)
         if "html" not in content_type.lower():
             raise ScheduleError(f"unexpected content type {content_type!r}")
         html = body.decode("utf-8", errors="replace")
@@ -800,9 +938,14 @@ def calendar_state(local_dir: Path, *, now_ms: int) -> CalendarState:
     except ScheduleError as exc:
         st.schedule_error = str(exc)
     try:
-        st.frozen = load_frozen(local_dir)
+        frozen = read_frozen(local_dir)
     except ScheduleError as exc:
         st.frozen_error = str(exc)
+    else:
+        st.frozen = frozen.windows
+        if frozen.source == "backup" and frozen.backup is not None:
+            st.diagnostics.append(f"{frozen.problem}; using the copy {frozen.backup.name} (the file is restored "
+                                  "automatically before the next collection)")
 
     if st.schedule is not None and st.timezone_error is None:
         _plan(st)
@@ -874,8 +1017,9 @@ def _decide(st: CalendarState) -> None:
     if st.frozen_error is not None:
         st.code, st.current, st.current_origin = "frozen_unreadable", None, None
         st.message = (f"TheoryLabs cannot read its record of patch windows already used ({st.frozen_error}). "
-                      f"That record keeps stored data classified consistently, so collection is paused until it is "
-                      f"restored (for example from a backup of the data/local folder). {PAUSED}")
+                      f"That record keeps stored data classified consistently, so collection is paused until "
+                      f"{FROZEN_NAME} is restored by hand (copies, if any, are in data/local/"
+                      f"{FROZEN_BACKUP_DIR.as_posix()}/). {PAUSED}")
         return
     if cur is not None and st.current_origin == "planned" and st.schedule is not None \
             and st.now_ms - st.schedule.fetched_at > MAX_SCHEDULE_AGE_FOR_NEW_WINDOW_MS:
@@ -963,13 +1107,43 @@ def _recent_balance(st: CalendarState) -> ScheduleEvent | None:
     return None
 
 
-def collection_window(local_dir: Path, *, now_ms: int) -> tuple[UnrealPatchWindow, CalendarState]:
+def check_stored_patches(st: CalendarState, stored_patches: set[str] | None) -> CalendarState:
+    """Fail closed when the database holds masked-Unreal matches classified
+    under a patch that neither the fixed registry nor the frozen record
+    knows: the window that classified them was lost, and re-deriving it from
+    today's schedule could move history. `stored_patches` are the distinct
+    patches of the stored masked matches (None: no database yet)."""
+    if not stored_patches or st.frozen_error is not None:
+        return st
+    known = {w.client_patch for w in unreal_patch.UNREAL_PATCH_REGISTRY} | {f.client_patch for f in st.frozen}
+    # Only real "major.minor" classifications count: the unresolved sentinel and
+    # legacy raw masked strings (fixed by storage's backfill) are not windows.
+    missing = sorted((p for p in stored_patches if _PATCH_KEY_RE.match(p) and p not in known), key=patch_sort_key)
+    if missing:
+        st.ready, st.current, st.current_origin, st.current_planned = False, None, None, None
+        st.code = "frozen_missing"
+        st.message = (f"Stored matches were classified with a window for patch {', '.join(missing)}, but TheoryLabs' "
+                      f"record of the windows it has used ({FROZEN_NAME}) no longer has it and no copy of it was "
+                      f"found. Working it out again from Riot's current schedule could move history, so collection "
+                      f"is paused until the record is restored by hand (copies, if any, are in data/local/"
+                      f"{FROZEN_BACKUP_DIR.as_posix()}/). {PAUSED}")
+    return st
+
+
+def collection_window(local_dir: Path, *, now_ms: int,
+                      stored_patches: set[str] | None = None) -> tuple[UnrealPatchWindow, CalendarState]:
     """The window a collection starting now may use. Freezes a planned
     window first (so it can never move afterwards) and installs all frozen
     windows into `unreal_patch` for classification. Raises
     `CalendarNotReady` (a `NoCurrentTrustedWindow`) with a plain message
-    otherwise. Call only while holding the collection lock."""
-    st = calendar_state(local_dir, now_ms=now_ms)
+    otherwise. A missing or damaged frozen record is first restored from its
+    newest valid versioned copy. Call only while holding the collection lock.
+    `stored_patches`: see `check_stored_patches`."""
+    try:
+        restore_frozen(local_dir, at_ms=now_ms)
+    except ScheduleError:
+        pass  # nothing trustworthy left: calendar_state reports it and nothing is trusted
+    st = check_stored_patches(calendar_state(local_dir, now_ms=now_ms), stored_patches)
     if not st.ready or st.current is None:
         try:
             install_frozen(local_dir)
