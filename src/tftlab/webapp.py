@@ -324,7 +324,7 @@ def _resolve_database() -> tuple[Database, bool]:
 #: Provenance fields shown by `/api/source` for a snapshot (all
 #: non-identifying; the full record stays inside the file).
 SNAPSHOT_PUBLIC_FIELDS = ("format", "format_version", "source_kind", "exported_at", "balance_windows", "matches",
-                          "boards", "latest_game", "code_version", "exclusions")
+                          "boards", "latest_game", "code_version", "exclusions", "participant_level")
 
 
 def _snapshot_info(db: Database) -> dict[str, Any]:

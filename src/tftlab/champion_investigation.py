@@ -28,6 +28,7 @@ from .analytics import (
     trait_profile,
 )
 from .analytics.association import Association
+from .analytics.boards import BoardEvidence, LineupGroup, committed_carry_boards, group_boards
 from .analytics.cores import RecurringCore, recurring_cores
 from .analytics.partners import partner_associations_from_games
 from .analytics.traits import TraitProfile, split_trait_count_key
@@ -41,6 +42,7 @@ from .game_art import (
     trait_name,
 )
 from .how_to_play import MIN_BOARDS, how_to_play
+from .public_snapshot import PARTICIPANT_LEVEL_PRESERVED, snapshot_participant_level
 from .research_report import WEB_DISCOVERY_MIN_SAMPLES
 from .roster import INTRINSIC_TRAIT_REASON, id_key, load_roster, name_key
 from .scout import LOW_SAMPLE_COMMITMENT_GAMES
@@ -265,6 +267,140 @@ def core_evidence(
     }
 
 
+# ---------------------------------------------------------------- observed final boards
+
+#: An exact lineup is promoted into "Observed boards" at this many committed
+#: carry boards at one player level: the same 10-board floor as How to play
+#: and the recurring cores (`how_to_play.MIN_BOARDS`).
+OBSERVED_BOARD_MIN_BOARDS = MIN_BOARDS
+#: Concise preview in How to play: at most this many boards.
+OBSERVED_BOARD_PREVIEW = 2
+
+OBSERVED_BOARD_DEFINITION = (
+    "Exact final lineups directly observed in Riot match data on boards where this champion was a committed carry: "
+    "every shop champion on the board, duplicates counted, star levels and items ignored. Boards are grouped by the "
+    "player's final level and a lineup is shown only when it recurs. They are exact lineups, not composition "
+    "families or recommendations, and their placement numbers describe association, not cause."
+)
+OBSERVED_BOARD_ORDERING = (
+    "player level ascending; within a level, by boards observed (most first), ties by the canonical lineup "
+    "(sorted unit ids); never by placement"
+)
+LEVEL_NOT_PRESERVED = (
+    "Final-board level context was not preserved in this snapshot. Items, teammates, cores and traits remain "
+    "available."
+)
+LEVEL_NOT_OBSERVED = (
+    "None of these carry boards has an observed final player level, so boards can't be compared level by level."
+)
+
+
+def _lineup_units(group: LineupGroup, carry_id: str, names: Mapping[str, str],
+                  costs: Mapping[str, int]) -> list[dict[str, Any]]:
+    """Every fielded copy, the carry first, then by cost, name and id."""
+    refs = [{**_champion_ref(cid, names, costs), "is_carry": cid == carry_id} for cid in group.lineup]
+    return sorted(refs, key=lambda u: (not u["is_carry"], u["cost"] or 0, u["name"].casefold(), u["character_id"]))
+
+
+def _board_row(group: LineupGroup, carry_id: str, names: Mapping[str, str],
+               costs: Mapping[str, int]) -> dict[str, Any]:
+    low = group.boards < LOW_SAMPLE_COMMITMENT_GAMES
+    return {
+        "level": group.level,
+        # Canonical identity: the sorted shop-champion ids, duplicates kept.
+        "lineup_key": "+".join(group.lineup),
+        "unit_ids": list(group.lineup),
+        "units": _lineup_units(group, carry_id, names, costs),
+        "unit_count": len(group.lineup),
+        "boards": group.boards,
+        "carry_boards_at_level": group.level_boards,
+        "share_of_level": group.share_of_level,
+        "avg_placement": group.avg_placement,
+        "top4_rate": group.top4_rate,
+        "win_rate": group.win_rate,
+        "carry_three_star": {"boards": group.carry_three_star, "share": group.carry_three_star_rate},
+        "special_units": [
+            {"character_id": cid, "name": champion_name(cid, names.get(cid, cid)), "boards": n}
+            for cid, n in group.special_units.items()
+        ],
+        "sample": {
+            "low_sample": low,
+            "label": "Low sample" if low else "Observed sample",
+            "meaning": (
+                f"Fewer than {LOW_SAMPLE_COMMITMENT_GAMES} boards: an early signal, not a stable estimate."
+                if low else
+                f"At least {LOW_SAMPLE_COMMITMENT_GAMES} boards. Still observational and can move."
+            ),
+        },
+        "evidence": OBSERVED,
+    }
+
+
+def _boards_base(carry_boards: int) -> dict[str, Any]:
+    return {
+        "available": False,
+        "reason": None,
+        "evidence": OBSERVED,
+        "definition": OBSERVED_BOARD_DEFINITION,
+        "min_boards": OBSERVED_BOARD_MIN_BOARDS,
+        "ordering": OBSERVED_BOARD_ORDERING,
+        "carry_boards": carry_boards,
+        "boards_with_level": 0,
+        "level_coverage": 0.0,
+        "levels_observed": [],
+        "levels": [],
+        "preview": [],
+    }
+
+
+def board_evidence_payload(evidence: BoardEvidence, carry_id: str, names: Mapping[str, str],
+                           costs: Mapping[str, int], *, top_n: int) -> dict[str, Any]:
+    """The `observed_boards` section from grouped boards (see
+    `tftlab.analytics.boards`). `levels` lists only levels with at least one
+    promoted lineup (up to `top_n` rows each); `levels_observed` describes
+    every level that had boards."""
+    body = _boards_base(evidence.carry_boards)
+    body["boards_with_level"] = evidence.boards_with_level
+    body["level_coverage"] = evidence.level_coverage
+    if not evidence.boards_with_level:
+        body["reason"] = LEVEL_NOT_OBSERVED
+        return body
+    body["available"] = True
+    body["levels_observed"] = [
+        {"level": g.level, "carry_boards_at_level": g.carry_boards, "distinct_lineups": g.distinct_lineups,
+         "qualifying_lineups": len(g.lineups)}
+        for g in evidence.levels
+    ]
+    body["levels"] = [
+        {"level": g.level, "carry_boards_at_level": g.carry_boards, "distinct_lineups": g.distinct_lineups,
+         "qualifying_lineups": len(g.lineups),
+         "boards": [_board_row(lg, carry_id, names, costs) for lg in g.lineups[:top_n]]}
+        for g in evidence.levels if g.lineups
+    ]
+    body["qualifying_lineups"] = evidence.promoted
+    body["boards_in_qualifying_lineups"] = evidence.boards_in_promoted
+    # Preview: the top lineup of the levels with the most carry boards.
+    busiest = sorted(body["levels"], key=lambda g: (-g["carry_boards_at_level"], g["level"]))[:OBSERVED_BOARD_PREVIEW]
+    body["preview"] = [g["boards"][0] for g in sorted(busiest, key=lambda g: g["level"])]
+    return body
+
+
+def observed_board_section(db: Database, champion: dict[str, Any], balance_window: str, *,
+                           carry_boards: int, top_n: int) -> dict[str, Any]:
+    """`observed_boards` for one carry: unavailable (with a reason, never a
+    "level 0" group) when the data source holds no trustworthy final player
+    level, else the exact lineups per level."""
+    if snapshot_participant_level(db) not in (None, PARTICIPANT_LEVEL_PRESERVED):
+        body = _boards_base(carry_boards)
+        body["reason"] = LEVEL_NOT_PRESERVED
+        return body
+    roster = load_roster()
+    boards, names, costs = committed_carry_boards(
+        db, champion["character_id"], balance_window, is_shop_champion=roster.is_shop_champion)
+    evidence = group_boards(boards, min_boards=OBSERVED_BOARD_MIN_BOARDS)
+    return board_evidence_payload(evidence, champion["character_id"], names, costs, top_n=top_n)
+
+
 def _trait_count_row(a: Association) -> dict[str, Any]:
     trait_id, num_units = split_trait_count_key(a.key)
     return {
@@ -368,6 +504,9 @@ def champion_investigation(
         # Recurring 3-4 unit cores around the carry (`core_evidence`); None
         # without carry boards.
         "cores": None,
+        # Exact final lineups around the carry, grouped by player level
+        # (`observed_board_section`); None without carry boards.
+        "observed_boards": None,
         # Active traits on the carry boards, each with Riot's observed unit
         # counts (`num_units`). Denominator: `carry.games`.
         "traits": [],
@@ -433,6 +572,8 @@ def champion_investigation(
     traits = _trait_rows(trait_profile(db, character_id, balance_window))
     body["partners"] = partners[:top_n]
     body["cores"] = cores
+    body["observed_boards"] = observed_board_section(db, champion, balance_window,
+                                                     carry_boards=stat.commitment_games, top_n=top_n)
     body["traits"] = traits[:trait_top_n]
     body["summary"] = carry_summary(champion["name"], body["carry"], rows, partners, traits)
     body["how_to_play"] = how_to_play(
