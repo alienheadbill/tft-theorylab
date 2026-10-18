@@ -396,7 +396,7 @@ def observed_board_section(db: Database, champion: dict[str, Any], balance_windo
         return body
     roster = load_roster()
     boards, names, costs = committed_carry_boards(
-        db, champion["character_id"], balance_window, is_shop_champion=roster.is_shop_champion)
+        db, champion["character_id"], balance_window, roster=roster)
     evidence = group_boards(boards, min_boards=OBSERVED_BOARD_MIN_BOARDS)
     return board_evidence_payload(evidence, champion["character_id"], names, costs, top_n=top_n)
 

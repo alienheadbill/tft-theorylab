@@ -9,11 +9,15 @@ the exact multiset of shop champions Riot listed on that board.
 
 Identity and grouping rules (one place, so the API and tests agree):
 
-- **Lineup identity** is the sorted tuple of the board's shop-champion ids
-  (`Roster.is_shop_champion`), duplicates kept: two copies of a champion are
-  two entries, so a double-Sivir board never pools with a single-Sivir one.
-  Star levels, items, traits, placement, positioning and players are NOT
-  part of it.
+- **Lineup identity** is the sorted tuple of the board's shop-champion ids,
+  duplicates kept: two copies of a champion are two entries, so a
+  double-Sivir board never pools with a single-Sivir one. Star levels, items,
+  traits, placement, positioning and players are NOT part of it. Each raw
+  unit id is resolved to its verified shop identity (`shop_champion_id`): an
+  exact shop champion is itself; an id absent from the roster (e.g. an
+  alternate form such as an `_AD` variant of a champion the roster lists as
+  `_AP`) counts as a shop champion only when its normalized id matches
+  exactly one shop champion. Anything else stays a special unit.
 - **Special units** (summons and other non-shop units Riot lists on the
   board; see the README for the ones verified in real data) never enter the
   lineup; they are kept per lineup as context ("on N of these boards").
@@ -34,9 +38,10 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from typing import Callable, Iterable
+from typing import Iterable
 
 from ..carry import carry_commitment_sql
+from ..roster import Roster, id_key
 from ..storage import Database
 
 #: Riot player levels that are real observations. Older public snapshots
@@ -47,6 +52,29 @@ MIN_PLAYER_LEVEL, MAX_PLAYER_LEVEL = 1, 10
 
 def valid_level(level: int | None) -> bool:
     return level is not None and MIN_PLAYER_LEVEL <= int(level) <= MAX_PLAYER_LEVEL
+
+
+def shop_champion_id(roster: Roster, unit_id: str) -> str | None:
+    """The verified shop-champion identity of a raw Match-V1 unit id, or None.
+
+    - A roster shop champion (`Roster.is_shop_champion`) is itself, so
+      genuinely distinct shop forms (each Lux form has its own roster id)
+      stay distinct.
+    - An id the roster lists but not as a shop champion (summons, camps,
+      dummies) is never resolved: the roster already says what it is.
+    - An id the roster does not list resolves only when its normalized id
+      (`roster.id_key`: set prefix and `_AD`/`_AP`/`_Base` suffix removed)
+      equals that of exactly ONE shop champion. No match, or more than one,
+      stays unresolved (fail closed): no fuzzy or name-based matching."""
+    if roster.is_shop_champion(unit_id):
+        return unit_id
+    if unit_id in roster.champions:
+        return None
+    key = id_key(unit_id)
+    if not key:
+        return None
+    matches = [cid for cid in roster.champions if roster.is_shop_champion(cid) and id_key(cid) == key]
+    return matches[0] if len(matches) == 1 else None
 
 
 @dataclass(frozen=True)
@@ -70,12 +98,14 @@ def committed_carry_boards(
     character_id: str,
     balance_window: str,
     *,
-    is_shop_champion: Callable[[str], bool],
+    roster: Roster,
     commitment_items: int = 2,
 ) -> tuple[list[ObservedBoard], dict[str, str], dict[str, int]]:
     """Every board in the window where `character_id` is a committed carry
     (counted once however many committed copies it had), with its whole
-    final lineup. Returns `(boards, names, costs)` for the units seen.
+    final lineup: shop champions under their verified shop identity
+    (`shop_champion_id`), everything else as special units. Returns
+    `(boards, names, costs)` for the units seen (keyed by raw unit id).
 
     One query: the committed boards (DISTINCT board, MAX committed tier) are
     joined to all of their units, ordered so the result never depends on
@@ -103,11 +133,17 @@ def committed_carry_boards(
     special: dict[tuple[str, int], list[str]] = defaultdict(list)
     names: dict[str, str] = {}
     costs: dict[str, int] = {}
+    resolved: dict[str, str | None] = {}  # raw unit id -> shop identity, resolved once per id
     for match_id, participant_index, placement, level, carry_tier, _ui, unit_id, unit_name, cost in rows:
         key = (str(match_id), int(participant_index))
         head[key] = (int(placement), None if level is None else int(level), int(carry_tier or 0))
         unit_id = str(unit_id)
-        (shop if is_shop_champion(unit_id) else special)[key].append(unit_id)
+        if unit_id not in resolved:
+            resolved[unit_id] = shop_champion_id(roster, unit_id)
+        if resolved[unit_id] is not None:
+            shop[key].append(resolved[unit_id])
+        else:
+            special[key].append(unit_id)
         if unit_name:
             names.setdefault(unit_id, str(unit_name))
         if cost is not None:

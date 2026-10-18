@@ -21,11 +21,12 @@ from tftlab.analytics.boards import (
     ObservedBoard,
     committed_carry_boards,
     group_boards,
+    shop_champion_id,
     valid_level,
 )
 from tftlab.champion_investigation import champion_investigation
 from tftlab.how_to_play import MIN_BOARDS
-from tftlab.roster import load_roster
+from tftlab.roster import Roster, load_roster
 from tftlab.storage import Database
 
 POSTGRES_TEST_URL = os.environ.get("TFTLAB_TEST_DATABASE_URL")
@@ -143,7 +144,7 @@ def test_boards_use_the_canonical_carry_definition_and_window(db: Database) -> N
 
 
 def test_a_board_counts_once_with_two_committed_carry_copies(db: Database) -> None:
-    boards, _names, _costs = committed_carry_boards(db, KOGMAW, WINDOW, is_shop_champion=ROSTER.is_shop_champion)
+    boards, _names, _costs = committed_carry_boards(db, KOGMAW, WINDOW, roster=ROSTER)
     double = [b for b in boards if b.level == 7]
     assert len(double) == 10  # 10 boards, not 20
     assert all(b.lineup.count(KOGMAW) == 2 and b.carry_tier == 3 for b in double)
@@ -214,6 +215,41 @@ def test_special_units_are_context_never_lineup_members(db: Database) -> None:
     assert SUMMON not in b9["unit_ids"] and b9["unit_count"] == 4
     assert b9["special_units"] == [{"character_id": SUMMON, "name": b9["special_units"][0]["name"], "boards": 10}]
     assert _by_key(_section(db), 8)["+".join(_lineup(*B))]["special_units"] == []
+
+
+def test_shop_identity_resolution_is_exact_or_uniquely_verified() -> None:
+    assert GROMP == "DA_Gromp18_AP" and "DA_Gromp18_AD" not in ROSTER.champions
+    # An alternate form the roster doesn't list resolves to the one shop champion with its normalized id.
+    assert shop_champion_id(ROSTER, "DA_Gromp18_AD") == GROMP
+    assert shop_champion_id(ROSTER, GROMP) == GROMP
+    # Distinct shop forms keep their own exact ids (every Lux form is its own roster champion).
+    lux_forms = [cid for cid in ROSTER.champions if ROSTER.is_shop_champion(cid) and "Lux" in cid]
+    assert len(lux_forms) > 1 and all(shop_champion_id(ROSTER, cid) == cid for cid in lux_forms)
+    # Known non-shop units and unmatched ids stay special.
+    assert SUMMON in ROSTER.champions and shop_champion_id(ROSTER, SUMMON) is None
+    assert shop_champion_id(ROSTER, "TFT18_NidaleeCougar") is None
+    assert shop_champion_id(ROSTER, "") is None
+    # Ambiguous: two shop champions share the normalized id -> no guess.
+    fake = Roster(set_number=18, traits={}, champions={
+        "DA_Foo18_AP": {"name": "Foo", "cost": 2, "traits": ["T1"]},
+        "TFT18_Foo": {"name": "Foo", "cost": 3, "traits": ["T2"]},
+    })
+    assert shop_champion_id(fake, "DA_Foo18_AD") is None
+    assert shop_champion_id(fake, "DA_Foo18_AP") == "DA_Foo18_AP"
+
+
+def test_an_alternate_form_is_part_of_the_lineup_and_a_summon_is_not(tmp_path: Path) -> None:
+    with Database(tmp_path / "forms.sqlite3") as db:
+        for i in range(10):
+            units = [make_unit(KOGMAW, tier=2, items=ITEMS), make_unit("DA_Gromp18_AD", tier=2),
+                     make_unit(KARMA), make_unit(SUMMON)]
+            db.ingest_match(make_match(f"F{i}", units=units, placement=3, level=8))
+        section = _section(db)
+    row, = _rows(section, 8)
+    assert row["unit_ids"] == sorted([KOGMAW, GROMP, KARMA]) and row["unit_count"] == 3
+    gromp = next(u for u in row["units"] if u["character_id"] == GROMP)
+    assert gromp["name"] == "Gromp" and gromp["art_url"]
+    assert [s["character_id"] for s in row["special_units"]] == [SUMMON]
 
 
 # ---------------------------------------------------------------- promotion and ordering
