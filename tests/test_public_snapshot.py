@@ -61,7 +61,7 @@ def test_export_writes_a_verified_sanitized_snapshot(source, tmp_path) -> None:
         "read_schema", "provenance", "public_read_path", "no_collection_tables", "no_puuid_columns", "no_raw_payloads",
         "no_augment_payloads", "opaque_match_ids", "referential_consistency", "trusted_windows_only",
         "windows_match_provenance", "requested_windows_only", "counts_match_provenance", "counts_reconcile_with_source",
-        "no_secrets_or_identifiers"}
+        "no_secrets_or_identifiers", "participant_levels_plausible"}
     tables = _tables(out)
     assert not tables & {"seed_samples", "match_discoveries", "ingest_runs"}
     assert {"matches", "participants", "units", "traits", "experiments", ps.METADATA_TABLE} <= tables
@@ -69,7 +69,11 @@ def test_export_writes_a_verified_sanitized_snapshot(source, tmp_path) -> None:
     try:
         assert conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0] == 24
         assert conn.execute("SELECT DISTINCT payload_json FROM matches").fetchall() == [("{}",)]
-        assert conn.execute("SELECT DISTINCT augments_json, level FROM participants").fetchall() == [("[]", 0)]
+        assert conn.execute("SELECT DISTINCT augments_json FROM participants").fetchall() == [("[]",)]
+        # Real final player levels are kept (non-identifying gameplay context).
+        source_levels = sorted(r[0] for r in sqlite3.connect(src).execute("SELECT level FROM participants"))
+        assert sorted(r[0] for r in conn.execute("SELECT level FROM participants")) == source_levels
+        assert set(source_levels) - {0}
         assert conn.execute("SELECT DISTINCT queue_id, balance_window FROM matches").fetchall() == [(1100, "18.3")]
         ids = [r[0] for r in conn.execute("SELECT match_id FROM matches ORDER BY game_datetime")]
         assert ids == [f"S{i:07d}" for i in range(1, 25)]  # opaque, numbered by game time

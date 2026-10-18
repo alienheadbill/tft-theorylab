@@ -17,6 +17,11 @@ copying that database:
   numbered by (game time, source id), consistently in every table. The
   mapping is never stored; only a one-way fingerprint of the whole source
   population is.
+- Final player level (`participants.level`) is kept: non-identifying
+  gameplay context that level-grouped board evidence needs. Snapshots
+  written before this carried a sanitized 0; provenance says which kind a
+  file is (`participant_level`, see `snapshot_participant_level`), and the
+  format version is unchanged so those older files stay readable.
 - The snapshot carries versioned provenance (`public_snapshot_metadata`).
   The website treats a snapshot as observed Riot evidence ONLY when that
   provenance was written by this exporter after the source passed the
@@ -86,8 +91,15 @@ EXPORTED_COLUMNS: dict[str, tuple[str, ...]] = {
 #: rows are ranked Riot matches classified by patch.
 SANITIZED_COLUMNS: dict[str, dict[str, Any]] = {
     "matches": {"payload_json": "{}", "game_type": None, "set_number": None, "set_core_name": None},
-    "participants": {"augments_json": "[]", "level": 0},
+    "participants": {"augments_json": "[]"},
 }
+#: Additive provenance capability: "preserved" when `participants.level`
+#: holds Riot's real final player level. Absent in older format-1 snapshots,
+#: which stored 0 for every board.
+PARTICIPANT_LEVEL_KEY = "participant_level"
+PARTICIPANT_LEVEL_PRESERVED = "preserved"
+#: Riot's final player levels (0 is "not reported"; never a level).
+MAX_PLAYER_LEVEL = 10
 #: Collection-only tables that must never be in a public snapshot.
 EXCLUDED_TABLES = ("seed_samples", "match_discoveries", "ingest_runs")
 EXPERIMENT_COLUMNS = {
@@ -401,6 +413,7 @@ def export_public_snapshot(source: Database, out_path: Path | str, *, balance_wi
                 "tables": sorted([*EXPORTED_COLUMNS, *EXPERIMENT_COLUMNS, "discovery_prepared_runs",
                                   "discovery_prepared_candidates", "schema_migrations", METADATA_TABLE]),
                 "sanitized_columns": SANITIZED_COLUMNS,
+                PARTICIPANT_LEVEL_KEY: PARTICIPANT_LEVEL_PRESERVED,
                 "excluded_tables": list(EXCLUDED_TABLES),
                 "match_id_scheme": "opaque snapshot-local ids S0000001.. numbered by (game_datetime, source match id); "
                                    "the mapping is not stored",
@@ -470,6 +483,23 @@ def read_snapshot_provenance(db: Database) -> dict[str, Any]:
     return prov
 
 
+def snapshot_participant_level(db: Database) -> str | None:
+    """How a database's `participants.level` may be read: None for an
+    ordinary TheoryLabs database (levels as Riot reported them), else
+    "preserved" for a public snapshot whose provenance says so, or
+    "sanitized" for a snapshot without that capability (older format-1
+    files, where every level is a placeholder 0)."""
+    if not _table_exists(db, METADATA_TABLE):
+        return None
+    try:
+        row = db.query_one(f"SELECT value FROM {METADATA_TABLE} WHERE key = ?", (PROVENANCE_KEY,))
+        prov = json.loads(row[0]) if row else {}
+    except (TypeError, ValueError):
+        prov = {}
+    preserved = isinstance(prov, dict) and prov.get(PARTICIPANT_LEVEL_KEY) == PARTICIPANT_LEVEL_PRESERVED
+    return PARTICIPANT_LEVEL_PRESERVED if preserved else "sanitized"
+
+
 def _text_columns(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     out = []
     for (table,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"):
@@ -514,6 +544,11 @@ def verify_public_snapshot(path: Path | str, *, source_match_ids: Iterable[str] 
         require("no_raw_payloads", raw == 0, f"{raw} matches keep a raw payload")
         aug = conn.execute("SELECT COUNT(*) FROM participants WHERE augments_json <> '[]'").fetchone()[0]
         require("no_augment_payloads", aug == 0, f"{aug} boards keep raw augments")
+        if prov.get(PARTICIPANT_LEVEL_KEY) == PARTICIPANT_LEVEL_PRESERVED:
+            bad_levels = conn.execute("SELECT COUNT(*) FROM participants WHERE level < 0 OR level > ?",
+                                      (MAX_PLAYER_LEVEL,)).fetchone()[0]
+            require("participant_levels_plausible", bad_levels == 0,
+                    f"{bad_levels} boards have a level outside 0-{MAX_PLAYER_LEVEL}")
         bad_ids = conn.execute("SELECT COUNT(*) FROM matches WHERE match_id NOT GLOB 'S[0-9][0-9][0-9][0-9][0-9][0-9][0-9]*'").fetchone()[0]
         require("opaque_match_ids", bad_ids == 0, f"{bad_ids} match ids are not opaque snapshot ids")
         orphans = sum(conn.execute(sql).fetchone()[0] for sql in (

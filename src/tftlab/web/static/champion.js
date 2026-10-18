@@ -465,7 +465,8 @@ function trustSection(inv) {
         <div><dt>How to play</dt><dd>A short selection from the same observed rows, chosen by sample size and frequency, not by results: items, pairs and builds on at least 10 carry boards (most used first), teammates by how often they shared the board, trait directions by the unit count Riot reported most often. A one-champion trait at its single unit (e.g. a teammate's own trait) is not a trait direction; it stays in the Traits tab. Nothing is predicted.</dd></div>
         <div><dt>Recipe direction</dt><dd>Derived, not observed: the components in the CommunityDragon recipes of the completed items How to play shows. Riot match data lists final items only, so TheoryLabs can't see which components a player held or opened with.</dd></div>
         <div><dt>Interpretation</dt><dd>The interpretation above comes from fixed rules, not a model. The 3★ comparison needs at least 30 boards on each side before TheoryLabs interprets it; then it reports the observed Top 4 difference in percentage points. That is an association, not proof that reaching 3★ caused the result.</dd></div>
-        <div><dt>Not shown yet</dt><dd>Full comp families and recurring cores (that research is still experimental and unvalidated), positioning, augments, and leveling or rolling plans.</dd></div>
+        <div><dt>Observed boards</dt><dd>Exact final lineups (shop champions only, duplicates counted) on this champion's carry boards, separated by the player's final level and listed once a lineup appears on 10+ boards at that level, most common first. Their placement numbers are descriptive, and boards at different levels are never pooled or compared.</dd></div>
+        <div><dt>Not shown yet</dt><dd>Composition families and variants (that research is still experimental and unvalidated), positioning, augments, and leveling or rolling plans.</dd></div>
       </dl>
     </section>`;
 }
@@ -560,6 +561,7 @@ function howToPlaySection(inv) {
         <section class="htp-card" aria-labelledby="htp-mates"><h4 id="htp-mates">Teammates</h4>${mates}</section>
         <section class="htp-card" aria-labelledby="htp-traits"><h4 id="htp-traits">Trait direction</h4>${traits}<p class="htp-foot">Unit counts Riot reported on the final boards, not official trait thresholds.</p></section>
         <section class="htp-card htp-span" aria-labelledby="htp-cores"><h4 id="htp-cores">Recurring cores</h4>${coreLines}<p class="htp-foot">Units seen together on the same final carry boards, most common first. Other units were there too: not exact comps.</p></section>
+        ${boardsPreview(inv)}
       </div>
       <section class="htp-why" aria-labelledby="htp-why">
         <h4 id="htp-why">Why: evidence summary ${stamp('observed', 'Observed')}</h4>
@@ -570,6 +572,95 @@ function howToPlaySection(inv) {
     </section>`;
 }
 
+// ------------------------------------------------------------------ observed final boards
+
+// Exact final lineups seen on the carry's boards, grouped by the player's
+// final level and ordered by how often they appeared (never by results).
+// Everything comes from `observed_boards`; nothing is computed here.
+const BOARD_NOTE = 'Avg place, Top 4 and Win describe these boards only. They are not a reason the lineup won or lost, and boards at different levels are not compared.';
+
+function boardUnit(u) {
+  const label = `${esc(u.name)}${u.is_carry ? ' <span class="board-carry-tag">carry</span>' : ''}`;
+  const inner = `${refIcon(u.name, u.art_url, { cost: u.cost, kind: 'partner' })}<span class="board-unit-name">${label}</span>`;
+  return `<li class="board-unit${u.is_carry ? ' is-carry' : ''}">${
+    u.is_carry ? `<span class="board-unit-inner">${inner}</span>` : `<a class="board-unit-inner" href="${esc(championHref(u.slug))}">${inner}</a>`
+  }</li>`;
+}
+
+function boardCard(row, carryName, { compact = false } = {}) {
+  const lineupLabel = row.units.map(u => `${u.name}${u.is_carry ? ' (carry)' : ''}`).join(', ');
+  const star = row.carry_three_star;
+  const specials = row.special_units.length
+    ? `<p class="board-special">Also listed on the board (not shop champions, not part of the lineup): ${row.special_units
+        .map(s => `${esc(s.name)} on ${fmtNum(s.boards)} of ${plural(row.boards, 'board')}`)
+        .join('; ')}.</p>`
+    : '';
+  return `
+    <li class="board-card${compact ? ' is-compact' : ''}">
+      <p class="board-level-tag">Level ${row.level} · ${plural(row.unit_count, 'unit')}</p>
+      <ul class="board-units" aria-label="${esc(`Lineup: ${lineupLabel}`)}">${row.units.map(boardUnit).join('')}</ul>
+      <p class="board-count"><b>${plural(row.boards, 'board')}</b> <span>${fmtPct(row.share_of_level)} of ${esc(carryName)} carry boards at level ${row.level}</span></p>
+      <dl class="board-stats">
+        <div><dt>Avg place</dt><dd>${fmtPlace(row.avg_placement)}</dd></div>
+        <div><dt>Top 4</dt><dd>${fmtPctShort(row.top4_rate)}</dd></div>
+        <div><dt>Win</dt><dd>${fmtPctShort(row.win_rate)}</dd></div>
+        <div><dt>${esc(carryName)} 3★</dt><dd>${fmtNum(star.boards)} (${fmtPctShort(star.share)})</dd></div>
+      </dl>
+      <p class="board-stamps">${stamp('observed', 'Observed')}${row.sample.low_sample ? stamp('low', row.sample.label) : ''}</p>
+      ${compact ? '' : specials}
+    </li>`;
+}
+
+function boardsUnavailable(ob) {
+  return `<div class="state-note empty-evidence board-unavailable"><p>${esc(ob.reason || 'Observed final boards are not available for this data source.')}</p></div>`;
+}
+
+function boardsSection(inv) {
+  const ob = inv.observed_boards;
+  const name = inv.champion.name;
+  const intro = `<p class="inv-help">These are exact final lineups directly observed when ${esc(name)} was itemized as a carry. Boards are separated by player level and ordered by how often they appeared, not by placement. Star levels and items are not part of a lineup; two copies of one champion count as two units.</p>`;
+  const head = `<h3 id="sec-boards">Observed final boards ${stamp('observed', 'Observed')}</h3>`;
+  if (!ob || !ob.available) {
+    return `<section class="inv-section boards" aria-labelledby="sec-boards">${head}${intro}${ob ? boardsUnavailable(ob) : ''}</section>`;
+  }
+  const coverage = `<p class="board-coverage">${plural(ob.boards_with_level, 'carry board')} of ${fmtNum(ob.carry_boards)} (${fmtPct(ob.level_coverage)}) have an observed final level. A lineup is listed once it appears on ${plural(ob.min_boards, 'board')} or more at the same level.</p>`;
+  const groups = ob.levels
+    .map(
+      g => `
+      <section class="board-level" aria-labelledby="board-level-${g.level}">
+        <h4 id="board-level-${g.level}">Level ${g.level}</h4>
+        <p class="htp-sub">${plural(g.carry_boards_at_level, 'carry board')} at level ${g.level} · ${plural(g.distinct_lineups, 'distinct lineup')} · ${plural(g.qualifying_lineups, 'lineup')} on ${ob.min_boards}+ boards${g.boards.length < g.qualifying_lineups ? ` (most common ${g.boards.length} shown)` : ''}</p>
+        <ol class="board-list">${g.boards.map(r => boardCard(r, name)).join('')}</ol>
+      </section>`,
+    )
+    .join('');
+  const shown = new Set(ob.levels.map(g => g.level));
+  const quiet = ob.levels_observed.filter(g => !shown.has(g.level));
+  const quietNote = quiet.length
+    ? `<p class="board-quiet">No exact lineup reached ${ob.min_boards} boards at ${quiet.map(g => `level ${g.level} (${plural(g.carry_boards_at_level, 'board')})`).join(', ')}.</p>`
+    : '';
+  const empty = ob.levels.length
+    ? ''
+    : `<div class="state-note empty-evidence"><p>No exact final lineup appeared on ${plural(ob.min_boards, 'carry board')} or more at the same player level yet. Exact boards vary a lot; the recurring cores in the Teammates tab show partial patterns that do recur.</p></div>`;
+  return `
+    <section class="inv-section boards" aria-labelledby="sec-boards">
+      ${head}${intro}${coverage}${empty}${groups}${quietNote}
+      <p class="htp-foot">${esc(BOARD_NOTE)} Exact lineups only: not composition families and not a plan to copy.</p>
+    </section>`;
+}
+
+function boardsPreview(inv) {
+  const ob = inv.observed_boards;
+  if (!ob || !ob.available || !ob.preview.length) return '';
+  return `
+    <section class="htp-card htp-span htp-boards" aria-labelledby="htp-boards">
+      <h4 id="htp-boards">Most common observed final boards</h4>
+      <p class="htp-sub">Exact lineups at the player levels with the most ${esc(inv.champion.name)} carry boards, by how often they appeared.</p>
+      <ol class="board-list">${ob.preview.map(r => boardCard(r, inv.champion.name, { compact: true })).join('')}</ol>
+      <button type="button" class="htp-more" data-tab="boards">See all observed boards →</button>
+    </section>`;
+}
+
 // ------------------------------------------------------------------ tabs
 
 // One tab list for the whole investigation; panels are rendered once and
@@ -577,6 +668,7 @@ function howToPlaySection(inv) {
 // in the URL hash (#items) so a view can be linked and survives a reload.
 const TABS = [
   ['play', 'How to play'],
+  ['boards', 'Boards'],
   ['items', 'Items'],
   ['teammates', 'Teammates'],
   ['traits', 'Traits'],
@@ -672,6 +764,7 @@ function renderInvestigation(inv) {
       ${headerBlock(inv)}
       ${tabList(active)}
       ${panel('play', active, howToPlaySection(inv))}
+      ${panel('boards', active, boardsSection(inv))}
       ${panel('items', active, itemSection(inv, c.name))}
       ${panel('teammates', active, partnerSection(inv, c.name) + coreSection(inv, c.name))}
       ${panel('traits', active, traitSection(inv, c.name))}
