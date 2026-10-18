@@ -1135,6 +1135,7 @@ def run_local_collection(db_path: Path, config, *, progress, at_ms: int | None =
     them); `client_factory` may wrap `_local_riot_client`.
     """
     from . import local_collector as lc
+    from . import patch_calendar
 
     settings = Settings.from_env()
     at_ms = lc.now_ms() if at_ms is None else at_ms
@@ -1143,6 +1144,7 @@ def run_local_collection(db_path: Path, config, *, progress, at_ms: int | None =
             config, api_key=settings.riot_api_key, platform=settings.platform, region=settings.region,
             at_ms=at_ms, client_factory=client_factory or _local_riot_client, fetch_metadata=_fetch_current_metadata,
             database_url_set=bool(os.environ.get("DATABASE_URL")), progress=progress,
+            refresh_calendar=patch_calendar.refresh_schedule,
         )
     report_path = lc.write_report(report, lc.local_dirs(db_path)["reports"], at_ms=at_ms) if db_path.parent.exists() else None
     return report, report_path
@@ -1296,8 +1298,8 @@ def local_status_command(
         line("Current trusted patch", f"{tw['patch']} ({lc.iso(tw['starts_at'])} to {lc.iso(tw['ends_at'])}); "
              "now is inside it -- collection is possible")
     else:
-        line("Current trusted patch", "none -- collection is not possible until a new patch window is verified "
-             f"and registered ({tw.get('reason')})")
+        line("Current trusted patch", f"none -- collection is paused. {tw.get('reason')}")
+    _print_patch_schedule(status["patch_calendar"], line)
     if status.get("read_error"):
         line("Database", f"could not be read ({status['read_error']}); `tftlab local-collect` brings an older "
              "database up to date, or restore a backup (see docs/local-collector.md)")
@@ -1335,6 +1337,63 @@ def local_status_command(
     else:
         line("Riot key", "configured (not checked; add --check-riot to test it)"
              if lc.riot_key_configured(Settings.from_env().riot_api_key) else "NOT SET")
+
+
+def _print_patch_schedule(view: dict, line) -> None:
+    nxt, balance, fresh = view.get("next"), view.get("upcoming_balance"), view.get("freshness") or {}
+    line("Next scheduled patch", f"{nxt['label']} on {nxt['scheduled_date']} (Pacific Time)" if nxt else "not listed")
+    if view.get("next_window"):
+        w = view["next_window"]
+        line(f"Patch {w['client_patch']} window (planned)", f"{w['starts_at_pacific']} to {w['ends_at_pacific']}")
+    if balance:
+        line("Upcoming balance update", f"{balance['label']} on {balance['scheduled_date']} -- collection pauses "
+             "around it")
+    line("Patch schedule", fresh.get("label", "unknown"))
+
+
+@app.command("local-patch-schedule")
+def local_patch_schedule_command(
+    db: str = typer.Option(None, "--db", help="Local SQLite file whose folder holds the patch calendar"),
+    refresh: bool = typer.Option(False, "--refresh", help="Check Riot's schedule page now (one HTTPS request)"),
+    as_json: bool = typer.Option(False, "--json", help="Print the full view, including provenance"),
+) -> None:
+    """Riot's TFT patch schedule as the local collector sees it.
+
+    Without --refresh this reads only the saved copy (no network). With
+    --refresh it makes one public HTTPS request to Riot's support article
+    (no key involved), validates it and saves it only if it passed.
+    """
+    from . import local_collector as lc
+    from . import patch_calendar
+
+    _load_dotenv()
+    db_path = _local_db_or_exit(db)
+    now = lc.now_ms()
+    if refresh:
+        result = patch_calendar.refresh_schedule(db_path.parent, now_ms=now, force=True)
+        console.print(("Schedule refreshed: " if result.ok else "Refresh FAILED (saved copy kept): ") + result.message,
+                      markup=False, highlight=False)
+    view = patch_calendar.calendar_state(db_path.parent, now_ms=now).public()
+    if as_json:
+        console.print_json(json.dumps(view))
+        return
+
+    def line(label: str, value) -> None:
+        console.print(f"  {label}: ", end="")
+        console.print(str(value), markup=False, highlight=False)
+
+    cur = view.get("current")
+    line("Collection", ("READY -- " if view["ready"] else "NOT READY -- ") + view["message"])
+    if cur:
+        line("Current trusted patch", f"{cur['patch']} ({lc.iso(cur['starts_at'])} to {lc.iso(cur['ends_at'])}; "
+             f"{cur['origin']})")
+    _print_patch_schedule(view, line)
+    prov = view["provenance"]
+    line("Source", prov["source_url"])
+    line("Rule", prov["policy_version"])
+    for problem in [prov.get("schedule_error"), prov.get("frozen_error"), *prov["conflicts"], *prov["diagnostics"]]:
+        if problem:
+            line("Note", problem)
 
 
 @app.command("local-collect")

@@ -30,7 +30,8 @@ The recommended way to collect real data: one SQLite file on a personal computer
 ```bash
 tftlab local-init        # once: creates data/local/ and .env (never overwrites either)
 tftlab local-set-key     # paste a fresh Riot development key (hidden prompt, saved in .env)
-tftlab local-status      # offline: how much data is stored, current patch window, backups
+tftlab local-status      # offline: how much data is stored, current/next patch, backups
+tftlab local-patch-schedule [--refresh]  # Riot's patch schedule as the collector sees it
 tftlab local-collect     # THE daily command (or scripts/local-collect.cmd / .ps1 / .sh)
 tftlab local-snapshot    # optional: sanitized public website snapshot (never uploaded)
 ```
@@ -43,7 +44,7 @@ tftlab local-snapshot    # optional: sanitized public website snapshot (never up
 1. **Preflight**, before anything changes:
    - local SQLite target only;
    - disk space;
-   - the current trusted window from `UNREAL_PATCH_REGISTRY`;
+   - the current trusted window: the fixed history in `UNREAL_PATCH_REGISTRY`, or a window derived from Riot's published patch schedule (`tftlab.patch_calendar`, below);
    - the Riot key, with `verify-riot`'s check;
    - CommunityDragon costs.
 2. **Backup:** a consistent SQLite online backup into `data/local/backups/`; the newest 7 are kept.
@@ -233,7 +234,7 @@ See `src/tftlab/unreal_patch.py`'s module comment for the full reasoning. When a
 - Its `balance_window` is left `None`, so it's automatically excluded from every balance-window-scoped analytics query (never silently blended into a real window's stats) and counted in `IntegrityReport.unresolved_unreal_matches` / flagged by `tftlab validate-live-data` as a severe issue (a missing balance window always is) until resolved.
 - Run `tftlab patch-diagnostics` (read-only, no Riot/CommunityDragon calls -- see below) or `tftlab validate-live-data` and read the diagnostics (raw `game_version` distribution, resolved patch distribution, balance-window distribution, earliest/latest `game_datetime`, and specifically the masked-Unreal matches' own earliest/latest `game_datetime` -- store-wide, not scoped to one window) to see the actual timestamp range needing a wider or additional window, without running another ingest.
 
-To extend this as new patches ship: read off the actual masked-Unreal timestamp range via `tftlab patch-diagnostics`, cross-reference Riot's published patch schedule, and add another conservative, verified+sourced `UnrealPatchWindow` to `UNREAL_PATCH_REGISTRY` in `src/tftlab/unreal_patch.py`, following the same margin-in-from-both-ends pattern. Every affected row -- already-ingested matches included -- picks up the correct patch automatically on the next `Database` connect; no separate backfill command or data wipe is needed.
+**New patches (local collector): the patch calendar.** Patches after 18.4 no longer need a code change. `tftlab.patch_calendar` reads Riot's official "Patch Schedule - Teamfight Tactics" support article (one public HTTPS request, at most hourly, only at collector start-up and collection preflight; status reads use the saved copy in `data/local/patch-calendar.json`). It derives each window with one named, versioned rule (`POLICY_VERSION`): **00:00 America/Los_Angeles on the day after the scheduled date, until 17:00 America/Los_Angeles two days before the next schedule entry**, using the IANA time zone (no fixed offsets). The rule reproduces the 18.3 and 18.4 windows exactly; 18.2, 18.3 and 18.4 stay fixed in the registry above and are never regenerated. A balance update such as `18.6B` is normalized to base patch `18.6` plus suffix `B`. It never creates a window or a balance cutoff, but it ends the preceding window, so collection pauses across it. A derived window classifies nothing until collection first uses it. At that moment it is frozen into `data/local/patch-windows-frozen.json`, next to the database, and installed into `unreal_patch` (`install_frozen_windows`), so every window that ever classified a match is frozen and never moves. Every change also writes a versioned copy to `data/local/backups/patch-windows/`. The newest valid copy is the reference: a missing, damaged or differing record (even a valid hand edit) is set aside and restored from it, never re-derived or re-backed-up. If none is left while stored masked matches carry a patch the record no longer knows, collection is NOT READY. Unexpected page structure, a conflict with a frozen window, a cached schedule more than 48 hours old when a new window would start, or no schedule at all all mean NOT READY, with a plain reason. Only the local collector uses the calendar: the public website, CI and the cloud `ingest-riot --current-trusted-window` path use the fixed registry only. Stored rows already carry their patch, so snapshots need nothing from it. Without the calendar, the manual route still works: read the masked-Unreal timestamp range via `tftlab patch-diagnostics`, cross-reference Riot's schedule and add an `UnrealPatchWindow` to `UNREAL_PATCH_REGISTRY`.
 
 ## Static metadata (CommunityDragon)
 
@@ -847,7 +848,7 @@ Why, from the first successful five-cohort run (100 seeds: 589 history reference
 
 **Limitations:** seeds are ladder players, so the population is what they played (see "Data population and seed cohorts"); a heavy grinder's games older than their last 10 are not requested; Diamond/Platinum candidates come from the first pages of each division (reported as capped when so).
 
-**Patch end is strict.** Production always runs `--current-trusted-window`. At 2026-10-06T00:00:00Z (end exclusive) 18.3 collection stopped. Until 18.4's conservative window opens at 2026-10-08T07:00:00Z there is no current trusted window, so the ingest step fails instead of crawling another patch or going unbounded. 18.5 needs its own reviewed window before 2026-10-20T00:00:00Z.
+**Patch end is strict.** Production always runs `--current-trusted-window`. At 2026-10-06T00:00:00Z (end exclusive) 18.3 collection stopped. Until 18.4's conservative window opens at 2026-10-08T07:00:00Z there is no current trusted window, so the ingest step fails instead of crawling another patch or going unbounded. This cloud path uses only the fixed registry, so 18.5 would need a reviewed registry window there. The local collector derives 18.5 from Riot's schedule instead (see "Unreal-era client patch resolution").
 
 **Collecting 18.4 locally:** `tftlab ingest-riot --current-trusted-window ...` with no `DATABASE_URL` writes to the local SQLite store (`TFT_DB_PATH`) once 18.4's window has opened. It writes the same ledger (`ingest_runs`, `seed_samples`, `match_discoveries`) that `export-public-snapshot` later requires.
 

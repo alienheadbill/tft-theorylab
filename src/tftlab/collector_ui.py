@@ -134,8 +134,6 @@ class _RedactingFilter(logging.Filter):
 KEY_EXPIRED_MESSAGE = ("Your Riot development key has expired (or is not valid). Get a new key from the Riot "
                        "Developer Portal (developer.riotgames.com) and paste it into the “Riot development key” "
                        "box on this page.")
-NO_WINDOW_MESSAGE = ("TheoryLabs does not yet have a trusted window for the current patch, so it will not collect. "
-                     "A TheoryLabs update has to add the new patch window first.")
 BUSY_MESSAGE = "A collection or snapshot is already running. Wait for it to finish."
 CLI_BUSY_MESSAGE = ("Another collection is already running on this database (perhaps from a terminal). Wait for it "
                     "to finish, then try again.")
@@ -162,8 +160,8 @@ def _friendly_collect_message(report: Any) -> str:
     if report.message == lc.EXPIRED_KEY_MESSAGE or "development key expired during the run" in report.message:
         return KEY_EXPIRED_MESSAGE + (" Matches saved before it expired were kept." if
                                       report.outcome == lc.COLLECTION_FAILED else " Nothing was collected.")
-    if report.message == lc.NO_WINDOW_MESSAGE:
-        return NO_WINDOW_MESSAGE
+    if report.message.startswith(lc.NO_WINDOW_MESSAGE):  # the patch calendar's own explanation
+        return report.message[len(lc.NO_WINDOW_MESSAGE):].strip() or report.message
     if report.outcome == lc.VALIDATION_FAILED:
         return VALIDATION_FAILED_MESSAGE
     return report.message  # the collector's own plain-language explanation
@@ -176,6 +174,7 @@ _PHASE_OF_CHECK = {
     "Local database": "Checking configuration", "DATABASE_URL": "Checking configuration",
     "Disk space": "Checking configuration", "Riot routing": "Checking configuration",
     "Current time (UTC)": "Checking configuration", "Trusted patch window": "Checking configuration",
+    "Patch schedule": "Checking Riot's patch schedule",
     "Riot key configured": "Validating Riot key", "Riot key valid": "Validating Riot key",
     "Champion cost data": "Loading champion data", "Existing data": "Reading existing data",
     "Backup": "Backing up the database",
@@ -706,6 +705,20 @@ def stop_running(root: Path | None = None) -> str:
     return response.json().get("error", f"The TheoryLabs Collector refused to stop (HTTP {response.status_code}).")
 
 
+def _refresh_patch_schedule() -> None:
+    """Start-up check of Riot's patch schedule (one request at most, throttled
+    to hourly; collection preflight checks again). Never blocks the page:
+    `/api/state` only ever reads the saved copy."""
+    from . import patch_calendar
+
+    try:
+        db_path = lc.resolve_local_db(None)
+        result = patch_calendar.refresh_schedule(db_path.parent, now_ms=lc.now_ms())
+        log.info("patch schedule at start-up: %s", result.message if result.attempted else "checked recently")
+    except Exception as exc:
+        log.warning("patch schedule check at start-up failed: %s", describe_exception(exc))
+
+
 def serve(*, port: int | None = None, open_browser: bool = True, root: Path | None = None) -> int:
     """Start the control panel on 127.0.0.1 (or reopen an already running one)."""
     import uvicorn
@@ -757,6 +770,7 @@ def serve(*, port: int | None = None, open_browser: bool = True, root: Path | No
             time.sleep(0.1)
 
     threading.Thread(target=open_when_ready, daemon=True).start()
+    threading.Thread(target=_refresh_patch_schedule, name="patch-schedule", daemon=True).start()
     try:
         server.run()
     finally:
