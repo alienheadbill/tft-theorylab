@@ -30,6 +30,12 @@ Identity and grouping rules (one place, so the API and tests agree):
   it has `min_boards` boards at one level; within a level rows are ordered by
   board count (most first), then by the canonical lineup. Placement, Top 4
   and wins are reported per row as description, never used to rank.
+- **Observed one-slot alternatives** (`one_slot_alternatives`) pair two
+  promoted lineups of the same carry at the same level and size whose
+  multisets differ by exactly one non-carry copy (one out, one in). The
+  relation is pairwise only: A~B and B~C never imply A~C, and nothing is
+  clustered or pooled. Each side keeps its own statistics; ordering is by the
+  other lineup's board count, then its canonical lineup.
 
 One scoped query per champion and window, then grouping in memory.
 """
@@ -218,6 +224,61 @@ class BoardEvidence:
     @property
     def boards_in_promoted(self) -> int:
         return sum(lg.boards for g in self.levels for lg in g.lineups)
+
+
+@dataclass(frozen=True)
+class Alternative:
+    """Another promoted lineup at the same level differing by one slot:
+    `out_unit` is on this lineup and not the other, `in_unit` the reverse."""
+
+    out_unit: str
+    in_unit: str
+    target: LineupGroup
+
+
+def one_slot_swap(a: tuple[str, ...], b: tuple[str, ...], carry_id: str) -> tuple[str, str] | None:
+    """`(out, in)` when lineups `a` and `b` (multisets of shop-champion ids)
+    have the same size and differ by exactly one copy each way, neither of
+    which is the carry; else None. Multiset difference, so copies count: one
+    of two Dravens swapped for a Vi is one slot, but a lineup that loses a
+    second carry copy is never a flex slot (and the carry must be on both)."""
+    if len(a) != len(b):
+        return None
+    ca, cb = Counter(a), Counter(b)
+    if not ca[carry_id] or ca[carry_id] != cb[carry_id]:
+        return None
+    out, came_in = ca - cb, cb - ca
+    if sum(out.values()) != 1 or sum(came_in.values()) != 1:
+        return None
+    (out_unit,), (in_unit,) = out, came_in
+    return out_unit, in_unit
+
+
+def one_slot_alternatives(groups: Iterable[LineupGroup], *, carry_id: str,
+                          min_boards: int) -> dict[tuple[int, tuple[str, ...]], list[Alternative]]:
+    """Observed one-slot alternatives for every lineup group, keyed by
+    `(level, lineup)`. Only groups with `min_boards`+ boards take part, on
+    either side, and only within one level. Pass ALL promoted groups (not a
+    display-truncated subset): a shown lineup's alternative may be one that is
+    not shown itself. Pairwise only -- no transitive grouping. Each list is
+    ordered by the other lineup's boards (most first), then its lineup."""
+    by_level: dict[int, list[LineupGroup]] = defaultdict(list)
+    for g in groups:
+        if g.boards >= min_boards:
+            by_level[g.level].append(g)
+    found: dict[tuple[int, tuple[str, ...]], list[Alternative]] = {}
+    for level, at_level in by_level.items():
+        for i, a in enumerate(at_level):
+            for b in at_level[i + 1:]:
+                swap = one_slot_swap(a.lineup, b.lineup, carry_id)
+                if swap is None:
+                    continue
+                out_unit, in_unit = swap
+                found.setdefault((level, a.lineup), []).append(Alternative(out_unit, in_unit, b))
+                found.setdefault((level, b.lineup), []).append(Alternative(in_unit, out_unit, a))
+    for alts in found.values():
+        alts.sort(key=lambda alt: lineup_order_key(alt.target))
+    return found
 
 
 def lineup_order_key(group: LineupGroup) -> tuple:

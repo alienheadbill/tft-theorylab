@@ -77,7 +77,7 @@ const DIRECTORY = /^\/api\/champions(\?|$)/;
 const DETAIL = /^\/api\/champions\/khazix\?/;
 
 // `held`, when given, collects a release function per detail request instead of answering it.
-function api({ hangDirectory = false, failDetail = 0, held = null } = {}) {
+function api({ hangDirectory = false, failDetail = 0, held = null, detail = null } = {}) {
   let detailFailures = failDetail;
   return url => {
     if (url.startsWith("/api/balance-windows")) return { status: 200, body: fixture("balance_windows") };
@@ -85,7 +85,7 @@ function api({ hangDirectory = false, failDetail = 0, held = null } = {}) {
     if (DETAIL.test(url)) {
       if (held) return new Promise(resolve => held.push(() => resolve({ status: 200, body: fixture("khazix") })));
       if (detailFailures > 0) { detailFailures -= 1; return { status: 500, body: { error: "boom" } }; }
-      return { status: 200, body: fixture("khazix") };
+      return { status: 200, body: detail || fixture("khazix") };
     }
     return { status: 404, body: { detail: "not found" } };
   };
@@ -228,4 +228,62 @@ test("retry reloads the champion after a failed request, still without the direc
   assert.equal(detailCalls(page.requests).length, 2);
   assert.match(page.el("#champion-view").innerHTML, /role="tablist"/);
   assert.equal(directoryCalls(page.requests).length, 0);
+});
+
+// ---------------------------------------------------------------- observed one-slot alternatives (Boards tab)
+
+const panelHtml = (html, name) => {
+  const start = html.indexOf(`id="panel-${name}"`);
+  assert.ok(start >= 0, name);
+  const next = html.indexOf('id="panel-', start + 10);
+  return html.slice(start, next < 0 ? undefined : next);
+};
+const boardRows = body => body.observed_boards.levels.flatMap(g => g.boards);
+
+test("the Boards tab shows observed alternatives with both units and the other lineup's own numbers", async () => {
+  const body = fixture("khazix");
+  const row = boardRows(body).find(r => r.alternatives.length);
+  assert.ok(row, "the demo data has at least one one-slot alternative");
+  const page = loadPage("/champions/khazix", { respond: api(), hash: "#boards" });
+  await settle();
+  const boards = panelHtml(page.el("#champion-view").innerHTML, "boards");
+  assert.match(boards, /Observed alternatives/);
+  assert.match(boards, /not the effect of making the swap/);
+  const alt = row.alternatives[0];
+  const esc = s => s.replace(/'/g, "&#39;");
+  assert.ok(boards.includes(`Out: </span>`) && boards.includes(`, in: </span>`));
+  assert.ok(boards.includes(`>${esc(alt.out_unit.name)}</a>`), alt.out_unit.name);
+  assert.ok(boards.includes(`>${esc(alt.in_unit.name)}</a>`), alt.in_unit.name);
+  assert.ok(boards.includes(`<b>${alt.boards.toLocaleString()} boards</b>`));
+  // No alternatives in the concise How to play preview.
+  const play = panelHtml(page.el("#champion-view").innerHTML, "play");
+  assert.match(play, /Most common observed final boards/);
+  assert.doesNotMatch(play, /Observed alternatives|board-alts/);
+  // Nothing on the page reaches for the directory.
+  assert.equal(directoryCalls(page.requests).length, 0);
+});
+
+test("boards without alternatives render with no alternatives section or note", async () => {
+  const body = fixture("khazix");
+  for (const row of boardRows(body)) row.alternatives = [];
+  for (const row of body.observed_boards.preview) row.alternatives = [];
+  const page = loadPage("/champions/khazix", { respond: api({ detail: body }), hash: "#boards" });
+  await settle();
+  const boards = panelHtml(page.el("#champion-view").innerHTML, "boards");
+  assert.match(boards, /board-card/);
+  assert.doesNotMatch(boards, /Observed alternatives|board-alts|board-alt-note/);
+});
+
+test("more than three alternatives: three shown, the total stated, the rest behind a disclosure", async () => {
+  const body = fixture("khazix");
+  const row = boardRows(body).find(r => r.alternatives.length);
+  const one = row.alternatives[0];
+  row.alternatives = [5, 4, 3, 2, 1].map(n => ({ ...one, boards: 100 + n, lineup_key: `${one.lineup_key}#${n}` }));
+  const page = loadPage("/champions/khazix", { respond: api({ detail: body }), hash: "#boards" });
+  await settle();
+  const boards = panelHtml(page.el("#champion-view").innerHTML, "boards");
+  assert.match(boards, /3 of 5 shown, most boards first/);
+  assert.match(boards, /<details class="board-alt-more"><summary>Show the other 2 observed alternatives<\/summary>/);
+  const order = [...boards.matchAll(/<b>(10\d) boards<\/b>/g)].map(m => Number(m[1]));
+  assert.deepEqual(order, [105, 104, 103, 102, 101]); // the API's order, nothing re-sorted
 });

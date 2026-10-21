@@ -607,6 +607,48 @@ function boardUnit(u) {
   }</li>`;
 }
 
+// Observed one-slot alternatives: other exact lineups at the same level that
+// differ by one non-carry unit. Each row shows THAT lineup's own numbers; no
+// difference is computed and nothing is pooled. A few are shown up front and
+// the rest sit behind a disclosure, with the total always stated.
+const ALT_SHOWN = 3;
+const ALT_NOTE = 'Observed alternatives are other final lineups at the same level, with the same number of units, that differed by exactly one unit other than the carry. Both lineups reached the minimum on their own. An alternative\'s numbers describe that full observed lineup, not the effect of making the swap, and alternatives are listed pair by pair, not grouped into families.';
+
+function swapUnit(u) {
+  return `<span class="board-swap-unit">${refIcon(u.name, u.art_url, { cost: u.cost, kind: 'partner' })}<a class="board-swap-name" href="${esc(championHref(u.slug))}">${esc(u.name)}</a></span>`;
+}
+
+function boardAlternative(alt, carryName, level) {
+  const star = alt.carry_three_star;
+  return `
+    <li class="board-alt">
+      <p class="board-swap"><span class="visually-hidden">Out: </span>${swapUnit(alt.out_unit)}<span class="board-swap-arrow" aria-hidden="true">→</span><span class="visually-hidden">, in: </span>${swapUnit(alt.in_unit)}</p>
+      <p class="board-count"><b>${plural(alt.boards, 'board')}</b> <span>${fmtPct(alt.share_of_level)} of ${esc(carryName)} carry boards at level ${level}${alt.listed ? ' · also listed at this level' : ''}</span></p>
+      <dl class="board-stats">
+        <div><dt>Avg place</dt><dd>${fmtPlace(alt.avg_placement)}</dd></div>
+        <div><dt>Top 4</dt><dd>${fmtPctShort(alt.top4_rate)}</dd></div>
+        <div><dt>Win</dt><dd>${fmtPctShort(alt.win_rate)}</dd></div>
+        <div><dt>${esc(carryName)} 3★</dt><dd>${fmtNum(star.boards)} (${fmtPctShort(star.share)})</dd></div>
+      </dl>
+    </li>`;
+}
+
+function boardAlternatives(row, carryName) {
+  const alts = row.alternatives || [];
+  if (!alts.length) return '';
+  const id = `alts-${row.level}-${row.lineup_key.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+  const item = alt => boardAlternative(alt, carryName, row.level);
+  const more = alts.length > ALT_SHOWN
+    ? `<details class="board-alt-more"><summary>Show the other ${plural(alts.length - ALT_SHOWN, 'observed alternative')}</summary><ul class="board-alt-list">${alts.slice(ALT_SHOWN).map(item).join('')}</ul></details>`
+    : '';
+  const count = alts.length > ALT_SHOWN ? ` <span>${ALT_SHOWN} of ${alts.length} shown, most boards first</span>` : '';
+  return `
+      <section class="board-alts" aria-labelledby="${esc(id)}">
+        <h5 id="${esc(id)}">Observed alternatives${count}</h5>
+        <ul class="board-alt-list">${alts.slice(0, ALT_SHOWN).map(item).join('')}</ul>${more}
+      </section>`;
+}
+
 function boardCard(row, carryName, { compact = false } = {}) {
   const lineupLabel = row.units.map(u => `${u.name}${u.is_carry ? ' (carry)' : ''}`).join(', ');
   const star = row.carry_three_star;
@@ -628,6 +670,7 @@ function boardCard(row, carryName, { compact = false } = {}) {
       </dl>
       <p class="board-stamps">${stamp('observed', 'Observed')}${row.sample.low_sample ? stamp('low', row.sample.label) : ''}</p>
       ${compact ? '' : specials}
+      ${compact ? '' : boardAlternatives(row, carryName)}
     </li>`;
 }
 
@@ -662,9 +705,11 @@ function boardsSection(inv) {
   const empty = ob.levels.length
     ? ''
     : `<div class="state-note empty-evidence"><p>No exact final lineup appeared on ${plural(ob.min_boards, 'carry board')} or more at the same player level yet. Exact boards vary a lot; the recurring cores in the Teammates tab show partial patterns that do recur.</p></div>`;
+  const anyAlternatives = ob.levels.some(g => g.boards.some(r => (r.alternatives || []).length));
+  const altNote = anyAlternatives ? `<p class="board-coverage board-alt-note">${esc(ALT_NOTE)}</p>` : '';
   return `
     <section class="inv-section boards" aria-labelledby="sec-boards">
-      ${head}${intro}${coverage}${empty}${groups}${quietNote}
+      ${head}${intro}${coverage}${altNote}${empty}${groups}${quietNote}
       <p class="htp-foot">${esc(BOARD_NOTE)} Exact lineups only: not composition families and not a plan to copy.</p>
     </section>`;
 }

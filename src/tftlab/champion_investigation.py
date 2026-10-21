@@ -28,7 +28,14 @@ from .analytics import (
     trait_profile,
 )
 from .analytics.association import Association
-from .analytics.boards import BoardEvidence, LineupGroup, committed_carry_boards, group_boards
+from .analytics.boards import (
+    Alternative,
+    BoardEvidence,
+    LineupGroup,
+    committed_carry_boards,
+    group_boards,
+    one_slot_alternatives,
+)
 from .analytics.cores import RecurringCore, recurring_cores
 from .analytics.partners import partner_associations_from_games
 from .analytics.traits import TraitProfile, split_trait_count_key
@@ -286,6 +293,15 @@ OBSERVED_BOARD_ORDERING = (
     "player level ascending; within a level, by boards observed (most first), ties by the canonical lineup "
     "(sorted unit ids); never by placement"
 )
+OBSERVED_ALTERNATIVE_DEFINITION = (
+    "Another exact lineup at the same player level, with the same number of units, that differs by exactly one "
+    "non-carry champion (one copy out, one copy in; the carry and its copies unchanged). Both lineups reached the "
+    "minimum on their own. Its numbers describe that complete lineup, not the effect of making the swap; "
+    "alternatives are pairwise and never grouped into families."
+)
+OBSERVED_ALTERNATIVE_ORDERING = (
+    "by the other lineup's boards observed (most first), ties by its canonical lineup; never by placement"
+)
 LEVEL_NOT_PRESERVED = (
     "Final-board level context was not preserved in this snapshot. Items, teammates, cores and traits remain "
     "available."
@@ -302,9 +318,45 @@ def _lineup_units(group: LineupGroup, carry_id: str, names: Mapping[str, str],
     return sorted(refs, key=lambda u: (not u["is_carry"], u["cost"] or 0, u["name"].casefold(), u["character_id"]))
 
 
+def _sample(boards: int) -> dict[str, Any]:
+    low = boards < LOW_SAMPLE_COMMITMENT_GAMES
+    return {
+        "low_sample": low,
+        "label": "Low sample" if low else "Observed sample",
+        "meaning": (
+            f"Fewer than {LOW_SAMPLE_COMMITMENT_GAMES} boards: an early signal, not a stable estimate."
+            if low else
+            f"At least {LOW_SAMPLE_COMMITMENT_GAMES} boards. Still observational and can move."
+        ),
+    }
+
+
+def _alternative_row(alt: Alternative, names: Mapping[str, str], costs: Mapping[str, int],
+                     listed: set[tuple[str, ...]]) -> dict[str, Any]:
+    """One observed one-slot alternative: the swap plus the OTHER lineup's own
+    numbers (nothing pooled, no difference computed)."""
+    g = alt.target
+    return {
+        "lineup_key": "+".join(g.lineup),
+        "out_unit": _champion_ref(alt.out_unit, names, costs),
+        "in_unit": _champion_ref(alt.in_unit, names, costs),
+        # Whether the other lineup also has its own row at this level (within `top_n`).
+        "listed": g.lineup in listed,
+        "boards": g.boards,
+        "carry_boards_at_level": g.level_boards,
+        "share_of_level": g.share_of_level,
+        "avg_placement": g.avg_placement,
+        "top4_rate": g.top4_rate,
+        "win_rate": g.win_rate,
+        "carry_three_star": {"boards": g.carry_three_star, "share": g.carry_three_star_rate},
+        # The flag and label only; the row's own `sample.meaning` explains them.
+        "sample": {k: v for k, v in _sample(g.boards).items() if k != "meaning"},
+        "evidence": OBSERVED,
+    }
+
+
 def _board_row(group: LineupGroup, carry_id: str, names: Mapping[str, str],
-               costs: Mapping[str, int]) -> dict[str, Any]:
-    low = group.boards < LOW_SAMPLE_COMMITMENT_GAMES
+               costs: Mapping[str, int], alternatives: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return {
         "level": group.level,
         # Canonical identity: the sorted shop-champion ids, duplicates kept.
@@ -323,15 +375,9 @@ def _board_row(group: LineupGroup, carry_id: str, names: Mapping[str, str],
             {"character_id": cid, "name": champion_name(cid, names.get(cid, cid)), "boards": n}
             for cid, n in group.special_units.items()
         ],
-        "sample": {
-            "low_sample": low,
-            "label": "Low sample" if low else "Observed sample",
-            "meaning": (
-                f"Fewer than {LOW_SAMPLE_COMMITMENT_GAMES} boards: an early signal, not a stable estimate."
-                if low else
-                f"At least {LOW_SAMPLE_COMMITMENT_GAMES} boards. Still observational and can move."
-            ),
-        },
+        "sample": _sample(group.boards),
+        # Every observed one-slot alternative (see OBSERVED_ALTERNATIVE_DEFINITION).
+        "alternatives": alternatives or [],
         "evidence": OBSERVED,
     }
 
@@ -344,6 +390,8 @@ def _boards_base(carry_boards: int) -> dict[str, Any]:
         "definition": OBSERVED_BOARD_DEFINITION,
         "min_boards": OBSERVED_BOARD_MIN_BOARDS,
         "ordering": OBSERVED_BOARD_ORDERING,
+        "alternative_definition": OBSERVED_ALTERNATIVE_DEFINITION,
+        "alternative_ordering": OBSERVED_ALTERNATIVE_ORDERING,
         "carry_boards": carry_boards,
         "boards_with_level": 0,
         "level_coverage": 0.0,
@@ -371,17 +419,33 @@ def board_evidence_payload(evidence: BoardEvidence, carry_id: str, names: Mappin
          "qualifying_lineups": len(g.lineups)}
         for g in evidence.levels
     ]
-    body["levels"] = [
-        {"level": g.level, "carry_boards_at_level": g.carry_boards, "distinct_lineups": g.distinct_lineups,
-         "qualifying_lineups": len(g.lineups),
-         "boards": [_board_row(lg, carry_id, names, costs) for lg in g.lineups[:top_n]]}
-        for g in evidence.levels if g.lineups
-    ]
+    # Alternatives come from EVERY promoted lineup, before `top_n` trims the
+    # rows: a shown lineup's alternative may not have a row of its own.
+    alternatives = one_slot_alternatives((lg for g in evidence.levels for lg in g.lineups),
+                                         carry_id=carry_id, min_boards=evidence.min_boards)
+    body["levels"] = []
+    for g in evidence.levels:
+        if not g.lineups:
+            continue
+        shown = g.lineups[:top_n]
+        listed = {lg.lineup for lg in shown}
+        body["levels"].append({
+            "level": g.level, "carry_boards_at_level": g.carry_boards, "distinct_lineups": g.distinct_lineups,
+            "qualifying_lineups": len(g.lineups),
+            "boards": [
+                _board_row(lg, carry_id, names, costs, [
+                    _alternative_row(alt, names, costs, listed) for alt in alternatives.get((g.level, lg.lineup), [])
+                ])
+                for lg in shown
+            ],
+        })
     body["qualifying_lineups"] = evidence.promoted
     body["boards_in_qualifying_lineups"] = evidence.boards_in_promoted
     # Preview: the top lineup of the levels with the most carry boards.
     busiest = sorted(body["levels"], key=lambda g: (-g["carry_boards_at_level"], g["level"]))[:OBSERVED_BOARD_PREVIEW]
-    body["preview"] = [g["boards"][0] for g in sorted(busiest, key=lambda g: g["level"])]
+    # Preview rows stay concise: alternatives live on the `levels` rows only.
+    body["preview"] = [{k: v for k, v in g["boards"][0].items() if k != "alternatives"}
+                       for g in sorted(busiest, key=lambda g: g["level"])]
     return body
 
 
