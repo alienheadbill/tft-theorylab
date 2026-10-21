@@ -46,6 +46,9 @@ const searchInput = document.querySelector('#champion-search');
 const onlyCarried = document.querySelector('#only-carried');
 const windowSelect = document.querySelector('#window-filter');
 const statusDot = document.querySelector('#status-dot');
+const pickerBody = document.querySelector('#picker-body');
+const pickerLazy = document.querySelector('#picker-lazy');
+const pickerOpen = document.querySelector('#picker-open');
 
 const params = new URLSearchParams(window.location.search);
 const pathKey = decodeURIComponent(window.location.pathname.replace(/^\/champions\/?/, '').replace(/\/$/, ''));
@@ -57,6 +60,10 @@ const state = {
   champions: [],
   championsStatus: 'idle',
   championsRequestSeq: 0,
+  // The full directory (/api/champions plus every portrait in it) is fetched
+  // only when someone wants it: at once on /champions, but on a champion's
+  // own page only after "Choose another champion" is used.
+  pickerRequested: !pathKey,
   currentId: null,
   tab: null,
 };
@@ -137,6 +144,19 @@ async function loadWindows() {
 }
 
 // ------------------------------------------------------------------ picker
+
+// On a champion's page: reveal the picker and fetch the directory the first
+// time it is asked for (later openings and window changes reuse the flag).
+function openPicker() {
+  pickerBody.hidden = false;
+  pickerLazy.hidden = true;
+  pickerOpen.setAttribute('aria-expanded', 'true');
+  if (!state.pickerRequested) {
+    state.pickerRequested = true;
+    loadChampions();
+  }
+  searchInput.focus();
+}
 
 async function loadChampions() {
   const seq = ++state.championsRequestSeq;
@@ -741,6 +761,7 @@ function renderInvestigation(inv) {
   const c = inv.champion;
   document.title = `${c.name} · Champion Investigation · TheoryLabs`;
   state.currentId = c.character_id;
+  if (state.champions.length) renderPicker(); // an already open picker marks this champion
   if (!inv.window) {
     showView(
       `<article class="investigation">${headerBlock(inv)}<p class="state-note">No indexed matches in this balance window yet, so there is nothing to show for ${esc(c.name)}. Pick another balance window above.</p></article>`,
@@ -793,7 +814,7 @@ async function loadInvestigation({ focus = true } = {}) {
     if (err.status === 404) {
       document.title = 'Champion not found · TheoryLabs';
       showView(
-        `<p class="state-note">We couldn't find a champion called “${esc(state.key)}”. Pick one from the list below.</p>`,
+        `<p class="state-note">We couldn't find a champion called “${esc(state.key)}”. Choose another champion below.</p>`,
         'Champion not found.',
       );
     } else {
@@ -822,8 +843,9 @@ function bind() {
     syncUrlWindow();
     setWindowLedger();
     loadInvestigation({ focus: false });
-    loadChampions();
+    if (state.pickerRequested) loadChampions(); // an unopened picker stays unfetched
   });
+  pickerOpen.addEventListener('click', openPicker);
   viewEl.addEventListener('keydown', onTabKey);
   window.addEventListener('hashchange', () => {
     const id = tabFromHash() || 'play';
@@ -843,17 +865,22 @@ function bind() {
 
 async function init() {
   bind();
-  if (state.key) pickerEl.querySelector('#picker-title .hl').textContent = 'Investigate another champion';
+  if (state.key) {
+    pickerEl.querySelector('#picker-title .hl').textContent = 'Investigate another champion';
+    pickerBody.hidden = true;
+    pickerLazy.hidden = false;
+  }
   try {
     await loadWindows();
   } catch (err) {
     statusDot.classList.add('error');
     document.querySelector('#data-mode').textContent = 'unavailable';
   }
-  // A fresh page load leaves focus at the top (skip link first); focus
-  // moves to the champion's heading only after an in-page change (retry).
-  await Promise.all([loadInvestigation({ focus: false }), loadChampions()]);
-  if (state.champions.length) renderPicker(); // marks the champion now open
+  // A champion's page loads only that champion: the directory never competes
+  // with it (see `openPicker`). A fresh page load leaves focus at the top
+  // (skip link first); focus moves to the heading only after an in-page change.
+  if (state.key) await loadInvestigation({ focus: false });
+  else await loadChampions();
 }
 
 init();
