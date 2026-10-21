@@ -55,6 +55,11 @@
         <h2 id="picker-title"><span class="hl">Pick a champion</span></h2>
         <p class="page-sub">Search by name, or browse by cost. The number under each champion is how many player boards in this balance window it was built as a carry on (a match has eight boards, so this can exceed the match count).</p>
       </header>
+      <!-- On a champion's own page the directory loads only when asked for (champion.js). -->
+      <p id="picker-lazy" class="picker-lazy" hidden>
+        <button type="button" id="picker-open" class="htp-more" aria-controls="picker-body" aria-expanded="false">Choose another champion</button>
+      </p>
+      <div id="picker-body">
       <form class="controls picker-controls" id="picker-controls" role="search" aria-label="Find a champion">
         <label class="field field-grow">
           <span class="field-label">champion name</span>
@@ -67,6 +72,7 @@
       </form>
       <p id="picker-count" class="picker-count" aria-live="polite"></p>
       <div id="champion-list"><p class="state-note">Loading champions…</p></div>
+      </div>
     </section>
   </main>
 
