@@ -36,6 +36,14 @@ Identity and grouping rules (one place, so the API and tests agree):
   relation is pairwise only: A~B and B~C never imply A~C, and nothing is
   clustered or pooled. Each side keeps its own statistics; ordering is by the
   other lineup's board count, then its canonical lineup.
+- **Observed board patterns** (`board_patterns`) are a PRESENTATION grouping
+  over the same promoted lineups: a flex shell is one literal multiset of N-1
+  units (all carry copies included) that every member lineup equals plus
+  exactly one non-carry copy -- its flex option. Members share one level and
+  size and each reaches `min_boards` on its own. Assignment is anchor-first
+  and non-overlapping (see `board_patterns`), so every promoted lineup is in
+  exactly one pattern: a shell, or a standalone exact board. A shell carries
+  no statistics of its own; each option keeps its lineup's numbers.
 
 One scoped query per champion and window, then grouping in memory.
 """
@@ -278,6 +286,95 @@ def one_slot_alternatives(groups: Iterable[LineupGroup], *, carry_id: str,
                 found.setdefault((level, b.lineup), []).append(Alternative(in_unit, out_unit, a))
     for alts in found.values():
         alts.sort(key=lambda alt: lineup_order_key(alt.target))
+    return found
+
+
+@dataclass(frozen=True)
+class BoardPattern:
+    """One entry of the default Boards presentation at one level.
+
+    A flex shell (`shell` set) lists its member lineups as `(flex unit,
+    group)` options, anchor first, then by recurrence; a standalone exact
+    board has `shell=None` and a single option with `flex=None`. Nothing here
+    is pooled: the pattern has no numbers beyond its members' own."""
+
+    level: int
+    shell: tuple[str, ...] | None
+    options: tuple[tuple[str | None, LineupGroup], ...]
+
+    @property
+    def anchor(self) -> LineupGroup:
+        return self.options[0][1]
+
+
+def _flex_unit(lineup: tuple[str, ...], shell: Counter, size: int, carry_id: str) -> str | None:
+    """The one non-carry copy `lineup` has beyond `shell` (a literal multiset
+    containing it), else None."""
+    if len(lineup) != size:
+        return None
+    extra = Counter(lineup) - shell
+    if sum(extra.values()) != 1 or shell - Counter(lineup):
+        return None
+    (unit,) = extra
+    return None if unit == carry_id else unit
+
+
+def board_patterns(groups: Iterable[LineupGroup], *, carry_id: str,
+                   min_boards: int) -> dict[int, list[BoardPattern]]:
+    """The non-overlapping default presentation of every promoted lineup, per
+    level, derived in memory. Pass ALL promoted groups (never a display-trimmed
+    subset), so a display cap cannot change any shell.
+
+    Per level, lineups with `min_boards`+ boards are taken in recurrence order
+    (`lineup_order_key`). The first unassigned one is the anchor; each distinct
+    non-carry unit it holds gives a candidate shell (the anchor minus one copy
+    of that unit -- every carry copy stays in the shell). A candidate's members
+    are the UNASSIGNED lineups of the same size equal to that shell plus one
+    non-carry copy; it needs at least two. Among the anchor's candidates the
+    one with the most members wins, then the larger summed board count (a
+    deterministic presentation tie-break only; never shown or used as a
+    result), then the smaller shell key. Its members are assigned and leave
+    the pool; an anchor with no candidate is a standalone exact board. Repeat
+    until every lineup is assigned. There is no graph or transitive step:
+    every member literally equals the one shell plus one unit."""
+    by_level: dict[int, list[LineupGroup]] = defaultdict(list)
+    for g in groups:
+        if g.boards >= min_boards:
+            by_level[g.level].append(g)
+    found: dict[int, list[BoardPattern]] = {}
+    for level, at_level in sorted(by_level.items()):
+        pool = sorted(at_level, key=lineup_order_key)
+        patterns: list[BoardPattern] = []
+        while pool:
+            anchor = pool[0]
+            best: tuple[tuple, tuple[str, ...], list[tuple[str, LineupGroup]]] | None = None
+            size = len(anchor.lineup)
+            for unit in sorted(set(anchor.lineup) - {carry_id}):
+                shell = Counter(anchor.lineup)
+                shell[unit] -= 1
+                if not shell[carry_id]:
+                    continue
+                members = []
+                for g in pool:
+                    flex = _flex_unit(g.lineup, shell, size, carry_id)
+                    if flex is not None:
+                        members.append((flex, g))
+                if len(members) < 2:
+                    continue
+                key_shell = tuple(sorted(shell.elements()))
+                rank = (-len(members), -sum(g.boards for _, g in members), key_shell)
+                if best is None or rank < best[0]:
+                    best = (rank, key_shell, members)
+            if best is None:
+                patterns.append(BoardPattern(level, None, ((None, anchor),)))
+                pool.remove(anchor)
+                continue
+            _, key_shell, members = best
+            # Members are in pool order, so the anchor leads and the rest follow by recurrence.
+            patterns.append(BoardPattern(level, key_shell, tuple(members)))
+            taken = {id(g) for _, g in members}
+            pool = [g for g in pool if id(g) not in taken]
+        found[level] = patterns
     return found
 
 

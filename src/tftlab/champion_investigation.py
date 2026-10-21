@@ -31,7 +31,9 @@ from .analytics.association import Association
 from .analytics.boards import (
     Alternative,
     BoardEvidence,
+    BoardPattern,
     LineupGroup,
+    board_patterns,
     committed_carry_boards,
     group_boards,
     one_slot_alternatives,
@@ -302,6 +304,16 @@ OBSERVED_ALTERNATIVE_DEFINITION = (
 OBSERVED_ALTERNATIVE_ORDERING = (
     "by the other lineup's boards observed (most first), ties by its canonical lineup; never by placement"
 )
+OBSERVED_PATTERN_DEFINITION = (
+    "A presentation of the exact lineups above, not a composition family: a flex shell is one exact set of units "
+    "(the carry and all its copies included) that several qualifying lineups at the same level share, each with "
+    "exactly one more non-carry unit -- its flex option. Every option is one exact lineup observed on its own "
+    "10+ boards, with its own numbers; the shell has none. Each qualifying lineup appears in exactly one pattern."
+)
+OBSERVED_PATTERN_ORDERING = (
+    "each level's most common unassigned lineup anchors the next pattern; options anchor first, then by boards "
+    "observed; never by placement"
+)
 LEVEL_NOT_PRESERVED = (
     "Final-board level context was not preserved in this snapshot. Items, teammates, cores and traits remain "
     "available."
@@ -314,7 +326,12 @@ LEVEL_NOT_OBSERVED = (
 def _lineup_units(group: LineupGroup, carry_id: str, names: Mapping[str, str],
                   costs: Mapping[str, int]) -> list[dict[str, Any]]:
     """Every fielded copy, the carry first, then by cost, name and id."""
-    refs = [{**_champion_ref(cid, names, costs), "is_carry": cid == carry_id} for cid in group.lineup]
+    return _lineup_refs(group.lineup, carry_id, names, costs)
+
+
+def _lineup_refs(lineup: tuple[str, ...], carry_id: str, names: Mapping[str, str],
+                 costs: Mapping[str, int]) -> list[dict[str, Any]]:
+    refs = [{**_champion_ref(cid, names, costs), "is_carry": cid == carry_id} for cid in lineup]
     return sorted(refs, key=lambda u: (not u["is_carry"], u["cost"] or 0, u["name"].casefold(), u["character_id"]))
 
 
@@ -336,12 +353,23 @@ def _alternative_row(alt: Alternative, names: Mapping[str, str], costs: Mapping[
     """One observed one-slot alternative: the swap plus the OTHER lineup's own
     numbers (nothing pooled, no difference computed)."""
     g = alt.target
+    numbers = _exact_numbers(g)
     return {
-        "lineup_key": "+".join(g.lineup),
+        "lineup_key": numbers.pop("lineup_key"),
         "out_unit": _champion_ref(alt.out_unit, names, costs),
         "in_unit": _champion_ref(alt.in_unit, names, costs),
         # Whether the other lineup also has its own row at this level (within `top_n`).
         "listed": g.lineup in listed,
+        # The other lineup's own numbers; `sample` is the flag and label only
+        # (the row's own `sample.meaning` explains them).
+        **numbers,
+    }
+
+
+def _exact_numbers(g: LineupGroup) -> dict[str, Any]:
+    """One exact lineup's own observed numbers, for rows that point at it."""
+    return {
+        "lineup_key": "+".join(g.lineup),
         "boards": g.boards,
         "carry_boards_at_level": g.level_boards,
         "share_of_level": g.share_of_level,
@@ -349,8 +377,39 @@ def _alternative_row(alt: Alternative, names: Mapping[str, str], costs: Mapping[
         "top4_rate": g.top4_rate,
         "win_rate": g.win_rate,
         "carry_three_star": {"boards": g.carry_three_star, "share": g.carry_three_star_rate},
-        # The flag and label only; the row's own `sample.meaning` explains them.
         "sample": {k: v for k, v in _sample(g.boards).items() if k != "meaning"},
+        "evidence": OBSERVED,
+    }
+
+
+def _pattern_row(pattern: BoardPattern, carry_id: str, names: Mapping[str, str], costs: Mapping[str, int],
+                 alternatives: Mapping[tuple[int, tuple[str, ...]], list[Alternative]],
+                 listed: set[tuple[str, ...]]) -> dict[str, Any]:
+    """One entry of the default Boards presentation. A flex shell carries its
+    shared units and, per option, that exact lineup's own numbers; it has no
+    numbers of its own (nothing pooled). A standalone board points at its exact
+    row in the level's `boards` by `lineup_key` and embeds that row (`board`)
+    only when `top_n` left it out of `boards`."""
+    if pattern.shell is None:
+        g = pattern.anchor
+        row = {"type": "exact_board", "level": pattern.level, "lineup_key": "+".join(g.lineup),
+               "listed": g.lineup in listed}
+        if not row["listed"]:
+            row["board"] = _board_row(g, carry_id, names, costs, [
+                _alternative_row(alt, names, costs, listed) for alt in alternatives.get((g.level, g.lineup), [])
+            ])
+        return row
+    return {
+        "type": "flex_shell",
+        "level": pattern.level,
+        "unit_count": len(pattern.shell) + 1,
+        "shared_units": _lineup_refs(pattern.shell, carry_id, names, costs),
+        "anchor_lineup_key": "+".join(pattern.anchor.lineup),
+        "option_count": len(pattern.options),
+        "options": [
+            {"unit": _champion_ref(flex, names, costs), "is_anchor": i == 0, **_exact_numbers(g)}
+            for i, (flex, g) in enumerate(pattern.options)
+        ],
         "evidence": OBSERVED,
     }
 
@@ -392,6 +451,8 @@ def _boards_base(carry_boards: int) -> dict[str, Any]:
         "ordering": OBSERVED_BOARD_ORDERING,
         "alternative_definition": OBSERVED_ALTERNATIVE_DEFINITION,
         "alternative_ordering": OBSERVED_ALTERNATIVE_ORDERING,
+        "pattern_definition": OBSERVED_PATTERN_DEFINITION,
+        "pattern_ordering": OBSERVED_PATTERN_ORDERING,
         "carry_boards": carry_boards,
         "boards_with_level": 0,
         "level_coverage": 0.0,
@@ -421,8 +482,11 @@ def board_evidence_payload(evidence: BoardEvidence, carry_id: str, names: Mappin
     ]
     # Alternatives come from EVERY promoted lineup, before `top_n` trims the
     # rows: a shown lineup's alternative may not have a row of its own.
-    alternatives = one_slot_alternatives((lg for g in evidence.levels for lg in g.lineups),
-                                         carry_id=carry_id, min_boards=evidence.min_boards)
+    promoted = [lg for g in evidence.levels for lg in g.lineups]
+    alternatives = one_slot_alternatives(promoted, carry_id=carry_id, min_boards=evidence.min_boards)
+    # The default presentation: every promoted lineup exactly once, as a flex
+    # shell option or a standalone board, from the same untrimmed lineups.
+    patterns = board_patterns(promoted, carry_id=carry_id, min_boards=evidence.min_boards)
     body["levels"] = []
     for g in evidence.levels:
         if not g.lineups:
@@ -438,6 +502,9 @@ def board_evidence_payload(evidence: BoardEvidence, carry_id: str, names: Mappin
                 ])
                 for lg in shown
             ],
+            # All promoted lineups (not trimmed by `top_n`), each in one pattern.
+            "patterns": [_pattern_row(p, carry_id, names, costs, alternatives, listed)
+                         for p in patterns.get(g.level, [])],
         })
     body["qualifying_lineups"] = evidence.promoted
     body["boards_in_qualifying_lineups"] = evidence.boards_in_promoted
