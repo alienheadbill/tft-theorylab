@@ -961,6 +961,22 @@ a.board-unit-inner:hover .board-unit-name { text-decoration: underline; text-dec
 .board-stamps { margin: 8px 0 0; }
 .board-stamps .stamp { font-size: 9.5px; margin-right: 6px; }
 .board-special { margin: 6px 0 0; font-size: 13px; font-style: italic; color: var(--graphite); }
+/* observed one-slot alternatives: the swap first, its own board count next, results last */
+.board-alts { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--rule); }
+.board-alts h5 { margin: 0 0 6px; font: 700 12px var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--graphite); }
+.board-alts h5 span { font-weight: 400; letter-spacing: 0; text-transform: none; }
+.board-alt-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.board-alt { min-width: 0; }
+.board-swap { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.board-swap-unit { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; min-width: 0; }
+.board-swap-unit .ref-icon { width: 30px; height: 30px; font-size: 12px; }
+.board-swap-name { color: var(--text); font-size: 14.5px; overflow-wrap: anywhere; text-decoration: none; }
+.board-swap-name:hover { text-decoration: underline; text-decoration-color: var(--graphite); text-underline-offset: 3px; }
+.board-swap-arrow { font: 700 15px var(--mono); color: var(--graphite); }
+.board-alt .board-count { margin: 2px 0 2px; font-size: 14px; }
+.board-alt-more { margin-top: 8px; }
+.board-alt-more summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font: 700 13px var(--mono); color: var(--ink-blue); }
+.board-alt-more .board-alt-list { margin-top: 6px; }
 .board-card.is-compact .board-unit .ref-icon { width: 30px; height: 30px; }
 .board-card.is-compact .board-unit-name { font-size: 13.5px; }
 

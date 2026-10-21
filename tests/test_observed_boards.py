@@ -18,9 +18,12 @@ from tftlab import public_snapshot as ps
 from tftlab.analytics import carry_commitment_stats
 from tftlab.analytics.boards import (
     MAX_PLAYER_LEVEL,
+    LineupGroup,
     ObservedBoard,
     committed_carry_boards,
     group_boards,
+    one_slot_alternatives,
+    one_slot_swap,
     shop_champion_id,
     valid_level,
 )
@@ -365,6 +368,221 @@ def test_api_route_returns_observed_boards(tmp_path: Path, monkeypatch: pytest.M
     assert [g["level"] for g in body["observed_boards"]["levels"]] == [7, 8, 9]
 
 
+# ---------------------------------------------------------------- observed one-slot alternatives
+
+# More shop champions for alternative shapes (any verified shop champion will do).
+X1, X2, X3 = [cid for cid in sorted(ROSTER.champions)
+              if ROSTER.is_shop_champion(cid) and cid not in {KOGMAW, DRAVEN, KARMA, GROMP, NIDALEE, VI}][:3]
+
+
+def _obs(mates: list[str], n: int, *, level: int = 8, placement: int = 4, tag: str = "",
+         carries: int = 1, special: tuple[str, ...] = ()) -> list[ObservedBoard]:
+    lineup = tuple(sorted([KOGMAW] * carries + list(mates)))
+    return [ObservedBoard(f"{tag or '+'.join(lineup)}#{level}#{i}", 0, placement, level, 2, lineup, special)
+            for i in range(n)]
+
+
+def _alts(boards: list[ObservedBoard], *, min_boards: int = MIN_BOARDS) -> dict:
+    """`(level, lineup) -> [(out, in, target lineup, target boards)]` over every promoted lineup."""
+    evidence = group_boards(boards, min_boards=min_boards)
+    found = one_slot_alternatives((lg for g in evidence.levels for lg in g.lineups),
+                                  carry_id=KOGMAW, min_boards=min_boards)
+    return {key: [(a.out_unit, a.in_unit, a.target.lineup, a.target.boards) for a in alts]
+            for key, alts in found.items()}
+
+
+def _key(*mates: str, level: int = 8, carries: int = 1) -> tuple[int, tuple[str, ...]]:
+    return level, tuple(sorted([KOGMAW] * carries + list(mates)))
+
+
+def test_a_one_slot_difference_between_qualifying_lineups_is_an_alternative() -> None:
+    alts = _alts(_obs([DRAVEN, KARMA, VI], 12) + _obs([DRAVEN, KARMA, GROMP], 10))
+    assert alts[_key(DRAVEN, KARMA, VI)] == [(VI, GROMP, _key(DRAVEN, KARMA, GROMP)[1], 10)]
+
+
+def test_alternatives_are_symmetric_with_the_swap_reversed() -> None:
+    alts = _alts(_obs([DRAVEN, KARMA, VI], 12) + _obs([DRAVEN, KARMA, GROMP], 10))
+    (out_a, in_a, target_a, _), = alts[_key(DRAVEN, KARMA, VI)]
+    (out_b, in_b, target_b, _), = alts[_key(DRAVEN, KARMA, GROMP)]
+    assert (out_a, in_a) == (in_b, out_b) == (VI, GROMP)
+    assert target_a == _key(DRAVEN, KARMA, GROMP)[1] and target_b == _key(DRAVEN, KARMA, VI)[1]
+
+
+def test_a_lineup_is_never_its_own_alternative() -> None:
+    lineup = _key(DRAVEN, KARMA, VI)[1]
+    assert one_slot_swap(lineup, lineup, KOGMAW) is None
+    assert _alts(_obs([DRAVEN, KARMA, VI], 25)) == {}
+
+
+def test_two_changed_slots_are_not_an_alternative() -> None:
+    assert _alts(_obs([DRAVEN, KARMA, VI], 12) + _obs([DRAVEN, GROMP, NIDALEE], 12)) == {}
+
+
+def test_alternatives_never_cross_player_levels() -> None:
+    assert _alts(_obs([DRAVEN, KARMA, VI], 12, level=8) + _obs([DRAVEN, KARMA, GROMP], 12, level=9)) == {}
+
+
+def test_alternatives_need_the_same_lineup_size() -> None:
+    # One unit added (not swapped): a different size, never an alternative.
+    assert _alts(_obs([DRAVEN, KARMA, VI], 12) + _obs([DRAVEN, KARMA, VI, GROMP], 12)) == {}
+    assert one_slot_swap(_key(DRAVEN, KARMA)[1], _key(DRAVEN, KARMA, VI)[1], KOGMAW) is None
+
+
+def test_both_lineups_must_reach_the_minimum_on_their_own() -> None:
+    assert _alts(_obs([DRAVEN, KARMA, VI], 10) + _obs([DRAVEN, KARMA, GROMP], 9)) == {}
+    # The guard is in `one_slot_alternatives` itself, not only in the promotion step.
+    a = LineupGroup(8, _key(DRAVEN, KARMA, VI)[1], 10, 19, 40, 5, 1, 0)
+    b = LineupGroup(8, _key(DRAVEN, KARMA, GROMP)[1], 9, 19, 36, 4, 1, 0)
+    assert one_slot_alternatives([a, b], carry_id=KOGMAW, min_boards=10) == {}
+    assert len(one_slot_alternatives([a, b], carry_id=KOGMAW, min_boards=9)) == 2
+
+
+def test_duplicate_champions_are_compared_as_copies() -> None:
+    # One of two Dravens out, a Vi in: exactly one copy each way.
+    alts = _alts(_obs([DRAVEN, DRAVEN, KARMA], 10) + _obs([DRAVEN, VI, KARMA], 10))
+    assert [(o, i) for o, i, *_ in alts[_key(DRAVEN, DRAVEN, KARMA)]] == [(DRAVEN, VI)]
+    # A plain set comparison would miss this: {Draven, Karma} vs {Draven, Vi, Karma}.
+    assert one_slot_swap(_key(DRAVEN, DRAVEN, KARMA)[1], _key(DRAVEN, VI, VI)[1], KOGMAW) is None
+
+
+def test_the_carry_and_its_copies_never_flex() -> None:
+    # Kog'Maw + Kog'Maw + Draven + Karma vs Kog'Maw + Draven + Vi + Karma: a carry copy out, not a flex slot.
+    two_carries = _obs([DRAVEN, KARMA], 10, carries=2)
+    assert _alts(two_carries + _obs([DRAVEN, VI, KARMA], 10)) == {}
+    assert one_slot_swap(_key(DRAVEN, KARMA, carries=2)[1], _key(DRAVEN, VI, KARMA)[1], KOGMAW) is None
+    # The carry must be on both lineups.
+    assert one_slot_swap(tuple(sorted([DRAVEN, KARMA, VI])), tuple(sorted([DRAVEN, KARMA, GROMP])), KOGMAW) is None
+    # Two carry copies on both sides with a teammate swapped is an ordinary alternative.
+    alts = _alts(two_carries + _obs([GROMP, KARMA], 10, carries=2))
+    assert [(o, i) for o, i, *_ in alts[_key(DRAVEN, KARMA, carries=2)]] == [(DRAVEN, GROMP)]
+
+
+def test_alternatives_are_pairwise_and_never_transitive() -> None:
+    # A ~ B (Vi -> Gromp), B ~ C (Karma -> Nidalee); A and C differ in two slots.
+    a, b, c = [DRAVEN, KARMA, VI], [DRAVEN, KARMA, GROMP], [DRAVEN, NIDALEE, GROMP]
+    alts = _alts(_obs(a, 15) + _obs(b, 12) + _obs(c, 10))
+    assert [t for *_, t, _n in alts[_key(*a)]] == [_key(*b)[1]]
+    assert [t for *_, t, _n in alts[_key(*c)]] == [_key(*b)[1]]
+    assert [t for *_, t, _n in alts[_key(*b)]] == [_key(*a)[1], _key(*c)[1]]
+
+
+def test_alternatives_order_by_recurrence_then_canonical_lineup() -> None:
+    base = [DRAVEN, KARMA, VI]
+    boards = _obs(base, 20) + _obs([DRAVEN, KARMA, X1], 11) + _obs([DRAVEN, KARMA, X2], 14)
+    boards += _obs([DRAVEN, KARMA, X3], 11)
+    order = [t for *_, t, _n in _alts(boards)[_key(*base)]]
+    tied = sorted([_key(DRAVEN, KARMA, X1)[1], _key(DRAVEN, KARMA, X3)[1]])
+    assert order == [_key(DRAVEN, KARMA, X2)[1], *tied]
+    # Same answer whatever order the boards arrive in.
+    assert [t for *_, t, _n in _alts(list(reversed(boards)))[_key(*base)]] == order
+
+
+def test_alternative_order_ignores_results() -> None:
+    base = [DRAVEN, KARMA, VI]
+    # The rarer alternative wins every game; the commoner one finishes 8th every game.
+    boards = _obs(base, 20) + _obs([DRAVEN, KARMA, GROMP], 10, placement=1) + _obs([DRAVEN, KARMA, X1], 16, placement=8)
+    alts = _alts(boards)[_key(*base)]
+    assert [(t, n) for *_, t, n in alts] == [(_key(DRAVEN, KARMA, X1)[1], 16), (_key(DRAVEN, KARMA, GROMP)[1], 10)]
+
+
+def test_special_units_never_create_an_alternative() -> None:
+    # Same shop lineup, different summons: one lineup, nothing to compare.
+    boards = _obs([DRAVEN, KARMA, VI], 12, tag="plain") + _obs([DRAVEN, KARMA, VI], 12, tag="s", special=(SUMMON,))
+    evidence = group_boards(boards, min_boards=MIN_BOARDS)
+    assert [lg.boards for g in evidence.levels for lg in g.lineups] == [24]
+    assert _alts(boards) == {}
+
+
+def _payload(boards: list[ObservedBoard], *, top_n: int) -> dict:
+    evidence = group_boards(boards, min_boards=MIN_BOARDS)
+    return ci.board_evidence_payload(evidence, KOGMAW, {}, {}, top_n=top_n)
+
+
+def test_alternatives_come_from_every_qualifying_lineup_not_just_the_shown_rows() -> None:
+    base = [DRAVEN, KARMA, VI]
+    # Six lineups unrelated to `base` outrank its one-slot neighbour, which falls outside top_n.
+    filler = [[X1, X2, X3], [X1, X2, GROMP], [X1, X3, NIDALEE], [X2, X3, DRAVEN], [X1, NIDALEE, GROMP],
+              [X2, NIDALEE, KARMA]]
+    boards = _obs(base, 40)
+    for i, mates in enumerate(filler):
+        boards += _obs(mates, 30 - i)
+    boards += _obs([DRAVEN, KARMA, NIDALEE], 10)
+    body = _payload(boards, top_n=6)
+    level, = body["levels"]
+    assert level["qualifying_lineups"] == 8 and len(level["boards"]) == 6
+    shown = {r["lineup_key"] for r in level["boards"]}
+    neighbour = "+".join(_key(DRAVEN, KARMA, NIDALEE)[1])
+    assert neighbour not in shown
+    top = level["boards"][0]
+    assert top["lineup_key"] == "+".join(_key(*base)[1])
+    nidalee_swaps = [a for a in top["alternatives"] if a["lineup_key"] == neighbour]
+    assert len(nidalee_swaps) == 1
+    alt, = nidalee_swaps
+    assert alt["out_unit"]["character_id"] == VI and alt["in_unit"]["character_id"] == NIDALEE
+    assert alt["listed"] is False and alt["boards"] == 10
+
+
+def test_alternative_rows_carry_the_other_lineups_own_numbers_and_change_nothing() -> None:
+    a, b = [DRAVEN, KARMA, VI], [DRAVEN, KARMA, GROMP]
+    boards = _obs(a, 6, placement=1) + _obs(a, 6, placement=8) + _obs(b, 10, placement=2)
+    boards += _obs([GROMP, NIDALEE, X1], 15, placement=5)  # unrelated, shares the level denominator
+    with_alts = _payload(boards, top_n=6)
+    rows = {r["lineup_key"]: r for r in with_alts["levels"][0]["boards"]}
+    row_a, row_b = rows["+".join(_key(*a)[1])], rows["+".join(_key(*b)[1])]
+    # Each lineup's own row is exactly the grouped statistics (unchanged by the new layer).
+    group_a = next(lg for g in group_boards(boards, min_boards=MIN_BOARDS).levels for lg in g.lineups
+                   if lg.lineup == _key(*a)[1])
+    assert (row_a["boards"], row_a["carry_boards_at_level"], row_a["share_of_level"], row_a["avg_placement"],
+            row_a["top4_rate"], row_a["win_rate"]) == (12, 37, group_a.share_of_level, 4.5, 0.5, 0.5)
+    # A's alternative reports B's own numbers -- the same as B's own row -- and nothing pooled or differenced.
+    alt, = row_a["alternatives"]
+    for k in ("boards", "carry_boards_at_level", "share_of_level", "avg_placement", "top4_rate", "win_rate",
+              "carry_three_star"):
+        assert alt[k] == row_b[k], k
+    assert alt["listed"] is True and alt["evidence"] == "observed"
+    assert set(alt) == {"lineup_key", "out_unit", "in_unit", "listed", "boards", "carry_boards_at_level",
+                        "share_of_level", "avg_placement", "top4_rate", "win_rate", "carry_three_star", "sample",
+                        "evidence"}
+    assert rows["+".join(_key(GROMP, NIDALEE, X1)[1])]["alternatives"] == []
+    # Dropping the alternatives leaves the rows exactly as before.
+    stripped = [{k: v for k, v in r.items() if k != "alternatives"} for r in with_alts["levels"][0]["boards"]]
+    plain = [{k: v for k, v in ci._board_row(lg, KOGMAW, {}, {}).items() if k != "alternatives"}
+             for g in group_boards(boards, min_boards=MIN_BOARDS).levels for lg in g.lineups]
+    assert stripped == plain
+
+
+def test_alternatives_in_the_database_backed_section(db: Database) -> None:
+    # The seeded level 8 has no one-slot pairs: A vs A_DOUBLE differ in size, A vs B in two slots.
+    assert all(r["alternatives"] == [] for g in _section(db)["levels"] for r in g["boards"])
+    for i in range(10):
+        db.ingest_match(_board(f"AG8_{i}", [DRAVEN, KARMA, GROMP], 2, 8))
+    db.commit()
+    section = _section(db, top_n=1)
+    top, = _rows(section, 8)
+    assert top["lineup_key"] == "+".join(_lineup(*A)) and top["boards"] == 14
+    alt, = top["alternatives"]
+    assert (alt["out_unit"]["name"], alt["in_unit"]["name"], alt["boards"], alt["listed"]) == ("Vi", "Gromp", 10, False)
+    assert alt["out_unit"]["slug"] == "vi" and alt["carry_boards_at_level"] == 54
+    # The concise How to play preview never carries them.
+    assert section["preview"] and all("alternatives" not in r for r in section["preview"])
+    assert "differs by exactly one non-carry champion" in section["alternative_definition"]
+    assert "never by placement" in section["alternative_ordering"]
+
+
+def test_the_board_section_still_issues_one_board_query(db: Database, monkeypatch: pytest.MonkeyPatch) -> None:
+    for i in range(10):
+        db.ingest_match(_board(f"AG8_{i}", [DRAVEN, KARMA, GROMP], 2, 8))
+    db.commit()
+    calls = []
+    for name in ("query_all", "query_one"):  # both run through `execute`
+        real = getattr(db, name)
+        monkeypatch.setattr(db, name, lambda *a, _real=real, _n=name, **k: (calls.append(_n), _real(*a, **k))[1])
+    section = ci.observed_board_section(db, KOG, WINDOW, carry_boards=96, top_n=6)
+    assert any(r["alternatives"] for g in section["levels"] for r in g["boards"])
+    # The level-provenance check plus the one board query, as before alternatives; they add none.
+    assert calls == ["query_one", "query_all"], calls
+
+
 # ---------------------------------------------------------------- public snapshots
 
 
@@ -495,3 +713,19 @@ def test_page_labels_boards_as_observed_and_never_as_strength() -> None:
     assert "ordered by how often they appeared, not by placement" in section
     assert "stamp('observed', 'Observed')" in section and "Level ${g.level}" in section
     assert "ob.reason" in section  # the unavailable state shows the API's own explanation
+
+
+def test_alternatives_are_described_as_observed_never_as_advice() -> None:
+    js = _js()
+    section = js[js.index("// ------------------------------------------------------------------ observed final boards"):
+                 js.index("// ------------------------------------------------------------------ tabs")]
+    texts = [section.lower(), ci.OBSERVED_ALTERNATIVE_DEFINITION.lower(), ci.OBSERVED_ALTERNATIVE_ORDERING.lower()]
+    for text in texts:
+        for word in ("better", "upgrade", "improv", "optimal", "recommend", "winning", "best swap", "flex score",
+                     "gain", "swap win", "variant famil"):
+            assert word not in text, word
+    assert "Observed alternatives" in section
+    assert "not the effect of making the swap" in section
+    assert "not the effect of making the swap" in ci.OBSERVED_ALTERNATIVE_DEFINITION
+    # The compact How to play preview never renders them.
+    assert "${compact ? '' : boardAlternatives(row, carryName)}" in section
