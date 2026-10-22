@@ -103,11 +103,16 @@ ANALYTICS_SOURCES: tuple[Path, ...] = (
 
 
 def analytics_version(sources: Sequence[Path] = ANALYTICS_SOURCES) -> str:
+    """Digest of the sources' content. Line endings are normalized first: a
+    Windows checkout (git `core.autocrlf`) holds the same files with CRLF,
+    and a snapshot prepared there must carry the same version as the Linux
+    deployment that serves it (unnormalized, the published 18.4 snapshot's
+    run read as stale in production)."""
     digest = hashlib.sha256()
     for path in sources:
         digest.update(path.name.encode())
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
         digest.update(b"\0")
     return f"v{PREPARED_FORMAT}-{digest.hexdigest()[:16]}"
 
