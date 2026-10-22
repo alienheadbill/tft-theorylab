@@ -293,6 +293,7 @@ test("each level has a closed disclosure of its exact qualifying lineups", async
   const body = fixture("khazix");
   const { boards } = await boardsOf(body);
   for (const g of levels(body)) {
+    assert.equal(g.boards.length, g.qualifying_lineups, "the demo levels are not capped by top_n");
     assert.ok(boards.includes(`<summary>Show exact qualifying lineups (${g.qualifying_lineups})</summary>`), `level ${g.level}`);
   }
   assert.equal(count(boards, /<details class="board-raw">/g), levels(body).length);
@@ -301,6 +302,36 @@ test("each level has a closed disclosure of its exact qualifying lineups", async
   const raw = boards.slice(boards.indexOf('<details class="board-raw">'));
   assert.match(raw, /board-card is-compact/);
   assert.doesNotMatch(raw.slice(0, raw.indexOf("</details>")), /board-neighbours/);
+});
+
+test("a top_n-capped level labels its disclosure with the rows it actually holds", async () => {
+  const body = fixture("khazix");
+  const g = levels(body).find(l => l.qualifying_lineups >= 3);
+  assert.ok(g, "the demo data has a level with 3+ qualifying lineups");
+  // As the API sends it when top_n < qualifying lineups: fewer rows, standalone boards cut from
+  // the rows carry their own row.
+  const kept = g.boards.slice(0, 2);
+  const cut = new Map(g.boards.slice(2).map(b => [b.lineup_key, b]));
+  g.boards = kept;
+  for (const p of g.patterns) {
+    if (p.type === "exact_board" && cut.has(p.lineup_key)) Object.assign(p, { listed: false, board: cut.get(p.lineup_key) });
+  }
+  const { boards } = await boardsOf(body);
+  const label = `<summary>Show 2 most common exact lineups (${g.qualifying_lineups} qualify)</summary>`;
+  const start = boards.indexOf(`id="board-level-${g.level}"`);
+  const next = boards.indexOf('<section class="board-level"', start);
+  const levelHtml = boards.slice(start, next < 0 ? undefined : next);
+  assert.ok(levelHtml.includes(label), label);
+  assert.doesNotMatch(levelHtml, /<summary>Show exact qualifying lineups/);
+  // The disclosure holds exactly the rows its label names; the note says where the rest are.
+  const raw = boards.slice(boards.indexOf(label));
+  const inside = raw.slice(0, raw.indexOf("</details>"));
+  assert.equal(count(inside, /<li class="board-card is-compact">/g), 2);
+  assert.match(inside, new RegExp(`every one of the ${g.qualifying_lineups} is an option or board above`));
+  // Uncapped levels keep the plain label.
+  for (const other of levels(body).filter(l => l !== g)) {
+    assert.ok(boards.includes(`<summary>Show exact qualifying lineups (${other.qualifying_lineups})</summary>`), `level ${other.level}`);
+  }
 });
 
 test("standalone exact boards render as exact lineups; no shell means no pattern note", async () => {

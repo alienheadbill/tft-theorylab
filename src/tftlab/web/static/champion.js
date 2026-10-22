@@ -683,12 +683,17 @@ function boardsUnavailable(ob) {
 
 // The exact qualifying lineups behind a level's patterns, closed by default.
 function rawLineups(g, carryName) {
-  const capped = g.boards.length < g.qualifying_lineups
+  // `boards` holds the top_n rows only; the label must not promise more than it opens.
+  const isCapped = g.boards.length < g.qualifying_lineups;
+  const label = isCapped
+    ? `Show ${fmtNum(g.boards.length)} most common exact lineups (${fmtNum(g.qualifying_lineups)} qualify)`
+    : `Show exact qualifying lineups (${fmtNum(g.qualifying_lineups)})`;
+  const capped = isCapped
     ? `<p class="htp-sub">The ${fmtNum(g.boards.length)} most common are listed in full; every one of the ${fmtNum(g.qualifying_lineups)} is an option or board above.</p>`
     : '';
   return `
         <details class="board-raw">
-          <summary>Show exact qualifying lineups (${fmtNum(g.qualifying_lineups)})</summary>
+          <summary>${label}</summary>
           ${capped}
           <ol class="board-list">${g.boards.map(r => boardCard(r, carryName, { compact: true })).join('')}</ol>
         </details>`;
