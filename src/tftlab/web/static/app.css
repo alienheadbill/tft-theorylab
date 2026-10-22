@@ -849,7 +849,8 @@ input[type="search"]::placeholder { color: var(--graphite); opacity: 0.8; }
 /* index tabs clipped to the top of the page; scrolls sideways on phones */
 .inv-tabs {
   display: flex; gap: 4px; margin: 18px 0 0; padding: 0 2px;
-  overflow-x: auto; scrollbar-width: thin; border-bottom: 2px solid var(--rule);
+  overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; scroll-padding-inline: 24px;
+  scrollbar-width: thin; border-bottom: 2px solid var(--rule);
 }
 .inv-tabs [role="tab"] {
   flex: none; min-height: 44px; padding: 10px 14px 8px;
@@ -961,22 +962,34 @@ a.board-unit-inner:hover .board-unit-name { text-decoration: underline; text-dec
 .board-stamps { margin: 8px 0 0; }
 .board-stamps .stamp { font-size: 9.5px; margin-right: 6px; }
 .board-special { margin: 6px 0 0; font-size: 13px; font-style: italic; color: var(--graphite); }
-/* observed one-slot alternatives: the swap first, its own board count next, results last */
-.board-alts { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--rule); }
-.board-alts h5 { margin: 0 0 6px; font: 700 12px var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--graphite); }
-.board-alts h5 span { font-weight: 400; letter-spacing: 0; text-transform: none; }
-.board-alt-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-.board-alt { min-width: 0; }
-.board-swap { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-.board-swap-unit { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; min-width: 0; }
-.board-swap-unit .ref-icon { width: 30px; height: 30px; font-size: 12px; }
-.board-swap-name { color: var(--text); font-size: 14.5px; overflow-wrap: anywhere; text-decoration: none; }
-.board-swap-name:hover { text-decoration: underline; text-decoration-color: var(--graphite); text-underline-offset: 3px; }
-.board-swap-arrow { font: 700 15px var(--mono); color: var(--graphite); }
-.board-alt .board-count { margin: 2px 0 2px; font-size: 14px; }
-.board-alt-more { margin-top: 8px; }
-.board-alt-more summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font: 700 13px var(--mono); color: var(--ink-blue); }
-.board-alt-more .board-alt-list { margin-top: 6px; }
+/* observed board patterns: one shared shell, then its flex options (count first, results on request) */
+.pattern-label { margin: 10px 0 6px; font: 700 12px var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--graphite); }
+.board-level-tag + .pattern-label { margin-top: 0; }
+.pattern-label span { display: block; margin-top: 2px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+.pattern-flex { margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--rule); }
+.flex-options { list-style: none; margin: 0; padding: 0; display: grid; gap: 0 18px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); }
+.flex-option { min-width: 0; border-bottom: 1px solid var(--rule-soft); }
+.flex-results > summary {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-height: 44px; padding: 4px 0;
+  cursor: pointer; list-style: none;
+}
+.flex-results > summary::-webkit-details-marker { display: none; }
+.flex-results > summary .ref-icon { width: 30px; height: 30px; font-size: 12px; flex: none; }
+.flex-name { font-size: 15px; overflow-wrap: anywhere; }
+.flex-count { font: 12.5px var(--mono); color: var(--graphite); }
+.flex-count b { color: var(--text); }
+.flex-more { margin-left: auto; font: 700 11.5px var(--mono); color: var(--ink-blue); }
+.flex-more::after { content: " ▸"; }
+.flex-results[open] .flex-more::after { content: " ▾"; }
+.flex-results[open] { padding: 0 0 10px 38px; }
+.flex-results[open] > summary { margin-left: -38px; }
+.board-raw > summary {
+  display: inline-flex; align-items: center; min-height: 44px; cursor: pointer;
+  font: 700 13px var(--mono); color: var(--ink-blue);
+}
+.board-raw { margin-top: 10px; }
+.board-raw .board-list { margin-top: 6px; }
+.board-neighbours { margin: 6px 0 0; font-size: 13px; color: var(--graphite); overflow-wrap: anywhere; }
 .board-card.is-compact .board-unit .ref-icon { width: 30px; height: 30px; }
 .board-card.is-compact .board-unit-name { font-size: 13.5px; }
 
@@ -988,7 +1001,9 @@ a.board-unit-inner:hover .board-unit-name { text-decoration: underline; text-dec
   .core-row > .core-stack { grid-row: auto; }
   .htp-grid { grid-template-columns: 1fr; }
   .htp-tiles { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
-  .inv-tabs [role="tab"] { padding: 10px 11px 8px; letter-spacing: 0.08em; }
+  .inv-tabs [role="tab"] { padding: 10px 9px 8px; font-size: 11.5px; letter-spacing: 0.04em; scroll-snap-align: start; }
+  /* still too wide? it scrolls sideways; the faded edge says so */
+  .inv-tabs { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); padding-right: 24px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -596,8 +596,12 @@ function howToPlaySection(inv) {
 
 // Exact final lineups seen on the carry's boards, grouped by the player's
 // final level and ordered by how often they appeared (never by results).
-// Everything comes from `observed_boards`; nothing is computed here.
-const BOARD_NOTE = 'Avg place, Top 4 and Win describe these boards only. They are not a reason the lineup won or lost, and boards at different levels are not compared.';
+// The default view is `levels[].patterns`: each qualifying lineup once, as a
+// flex-shell option or a standalone board. Everything comes from
+// `observed_boards`; nothing is computed or pooled here.
+const BOARD_NOTE = 'Avg place, Top 4 and Win describe one exact lineup each, not why it won or lost; levels are never compared.';
+const PATTERN_NOTE = 'A board pattern groups exact lineups that share every unit except one non-carry flex slot. Each option was observed on its own 10+ boards; its results belong to that full lineup, not to the swap.';
+const NEIGHBOURS_SHOWN = 3;
 
 function boardUnit(u) {
   const label = `${esc(u.name)}${u.is_carry ? ' <span class="board-carry-tag">carry</span>' : ''}`;
@@ -607,51 +611,55 @@ function boardUnit(u) {
   }</li>`;
 }
 
-// Observed one-slot alternatives: other exact lineups at the same level that
-// differ by one non-carry unit. Each row shows THAT lineup's own numbers; no
-// difference is computed and nothing is pooled. A few are shown up front and
-// the rest sit behind a disclosure, with the total always stated.
-const ALT_SHOWN = 3;
-const ALT_NOTE = 'Observed alternatives are other final lineups at the same level, with the same number of units, that differed by exactly one unit other than the carry. Both lineups reached the minimum on their own. An alternative\'s numbers describe that full observed lineup, not the effect of making the swap, and alternatives are listed pair by pair, not grouped into families.';
+const unitList = units => units.map(u => `${u.name}${u.is_carry ? ' (carry)' : ''}`).join(', ');
 
-function swapUnit(u) {
-  return `<span class="board-swap-unit">${refIcon(u.name, u.art_url, { cost: u.cost, kind: 'partner' })}<a class="board-swap-name" href="${esc(championHref(u.slug))}">${esc(u.name)}</a></span>`;
+// One exact lineup's own descriptive results.
+function boardStats(x, carryName) {
+  const star = x.carry_three_star;
+  return `
+      <dl class="board-stats">
+        <div><dt>Avg place</dt><dd>${fmtPlace(x.avg_placement)}</dd></div>
+        <div><dt>Top 4</dt><dd>${fmtPctShort(x.top4_rate)}</dd></div>
+        <div><dt>Win</dt><dd>${fmtPctShort(x.win_rate)}</dd></div>
+        <div><dt>${esc(carryName)} 3★</dt><dd>${fmtNum(star.boards)} (${fmtPctShort(star.share)})</dd></div>
+      </dl>`;
 }
 
-function boardAlternative(alt, carryName, level) {
-  const star = alt.carry_three_star;
+// A flex option is one row -- the unit, its exact lineup's board count and
+// share -- that opens to that lineup's own results (closed by default).
+function flexOption(o, carryName, level) {
+  const u = o.unit;
   return `
-    <li class="board-alt">
-      <p class="board-swap"><span class="visually-hidden">Out: </span>${swapUnit(alt.out_unit)}<span class="board-swap-arrow" aria-hidden="true">→</span><span class="visually-hidden">, in: </span>${swapUnit(alt.in_unit)}</p>
-      <p class="board-count"><b>${plural(alt.boards, 'board')}</b> <span>${fmtPct(alt.share_of_level)} of ${esc(carryName)} carry boards at level ${level}${alt.listed ? ' · also listed at this level' : ''}</span></p>
-      <dl class="board-stats">
-        <div><dt>Avg place</dt><dd>${fmtPlace(alt.avg_placement)}</dd></div>
-        <div><dt>Top 4</dt><dd>${fmtPctShort(alt.top4_rate)}</dd></div>
-        <div><dt>Win</dt><dd>${fmtPctShort(alt.win_rate)}</dd></div>
-        <div><dt>${esc(carryName)} 3★</dt><dd>${fmtNum(star.boards)} (${fmtPctShort(star.share)})</dd></div>
-      </dl>
+        <li class="flex-option">
+          <details class="flex-results">
+            <summary>${refIcon(u.name, u.art_url, { cost: u.cost, kind: 'partner' })}<span class="flex-name">${esc(u.name)}</span><span class="flex-count"><b>${plural(o.boards, 'board')}</b> · ${fmtPct(o.share_of_level)}<span class="visually-hidden"> of ${esc(carryName)} carry boards at level ${level}; results of the exact lineup with ${esc(u.name)}</span></span><span class="flex-more" aria-hidden="true">results</span></summary>
+            ${boardStats(o, carryName)}
+            <p class="board-stamps">${stamp('observed', 'Observed')}${o.sample.low_sample ? stamp('low', o.sample.label) : ''}</p>
+          </details>
+        </li>`;
+}
+
+function shellCard(p, carryName) {
+  return `
+    <li class="board-card board-pattern">
+      <p class="board-level-tag">Level ${p.level} · ${plural(p.unit_count, 'unit')} · Observed board pattern</p>
+      <p class="pattern-label">Shared shell</p>
+      <ul class="board-units" aria-label="${esc(`Shared shell: ${unitList(p.shared_units)}`)}">${p.shared_units.map(boardUnit).join('')}</ul>
+      <p class="pattern-label pattern-flex">Flex slot · ${plural(p.option_count, 'observed option')}<span>boards and share of level-${p.level} ${esc(carryName)} carry boards</span></p>
+      <ol class="flex-options">${p.options.map(o => flexOption(o, carryName, p.level)).join('')}</ol>
     </li>`;
 }
 
-function boardAlternatives(row, carryName) {
+// A standalone board's one-unit differences, as one compact line.
+function boardNeighbours(row) {
   const alts = row.alternatives || [];
   if (!alts.length) return '';
-  const id = `alts-${row.level}-${row.lineup_key.replace(/[^A-Za-z0-9_-]/g, '_')}`;
-  const item = alt => boardAlternative(alt, carryName, row.level);
-  const more = alts.length > ALT_SHOWN
-    ? `<details class="board-alt-more"><summary>Show the other ${plural(alts.length - ALT_SHOWN, 'observed alternative')}</summary><ul class="board-alt-list">${alts.slice(ALT_SHOWN).map(item).join('')}</ul></details>`
-    : '';
-  const count = alts.length > ALT_SHOWN ? ` <span>${ALT_SHOWN} of ${alts.length} shown, most boards first</span>` : '';
-  return `
-      <section class="board-alts" aria-labelledby="${esc(id)}">
-        <h5 id="${esc(id)}">Observed alternatives${count}</h5>
-        <ul class="board-alt-list">${alts.slice(0, ALT_SHOWN).map(item).join('')}</ul>${more}
-      </section>`;
+  const shown = alts.slice(0, NEIGHBOURS_SHOWN).map(a => `${esc(a.out_unit.name)} → ${esc(a.in_unit.name)} (${plural(a.boards, 'board')})`);
+  const more = alts.length > NEIGHBOURS_SHOWN ? `; ${fmtNum(alts.length - NEIGHBOURS_SHOWN)} more` : '';
+  return `<p class="board-neighbours">Also observed with one unit different: ${shown.join('; ')}${more}.</p>`;
 }
 
 function boardCard(row, carryName, { compact = false } = {}) {
-  const lineupLabel = row.units.map(u => `${u.name}${u.is_carry ? ' (carry)' : ''}`).join(', ');
-  const star = row.carry_three_star;
   const specials = row.special_units.length
     ? `<p class="board-special">Also listed on the board (not shop champions, not part of the lineup): ${row.special_units
         .map(s => `${esc(s.name)} on ${fmtNum(s.boards)} of ${plural(row.boards, 'board')}`)
@@ -659,18 +667,13 @@ function boardCard(row, carryName, { compact = false } = {}) {
     : '';
   return `
     <li class="board-card${compact ? ' is-compact' : ''}">
-      <p class="board-level-tag">Level ${row.level} · ${plural(row.unit_count, 'unit')}</p>
-      <ul class="board-units" aria-label="${esc(`Lineup: ${lineupLabel}`)}">${row.units.map(boardUnit).join('')}</ul>
+      <p class="board-level-tag">Level ${row.level} · ${plural(row.unit_count, 'unit')}${compact ? '' : ' · Exact lineup'}</p>
+      <ul class="board-units" aria-label="${esc(`Lineup: ${unitList(row.units)}`)}">${row.units.map(boardUnit).join('')}</ul>
       <p class="board-count"><b>${plural(row.boards, 'board')}</b> <span>${fmtPct(row.share_of_level)} of ${esc(carryName)} carry boards at level ${row.level}</span></p>
-      <dl class="board-stats">
-        <div><dt>Avg place</dt><dd>${fmtPlace(row.avg_placement)}</dd></div>
-        <div><dt>Top 4</dt><dd>${fmtPctShort(row.top4_rate)}</dd></div>
-        <div><dt>Win</dt><dd>${fmtPctShort(row.win_rate)}</dd></div>
-        <div><dt>${esc(carryName)} 3★</dt><dd>${fmtNum(star.boards)} (${fmtPctShort(star.share)})</dd></div>
-      </dl>
+      ${boardStats(row, carryName)}
       <p class="board-stamps">${stamp('observed', 'Observed')}${row.sample.low_sample ? stamp('low', row.sample.label) : ''}</p>
       ${compact ? '' : specials}
-      ${compact ? '' : boardAlternatives(row, carryName)}
+      ${compact ? '' : boardNeighbours(row)}
     </li>`;
 }
 
@@ -678,22 +681,48 @@ function boardsUnavailable(ob) {
   return `<div class="state-note empty-evidence board-unavailable"><p>${esc(ob.reason || 'Observed final boards are not available for this data source.')}</p></div>`;
 }
 
+// The exact qualifying lineups behind a level's patterns, closed by default.
+function rawLineups(g, carryName) {
+  // `boards` holds the top_n rows only; the label must not promise more than it opens.
+  const isCapped = g.boards.length < g.qualifying_lineups;
+  const label = isCapped
+    ? `Show ${fmtNum(g.boards.length)} most common exact lineups (${fmtNum(g.qualifying_lineups)} qualify)`
+    : `Show exact qualifying lineups (${fmtNum(g.qualifying_lineups)})`;
+  const capped = isCapped
+    ? `<p class="htp-sub">The ${fmtNum(g.boards.length)} most common are listed in full; every one of the ${fmtNum(g.qualifying_lineups)} is an option or board above.</p>`
+    : '';
+  return `
+        <details class="board-raw">
+          <summary>${label}</summary>
+          ${capped}
+          <ol class="board-list">${g.boards.map(r => boardCard(r, carryName, { compact: true })).join('')}</ol>
+        </details>`;
+}
+
 function boardsSection(inv) {
   const ob = inv.observed_boards;
   const name = inv.champion.name;
-  const intro = `<p class="inv-help">These are exact final lineups directly observed when ${esc(name)} was itemized as a carry. Boards are separated by player level and ordered by how often they appeared, not by placement. Star levels and items are not part of a lineup; two copies of one champion count as two units.</p>`;
+  const intro = `<p class="inv-help">Exact final lineups observed when ${esc(name)} was itemized as a carry, by player level, ordered by how often they appeared, not by placement. Items and star levels are not part of a lineup; two copies count as two units.</p>`;
   const head = `<h3 id="sec-boards">Observed final boards ${stamp('observed', 'Observed')}</h3>`;
   if (!ob || !ob.available) {
     return `<section class="inv-section boards" aria-labelledby="sec-boards">${head}${intro}${ob ? boardsUnavailable(ob) : ''}</section>`;
   }
-  const coverage = `<p class="board-coverage">${plural(ob.boards_with_level, 'carry board')} of ${fmtNum(ob.carry_boards)} (${fmtPct(ob.level_coverage)}) have an observed final level. A lineup is listed once it appears on ${plural(ob.min_boards, 'board')} or more at the same level.</p>`;
+  const coverage = `<p class="board-coverage">${plural(ob.boards_with_level, 'carry board')} of ${fmtNum(ob.carry_boards)} (${fmtPct(ob.level_coverage)}) have an observed final level. Lineups on ${plural(ob.min_boards, 'board')} or more at one level are shown.</p>`;
+  // A standalone pattern carries its row only when `top_n` left it out of `g.boards`.
+  const patternsOf = g => {
+    const rows = new Map(g.boards.map(b => [b.lineup_key, b]));
+    return (g.patterns || g.boards.map(b => ({ type: 'exact_board', lineup_key: b.lineup_key })))
+      .map(p => (p.type === 'exact_board' ? { ...p, board: p.board || rows.get(p.lineup_key) } : p))
+      .filter(p => p.type === 'flex_shell' || p.board);
+  };
   const groups = ob.levels
     .map(
       g => `
       <section class="board-level" aria-labelledby="board-level-${g.level}">
         <h4 id="board-level-${g.level}">Level ${g.level}</h4>
-        <p class="htp-sub">${plural(g.carry_boards_at_level, 'carry board')} at level ${g.level} · ${plural(g.distinct_lineups, 'distinct lineup')} · ${plural(g.qualifying_lineups, 'lineup')} on ${ob.min_boards}+ boards${g.boards.length < g.qualifying_lineups ? ` (most common ${g.boards.length} shown)` : ''}</p>
-        <ol class="board-list">${g.boards.map(r => boardCard(r, name)).join('')}</ol>
+        <p class="htp-sub">${plural(g.carry_boards_at_level, 'carry board')} · ${plural(g.distinct_lineups, 'distinct lineup')} · ${fmtNum(g.qualifying_lineups)} on ${ob.min_boards}+ boards</p>
+        <ol class="board-list">${patternsOf(g).map(p => (p.type === 'flex_shell' ? shellCard(p, name) : boardCard(p.board, name))).join('')}</ol>
+        ${rawLineups(g, name)}
       </section>`,
     )
     .join('');
@@ -705,12 +734,12 @@ function boardsSection(inv) {
   const empty = ob.levels.length
     ? ''
     : `<div class="state-note empty-evidence"><p>No exact final lineup appeared on ${plural(ob.min_boards, 'carry board')} or more at the same player level yet. Exact boards vary a lot; the recurring cores in the Teammates tab show partial patterns that do recur.</p></div>`;
-  const anyAlternatives = ob.levels.some(g => g.boards.some(r => (r.alternatives || []).length));
-  const altNote = anyAlternatives ? `<p class="board-coverage board-alt-note">${esc(ALT_NOTE)}</p>` : '';
+  const anyShell = ob.levels.some(g => patternsOf(g).some(p => p.type === 'flex_shell'));
+  const patternNote = anyShell ? `<p class="board-coverage board-pattern-note">${esc(PATTERN_NOTE)}</p>` : '';
   return `
     <section class="inv-section boards" aria-labelledby="sec-boards">
-      ${head}${intro}${coverage}${altNote}${empty}${groups}${quietNote}
-      <p class="htp-foot">${esc(BOARD_NOTE)} Exact lineups only: not composition families and not a plan to copy.</p>
+      ${head}${intro}${coverage}${patternNote}${empty}${groups}${quietNote}
+      <p class="htp-foot">${esc(BOARD_NOTE)} Exact observations only: not composition families and not a plan to copy.</p>
     </section>`;
 }
 

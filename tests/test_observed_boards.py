@@ -20,6 +20,7 @@ from tftlab.analytics.boards import (
     MAX_PLAYER_LEVEL,
     LineupGroup,
     ObservedBoard,
+    board_patterns,
     committed_carry_boards,
     group_boards,
     one_slot_alternatives,
@@ -715,17 +716,236 @@ def test_page_labels_boards_as_observed_and_never_as_strength() -> None:
     assert "ob.reason" in section  # the unavailable state shows the API's own explanation
 
 
-def test_alternatives_are_described_as_observed_never_as_advice() -> None:
+def test_boards_are_described_as_observed_never_as_advice() -> None:
     js = _js()
     section = js[js.index("// ------------------------------------------------------------------ observed final boards"):
                  js.index("// ------------------------------------------------------------------ tabs")]
-    texts = [section.lower(), ci.OBSERVED_ALTERNATIVE_DEFINITION.lower(), ci.OBSERVED_ALTERNATIVE_ORDERING.lower()]
+    texts = [section.lower(), ci.OBSERVED_ALTERNATIVE_DEFINITION.lower(), ci.OBSERVED_ALTERNATIVE_ORDERING.lower(),
+             ci.OBSERVED_PATTERN_DEFINITION.lower(), ci.OBSERVED_PATTERN_ORDERING.lower()]
     for text in texts:
-        for word in ("better", "upgrade", "improv", "optimal", "recommend", "winning", "best swap", "flex score",
-                     "gain", "swap win", "variant famil"):
+        for word in ("better", "upgrade", "improv", "optimal", "recommend", "winning", "best", "flex score",
+                     "gain", "swap win", "meta comp", "predicted", "theorycraft"):
             assert word not in text, word
-    assert "Observed alternatives" in section
-    assert "not the effect of making the swap" in section
-    assert "not the effect of making the swap" in ci.OBSERVED_ALTERNATIVE_DEFINITION
-    # The compact How to play preview never renders them.
-    assert "${compact ? '' : boardAlternatives(row, carryName)}" in section
+    for phrase in ("Observed board pattern", "Shared shell", "Flex slot", "Show exact qualifying lineups",
+                   "not to the swap"):
+        assert phrase in section, phrase
+    assert "not a composition family" in ci.OBSERVED_PATTERN_DEFINITION
+    # The compact How to play preview renders neither patterns nor one-unit differences.
+    assert "${compact ? '' : boardNeighbours(row)}" in section
+    assert "boardCard(r, inv.champion.name, { compact: true })" in js
+
+
+# ---------------------------------------------------------------- observed board patterns (flex shells)
+
+
+def _patterns(boards: list[ObservedBoard], *, min_boards: int = MIN_BOARDS) -> dict:
+    """`level -> [(shell or None, [(flex, lineup, boards), ...])]` over every promoted lineup."""
+    evidence = group_boards(boards, min_boards=min_boards)
+    found = board_patterns((lg for g in evidence.levels for lg in g.lineups), carry_id=KOGMAW, min_boards=min_boards)
+    return {level: [(p.shell, [(f, g.lineup, g.boards) for f, g in p.options]) for p in pats]
+            for level, pats in found.items()}
+
+
+def _shell(*mates: str, carries: int = 1) -> tuple[str, ...]:
+    return tuple(sorted([KOGMAW] * carries + list(mates)))
+
+
+def test_three_lineups_sharing_one_shell_are_one_pattern() -> None:
+    boards = _obs([DRAVEN, KARMA, VI], 15) + _obs([DRAVEN, KARMA, GROMP], 12) + _obs([DRAVEN, KARMA, NIDALEE], 10)
+    (shell, options), = _patterns(boards)[8]
+    assert shell == _shell(DRAVEN, KARMA)
+    assert [(f, n) for f, _l, n in options] == [(VI, 15), (GROMP, 12), (NIDALEE, 10)]  # anchor first, then recurrence
+
+
+def test_a_shell_needs_one_literal_shared_multiset_never_a_chain() -> None:
+    # A ~ B and B ~ C one slot apart, A and C two apart: never one pattern.
+    a, b, c = [DRAVEN, KARMA, VI], [DRAVEN, KARMA, GROMP], [DRAVEN, NIDALEE, GROMP]
+    pats = _patterns(_obs(a, 15) + _obs(b, 12) + _obs(c, 10))[8]
+    assert [(shell, [l for _f, l, _n in opts]) for shell, opts in pats] == [
+        (_shell(DRAVEN, KARMA), [_key(*a)[1], _key(*b)[1]]),
+        (None, [_key(*c)[1]]),  # B is already assigned: C is a standalone exact board
+    ]
+
+
+def test_patterns_never_cross_levels_or_sizes() -> None:
+    by_level = _patterns(_obs([DRAVEN, KARMA, VI], 12, level=8) + _obs([DRAVEN, KARMA, GROMP], 12, level=9))
+    assert all(shell is None for pats in by_level.values() for shell, _ in pats)
+    by_size = _patterns(_obs([DRAVEN, KARMA, VI], 12) + _obs([DRAVEN, KARMA, VI, GROMP], 12))[8]
+    assert [shell for shell, _ in by_size] == [None, None]
+
+
+def test_every_member_reaches_the_minimum_on_its_own() -> None:
+    assert [shell for shell, _ in _patterns(_obs([DRAVEN, KARMA, VI], 10) + _obs([DRAVEN, KARMA, GROMP], 9))[8]] == [None]
+    a = LineupGroup(8, _key(DRAVEN, KARMA, VI)[1], 10, 19, 40, 5, 1, 0)
+    b = LineupGroup(8, _key(DRAVEN, KARMA, GROMP)[1], 9, 19, 36, 4, 1, 0)
+    only, = board_patterns([a, b], carry_id=KOGMAW, min_boards=10)[8]  # the 9-board lineup is not even listed
+    assert only.shell is None and only.anchor is a
+    shell, = board_patterns([a, b], carry_id=KOGMAW, min_boards=9)[8]
+    assert shell.shell == _shell(DRAVEN, KARMA)
+
+
+def test_the_carry_and_its_copies_are_always_in_the_shell() -> None:
+    # Two Kog'Maw + Draven + Karma vs one Kog'Maw + Draven + Karma + Vi: a carry copy would be the flex -- never.
+    pats = _patterns(_obs([DRAVEN, KARMA], 10, carries=2) + _obs([DRAVEN, KARMA, VI], 10))[8]
+    assert [shell for shell, _ in pats] == [None, None]
+    # Both sides with two carries and a teammate swapped: a shell holding both carry copies.
+    (shell, options), = _patterns(_obs([DRAVEN, KARMA], 12, carries=2) + _obs([GROMP, KARMA], 10, carries=2))[8]
+    assert shell == _shell(KARMA, carries=2) and shell.count(KOGMAW) == 2
+    assert KOGMAW not in [f for f, *_ in options]
+
+
+def test_duplicate_champions_are_shell_copies() -> None:
+    # Kog'Maw + Draven + Draven + Karma and Kog'Maw + Draven + Vi + Karma: shell Kog'Maw + Draven + Karma.
+    (shell, options), = _patterns(_obs([DRAVEN, DRAVEN, KARMA], 12) + _obs([DRAVEN, VI, KARMA], 10))[8]
+    assert shell == _shell(DRAVEN, KARMA)
+    assert [f for f, *_ in options] == [DRAVEN, VI]
+
+
+def test_special_units_do_not_change_a_shell() -> None:
+    boards = _obs([DRAVEN, KARMA, VI], 8, tag="a") + _obs([DRAVEN, KARMA, VI], 8, tag="b", special=(SUMMON,))
+    boards += _obs([DRAVEN, KARMA, GROMP], 12, special=(SUMMON, SUMMON))
+    (shell, options), = _patterns(boards)[8]
+    assert shell == _shell(DRAVEN, KARMA) and [(f, n) for f, _l, n in options] == [(VI, 16), (GROMP, 12)]
+
+
+def test_an_anchor_takes_its_largest_shell_and_leftovers_stay_exact() -> None:
+    # The anchor fits two shells: {Draven, Karma} (3 members) and {Draven, Vi} (2 members).
+    boards = _obs([DRAVEN, KARMA, VI], 30) + _obs([DRAVEN, KARMA, X1], 10) + _obs([DRAVEN, KARMA, X2], 11)
+    boards += _obs([DRAVEN, VI, X3], 20)
+    pats = _patterns(boards)[8]
+    assert pats[0][0] == _shell(DRAVEN, KARMA) and [f for f, *_ in pats[0][1]] == [VI, X2, X1]
+    # Its other possible shell lost the anchor, so the leftover lineup is a standalone exact board.
+    assert pats[1] == (None, [(None, _key(DRAVEN, VI, X3)[1], 20)])
+
+
+def test_shell_choice_breaks_ties_on_summed_boards_then_shell_key() -> None:
+    # Two 2-member candidates: the one whose members total more boards wins (a presentation tie-break only).
+    boards = _obs([DRAVEN, KARMA, VI], 20) + _obs([DRAVEN, KARMA, X1], 11) + _obs([DRAVEN, VI, X2], 15)
+    assert _patterns(boards)[8][0][0] == _shell(DRAVEN, VI)
+    # Equal members and equal totals: the smaller canonical shell key wins.
+    boards = _obs([DRAVEN, KARMA, VI], 20) + _obs([DRAVEN, KARMA, X1], 12) + _obs([DRAVEN, VI, X2], 12)
+    assert _patterns(boards)[8][0][0] == min(_shell(DRAVEN, KARMA), _shell(DRAVEN, VI))
+
+
+def test_anchors_follow_recurrence_order() -> None:
+    # The most common lineup anchors first even though a rarer one could make a bigger shell.
+    boards = _obs([DRAVEN, KARMA, VI], 40) + _obs([DRAVEN, KARMA, GROMP], 10)
+    boards += _obs([GROMP, NIDALEE, X1], 30) + _obs([GROMP, NIDALEE, X2], 25) + _obs([GROMP, NIDALEE, X3], 20)
+    pats = _patterns(boards)[8]
+    assert [opts[0][2] for _s, opts in pats] == [40, 30]  # anchors by boards, most first
+    assert [len(opts) for _s, opts in pats] == [2, 3]
+
+
+def _random_lineups(seed: int) -> list[ObservedBoard]:
+    import random
+
+    rng = random.Random(seed)
+    pool = [DRAVEN, KARMA, GROMP, NIDALEE, VI, X1, X2, X3]
+    boards = []
+    for level in (7, 8):
+        seen = set()
+        for _ in range(25):
+            mates = sorted(rng.choices(pool[:5], k=2) + rng.sample(pool, k=rng.choice([1, 2])))
+            if tuple(mates) in seen:
+                continue
+            seen.add(tuple(mates))
+            boards += _obs(mates, rng.randint(7, 30), level=level, carries=rng.choice([1, 1, 1, 2]))
+    return boards
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_every_qualifying_lineup_is_in_exactly_one_valid_pattern(seed: int) -> None:
+    from collections import Counter
+
+    boards = _random_lineups(seed)
+    evidence = group_boards(boards, min_boards=MIN_BOARDS)
+    promoted = {(lg.level, lg.lineup) for g in evidence.levels for lg in g.lineups}
+    placed = Counter()
+    for level, pats in _patterns(boards).items():
+        for shell, options in pats:
+            for flex, lineup, n in options:
+                placed[(level, lineup)] += 1
+                assert n >= MIN_BOARDS
+            if shell is None:
+                assert len(options) == 1 and options[0][0] is None
+                continue
+            assert len(options) >= 2 and KOGMAW in shell
+            for flex, lineup, _n in options:
+                # Literally the shell plus one non-carry copy; same size; carry count unchanged.
+                assert flex != KOGMAW and Counter(lineup) == Counter(shell) + Counter([flex])
+                assert lineup.count(KOGMAW) == shell.count(KOGMAW)
+            assert len({len(l) for _f, l, _n in options}) == 1
+    assert set(placed) == promoted and set(placed.values()) == {1}
+
+
+def test_pattern_payload_keeps_exact_rows_and_adds_no_pooled_numbers() -> None:
+    a, b, c = [DRAVEN, KARMA, VI], [DRAVEN, KARMA, GROMP], [GROMP, NIDALEE, X1]
+    boards = _obs(a, 6, placement=1) + _obs(a, 6, placement=8) + _obs(b, 10, placement=2) + _obs(c, 15, placement=5)
+    body = _payload(boards, top_n=6)
+    level, = body["levels"]
+    # The standalone C (15 boards) anchors first: patterns follow their anchors' recurrence.
+    exact, shell = level["patterns"]
+    assert shell["type"] == "flex_shell" and exact["type"] == "exact_board"
+    # A shell has structure only: no placement, Top 4, win, 3-star or board total of its own.
+    assert set(shell) == {"type", "level", "unit_count", "shared_units", "anchor_lineup_key", "option_count",
+                          "options", "evidence"}
+    assert [u["character_id"] for u in shell["shared_units"]] == [KOGMAW] + [
+        u["character_id"] for u in shell["shared_units"][1:]] and shell["shared_units"][0]["is_carry"] is True
+    assert shell["unit_count"] == 4 and shell["option_count"] == 2
+    # Each option's numbers are exactly its exact lineup's own row.
+    rows = {r["lineup_key"]: r for r in level["boards"]}
+    for opt in shell["options"]:
+        row = rows[opt["lineup_key"]]
+        for k in ("boards", "carry_boards_at_level", "share_of_level", "avg_placement", "top4_rate", "win_rate",
+                  "carry_three_star"):
+            assert opt[k] == row[k], k
+    assert [o["is_anchor"] for o in shell["options"]] == [True, False]
+    assert shell["anchor_lineup_key"] == shell["options"][0]["lineup_key"] == "+".join(_key(*a)[1])
+    assert [o["unit"]["character_id"] for o in shell["options"]] == [VI, GROMP]
+    # A standalone board points at its exact row (listed within top_n, so not repeated).
+    assert exact == {"type": "exact_board", "level": 8, "lineup_key": "+".join(_key(*c)[1]), "listed": True}
+    assert exact["lineup_key"] in rows
+    # The raw rows and their one-slot alternatives are exactly what they were without patterns.
+    stripped = {k: v for k, v in level.items() if k != "patterns"}
+    groups = [lg for g in group_boards(boards, min_boards=MIN_BOARDS).levels for lg in g.lineups]
+    assert [r["lineup_key"] for r in stripped["boards"]] == ["+".join(g.lineup) for g in groups]
+    alts = one_slot_alternatives(groups, carry_id=KOGMAW, min_boards=MIN_BOARDS)
+    for r, g in zip(stripped["boards"], groups):
+        assert [x["lineup_key"] for x in r["alternatives"]] == ["+".join(x.target.lineup) for x in alts.get((8, g.lineup), [])]
+    assert "not a composition family" in body["pattern_definition"] and "never by placement" in body["pattern_ordering"]
+
+
+def test_patterns_ignore_the_display_cap() -> None:
+    base = [DRAVEN, KARMA, VI]
+    filler = [[X1, X2, X3], [X1, X2, GROMP], [X1, X3, NIDALEE], [X2, X3, DRAVEN], [X1, NIDALEE, GROMP]]
+    boards = _obs(base, 40)
+    for i, mates in enumerate(filler):
+        boards += _obs(mates, 30 - i)
+    boards += _obs([DRAVEN, KARMA, NIDALEE], 10)  # the base's only shell partner, the rarest lineup
+    capped, wide = _payload(boards, top_n=1)["levels"][0], _payload(boards, top_n=50)["levels"][0]
+    assert len(capped["boards"]) == 1 and len(wide["boards"]) == 7
+    strip = lambda pats: [{k: v for k, v in p.items() if k not in ("board", "listed")} for p in pats]
+    assert strip(capped["patterns"]) == strip(wide["patterns"])
+    # Standalone boards cut from the capped rows carry their own exact row instead.
+    for p in capped["patterns"]:
+        if p["type"] == "exact_board":
+            assert p["listed"] is False and p["board"]["lineup_key"] == p["lineup_key"]
+    shell = capped["patterns"][0]
+    assert shell["type"] == "flex_shell" and [o["unit"]["character_id"] for o in shell["options"]] == [VI, NIDALEE]
+    # Every one of the 7 qualifying lineups is in the default presentation exactly once, capped or not.
+    keys = [o["lineup_key"] for p in capped["patterns"] for o in p.get("options", [])]
+    keys += [p["lineup_key"] for p in capped["patterns"] if p["type"] == "exact_board"]
+    assert len(keys) == len(set(keys)) == capped["qualifying_lineups"] == 7
+
+
+def test_patterns_in_the_database_backed_section(db: Database) -> None:
+    for i in range(10):
+        db.ingest_match(_board(f"AG8_{i}", [DRAVEN, KARMA, GROMP], 2, 8))
+    db.commit()
+    section = _section(db)
+    level8 = next(g for g in section["levels"] if g["level"] == 8)
+    kinds = [(p["type"], p.get("option_count")) for p in level8["patterns"]]
+    # A (14) + A-with-Gromp (10) share Kog'Maw + Draven + Karma; B and A_DOUBLE stay exact boards.
+    assert kinds == [("flex_shell", 2), ("exact_board", None), ("exact_board", None)]
+    assert [o["unit"]["name"] for o in level8["patterns"][0]["options"]] == ["Vi", "Gromp"]
+    assert section["preview"] and all("patterns" not in r for r in section["preview"])

@@ -230,7 +230,7 @@ test("retry reloads the champion after a failed request, still without the direc
   assert.equal(directoryCalls(page.requests).length, 0);
 });
 
-// ---------------------------------------------------------------- observed one-slot alternatives (Boards tab)
+// ---------------------------------------------------------------- observed board patterns (Boards tab)
 
 const panelHtml = (html, name) => {
   const start = html.indexOf(`id="panel-${name}"`);
@@ -238,52 +238,125 @@ const panelHtml = (html, name) => {
   const next = html.indexOf('id="panel-', start + 10);
   return html.slice(start, next < 0 ? undefined : next);
 };
-const boardRows = body => body.observed_boards.levels.flatMap(g => g.boards);
+const levels = body => body.observed_boards.levels;
+const count = (html, re) => (html.match(re) || []).length;
+const escName = s => s.replace(/'/g, "&#39;");
 
-test("the Boards tab shows observed alternatives with both units and the other lineup's own numbers", async () => {
-  const body = fixture("khazix");
-  const row = boardRows(body).find(r => r.alternatives.length);
-  assert.ok(row, "the demo data has at least one one-slot alternative");
-  const page = loadPage("/champions/khazix", { respond: api(), hash: "#boards" });
+async function boardsOf(body) {
+  const page = loadPage("/champions/khazix", { respond: api({ detail: body }), hash: "#boards" });
   await settle();
-  const boards = panelHtml(page.el("#champion-view").innerHTML, "boards");
-  assert.match(boards, /Observed alternatives/);
-  assert.match(boards, /not the effect of making the swap/);
-  const alt = row.alternatives[0];
-  const esc = s => s.replace(/'/g, "&#39;");
-  assert.ok(boards.includes(`Out: </span>`) && boards.includes(`, in: </span>`));
-  assert.ok(boards.includes(`>${esc(alt.out_unit.name)}</a>`), alt.out_unit.name);
-  assert.ok(boards.includes(`>${esc(alt.in_unit.name)}</a>`), alt.in_unit.name);
-  assert.ok(boards.includes(`<b>${alt.boards.toLocaleString()} boards</b>`));
-  // No alternatives in the concise How to play preview.
-  const play = panelHtml(page.el("#champion-view").innerHTML, "play");
+  const html = page.el("#champion-view").innerHTML;
+  return { page, html, boards: panelHtml(html, "boards"), play: panelHtml(html, "play") };
+}
+
+test("a flex shell renders once: shared units once, one row per option, results closed", async () => {
+  const body = fixture("khazix");
+  const level = levels(body).find(g => g.patterns.some(p => p.type === "flex_shell"));
+  assert.ok(level, "the demo data has at least one flex shell");
+  const shell = level.patterns.find(p => p.type === "flex_shell");
+  const { page, boards, play } = await boardsOf(body);
+  const shells = levels(body).flatMap(g => g.patterns).filter(p => p.type === "flex_shell");
+  const exact = levels(body).flatMap(g => g.patterns).filter(p => p.type === "exact_board");
+  assert.equal(count(boards, /class="board-card board-pattern"/g), shells.length);
+  // Default cards = one per pattern: shells plus standalone exact lineups (raw rows inside the
+  // closed disclosure are compact cards without the "Exact lineup" tag).
+  assert.equal(count(boards, /· Exact lineup<\/p>/g), exact.length);
+  assert.match(boards, /Observed board pattern/);
+  assert.match(boards, /Shared shell/);
+  assert.ok(boards.includes(`Flex slot · ${shell.option_count} observed options`));
+  // Each option: the unit, its board count and share up front; its results inside a closed <details>.
+  assert.equal(count(boards, /<li class="flex-option">/g), shells.reduce((n, p) => n + p.options.length, 0));
+  assert.equal(count(boards, /<details class="flex-results">/g), shells.reduce((n, p) => n + p.options.length, 0));
+  assert.doesNotMatch(boards, /<details class="flex-results" open/);
+  const opt = shell.options[0];
+  assert.ok(boards.includes(`<span class="flex-name">${escName(opt.unit.name)}</span>`), opt.unit.name);
+  assert.ok(boards.includes(`<b>${opt.boards.toLocaleString()} boards</b>`));
+  // The disclosure holds that option's own exact-lineup results, not anything pooled.
+  const optHtml = boards.slice(boards.indexOf(`<span class="flex-name">${escName(opt.unit.name)}</span>`));
+  const stats = optHtml.slice(0, optHtml.indexOf("</details>"));
+  assert.ok(stats.includes(`<dt>Avg place</dt><dd>${opt.avg_placement.toFixed(2)}</dd>`));
+  assert.ok(stats.includes(`<dt>Top 4</dt><dd>${Math.round(opt.top4_rate * 100)}%</dd>`));
+  // Shared units are listed once in the shell, the carry marked.
+  const card = boards.slice(boards.indexOf('class="board-card board-pattern"'));
+  const shellUnits = card.slice(card.indexOf("Shared shell"), card.indexOf("Flex slot"));
+  assert.equal(count(shellUnits, /<li class="board-unit/g), shell.shared_units.length);
+  assert.match(shellUnits, /board-carry-tag">carry</);
+  // One short tab-level note; How to play stays concise; no directory request.
+  assert.equal(count(boards, /board-pattern-note/g), 1);
+  assert.match(boards, /not to the swap/);
+  assert.doesNotMatch(play, /board-pattern|flex-option|board-raw/);
   assert.match(play, /Most common observed final boards/);
-  assert.doesNotMatch(play, /Observed alternatives|board-alts/);
-  // Nothing on the page reaches for the directory.
   assert.equal(directoryCalls(page.requests).length, 0);
 });
 
-test("boards without alternatives render with no alternatives section or note", async () => {
+test("each level has a closed disclosure of its exact qualifying lineups", async () => {
   const body = fixture("khazix");
-  for (const row of boardRows(body)) row.alternatives = [];
-  for (const row of body.observed_boards.preview) row.alternatives = [];
-  const page = loadPage("/champions/khazix", { respond: api({ detail: body }), hash: "#boards" });
-  await settle();
-  const boards = panelHtml(page.el("#champion-view").innerHTML, "boards");
-  assert.match(boards, /board-card/);
-  assert.doesNotMatch(boards, /Observed alternatives|board-alts|board-alt-note/);
+  const { boards } = await boardsOf(body);
+  for (const g of levels(body)) {
+    assert.equal(g.boards.length, g.qualifying_lineups, "the demo levels are not capped by top_n");
+    assert.ok(boards.includes(`<summary>Show exact qualifying lineups (${g.qualifying_lineups})</summary>`), `level ${g.level}`);
+  }
+  assert.equal(count(boards, /<details class="board-raw">/g), levels(body).length);
+  assert.doesNotMatch(boards, /<details class="board-raw" open/);
+  // Inside: compact exact rows (no one-unit-difference lines).
+  const raw = boards.slice(boards.indexOf('<details class="board-raw">'));
+  assert.match(raw, /board-card is-compact/);
+  assert.doesNotMatch(raw.slice(0, raw.indexOf("</details>")), /board-neighbours/);
 });
 
-test("more than three alternatives: three shown, the total stated, the rest behind a disclosure", async () => {
+test("a top_n-capped level labels its disclosure with the rows it actually holds", async () => {
   const body = fixture("khazix");
-  const row = boardRows(body).find(r => r.alternatives.length);
-  const one = row.alternatives[0];
-  row.alternatives = [5, 4, 3, 2, 1].map(n => ({ ...one, boards: 100 + n, lineup_key: `${one.lineup_key}#${n}` }));
-  const page = loadPage("/champions/khazix", { respond: api({ detail: body }), hash: "#boards" });
-  await settle();
-  const boards = panelHtml(page.el("#champion-view").innerHTML, "boards");
-  assert.match(boards, /3 of 5 shown, most boards first/);
-  assert.match(boards, /<details class="board-alt-more"><summary>Show the other 2 observed alternatives<\/summary>/);
-  const order = [...boards.matchAll(/<b>(10\d) boards<\/b>/g)].map(m => Number(m[1]));
-  assert.deepEqual(order, [105, 104, 103, 102, 101]); // the API's order, nothing re-sorted
+  const g = levels(body).find(l => l.qualifying_lineups >= 3);
+  assert.ok(g, "the demo data has a level with 3+ qualifying lineups");
+  // As the API sends it when top_n < qualifying lineups: fewer rows, standalone boards cut from
+  // the rows carry their own row.
+  const kept = g.boards.slice(0, 2);
+  const cut = new Map(g.boards.slice(2).map(b => [b.lineup_key, b]));
+  g.boards = kept;
+  for (const p of g.patterns) {
+    if (p.type === "exact_board" && cut.has(p.lineup_key)) Object.assign(p, { listed: false, board: cut.get(p.lineup_key) });
+  }
+  const { boards } = await boardsOf(body);
+  const label = `<summary>Show 2 most common exact lineups (${g.qualifying_lineups} qualify)</summary>`;
+  const start = boards.indexOf(`id="board-level-${g.level}"`);
+  const next = boards.indexOf('<section class="board-level"', start);
+  const levelHtml = boards.slice(start, next < 0 ? undefined : next);
+  assert.ok(levelHtml.includes(label), label);
+  assert.doesNotMatch(levelHtml, /<summary>Show exact qualifying lineups/);
+  // The disclosure holds exactly the rows its label names; the note says where the rest are.
+  const raw = boards.slice(boards.indexOf(label));
+  const inside = raw.slice(0, raw.indexOf("</details>"));
+  assert.equal(count(inside, /<li class="board-card is-compact">/g), 2);
+  assert.match(inside, new RegExp(`every one of the ${g.qualifying_lineups} is an option or board above`));
+  // Uncapped levels keep the plain label.
+  for (const other of levels(body).filter(l => l !== g)) {
+    assert.ok(boards.includes(`<summary>Show exact qualifying lineups (${other.qualifying_lineups})</summary>`), `level ${other.level}`);
+  }
+});
+
+test("standalone exact boards render as exact lineups; no shell means no pattern note", async () => {
+  const body = fixture("khazix");
+  // Rewrite every pattern as a standalone exact board (as for a carry with no shared shell).
+  for (const g of levels(body)) {
+    for (const b of g.boards) b.alternatives = [];
+    g.patterns = g.boards.map(b => ({ type: "exact_board", level: g.level, lineup_key: b.lineup_key, listed: true }));
+  }
+  const { boards } = await boardsOf(body);
+  assert.doesNotMatch(boards, /board-pattern|flex-option|Shared shell|board-pattern-note/);
+  assert.match(boards, /· Exact lineup<\/p>/);
+  assert.equal(count(boards, /· Exact lineup<\/p>/g), levels(body).reduce((n, g) => n + g.boards.length, 0));
+});
+
+test("a standalone board lists its one-unit differences in one compact line", async () => {
+  const body = fixture("khazix");
+  const g = levels(body)[0];
+  const row = g.boards[0];
+  const alt = { ...(row.alternatives[0] || {}), out_unit: row.units[1], in_unit: row.units[2], boards: 11 };
+  // An unlisted standalone board carries its own row.
+  g.patterns = [{ type: "exact_board", level: g.level, lineup_key: "x", listed: false, board: { ...row, alternatives: [alt, alt, alt, alt] } }];
+  body.observed_boards.levels = [g];
+  const { boards } = await boardsOf(body);
+  assert.equal(count(boards, /class="board-neighbours"/g), 1);
+  assert.ok(boards.includes(`Also observed with one unit different: ${escName(row.units[1].name)} → ${escName(row.units[2].name)} (11 boards)`));
+  assert.match(boards, /; 1 more\.<\/p>/);
 });
