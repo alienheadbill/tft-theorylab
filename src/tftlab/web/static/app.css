@@ -992,6 +992,13 @@ a.board-unit-inner:hover .board-unit-name { text-decoration: underline; text-dec
 .board-neighbours { margin: 6px 0 0; font-size: 13px; color: var(--graphite); overflow-wrap: anywhere; }
 .board-card.is-compact .board-unit .ref-icon { width: 30px; height: 30px; }
 .board-card.is-compact .board-unit-name { font-size: 13.5px; }
+/* observed comps: a card per pattern, titled by its units, boards before results */
+.comp-list { max-width: 980px; }
+.comp-name { margin: 0 0 4px; font: 700 19px var(--serif); overflow-wrap: anywhere; }
+.comp-name a { color: var(--text); text-decoration-color: var(--pencil); text-underline-offset: 3px; }
+.comp-carries { overflow-wrap: anywhere; }
+.comp-window { margin-top: 8px; overflow-wrap: anywhere; }
+.comp-window a { color: var(--ink-blue); }
 
 @media (max-width: 900px) {
   .htp-grid-3 { grid-template-columns: 1fr; }

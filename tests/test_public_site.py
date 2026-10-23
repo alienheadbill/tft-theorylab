@@ -13,13 +13,14 @@ from tftlab.demo import generate_demo_matches
 from tftlab.storage import Database
 
 WEB = Path(__file__).parent.parent / "src" / "tftlab" / "web"
-PAGES = ("/", "/champions", "/champions/khazix", "/experiments", "/about", "/methodology", "/data", "/privacy", "/terms")
+PAGES = ("/", "/comps", "/champions", "/champions/khazix", "/experiments", "/about", "/methodology", "/data",
+         "/privacy", "/terms")
 HTML_FILES = sorted(WEB.glob("*.html"))
 #: Riot General Policies (page last updated May 29, 2025): legal boilerplate, verbatim with the product name.
 RIOT_BOILERPLATE = ("TheoryLabs isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or "
                     "anyone officially involved in producing or managing Riot Games properties. Riot Games, and all "
                     "associated properties are trademarks or registered trademarks of Riot Games, Inc.")
-MAIN_NAV = ["/#discoveries", "/champions", "/experiments", "/about", "/methodology"]
+MAIN_NAV = ["/#discoveries", "/comps", "/champions", "/experiments", "/about", "/methodology"]
 FOOTER_NAV = [*MAIN_NAV, "/privacy", "/terms"]
 
 
@@ -272,8 +273,8 @@ def test_riot_txt_never_publishes_a_riot_api_key(monkeypatch, tmp_path) -> None:
 def test_riot_api_key_never_reaches_the_browser(monkeypatch, tmp_path) -> None:
     sentinel = "RGAPI-sentinel-0000-never-in-a-page"
     client = _client(monkeypatch, tmp_path, RIOT_API_KEY=sentinel)
-    paths = [*PAGES, "/api/source", "/api/health", "/api/discovery", "/api/champions", "/api/champions/khazix",
-             "/api/experiments", "/api/balance-windows", "/riot.txt",
+    paths = [*PAGES, "/api/source", "/api/health", "/api/discovery", "/api/comps", "/api/champions",
+             "/api/champions/khazix", "/api/experiments", "/api/balance-windows", "/riot.txt",
              *(f"/static/{p.name}" for p in (WEB / "static").glob("*.*"))]
     for path in paths:
         assert sentinel not in client.get(path).text, path
