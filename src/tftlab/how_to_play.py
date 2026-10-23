@@ -180,24 +180,30 @@ def natural_provider_count(trait_id: str) -> int:
     return len(load_roster().trait_champions(trait_id))
 
 
-def trait_directions(trait_rows: Sequence[dict[str, Any]], limit: int = CONCISE_TRAITS) -> list[dict[str, Any]]:
+def trait_directions(
+    trait_rows: Sequence[dict[str, Any]], limit: int = CONCISE_TRAITS, *, carry_id: str | None = None
+) -> list[dict[str, Any]]:
     """A few buildable trait directions from the corrected trait evidence.
     Traits with at least `MIN_BOARDS` boards, most boards first, each with
     its most common observed unit count (Riot `num_units`; ties go to the
     lower count). Not a canonical breakpoint.
 
-    Not actionable, so skipped here: a trait with exactly one natural
-    shop-champion provider whose selected count is 1 unit. That only says
-    its one champion was on the board -- the carry itself, or a teammate
-    the teammates list already shows (e.g. a 1-unit trait that only that
-    teammate has). The same trait at a selected 2+ units stays eligible
-    (it may have been extended). The TRAITS tab keeps every row."""
+    Not actionable, so skipped here when the selected count is 1 unit:
+    - a trait with exactly one natural shop-champion provider. That only
+      says its one champion was on the board -- the carry itself, or a
+      teammate the teammates list already shows;
+    - a trait the carry (`carry_id`) has itself, however many champions
+      provide it (e.g. Rival, shared by Kha'Zix and Rengar). On the carry's
+      own boards, 1 unit is the carry.
+    The same traits at a selected 2+ units stay eligible (they may have been
+    extended). The TRAITS tab keeps every row."""
+    own = set(load_roster().champion_traits(carry_id)) if carry_id else set()
     out = []
     for t in trait_rows:
         if t["games"] < MIN_BOARDS or not t["counts"]:
             continue
         top = min(t["counts"], key=lambda c: (-c["games"], c["num_units"] or 0))
-        if top["num_units"] == 1 and natural_provider_count(t["trait_id"]) == 1:
+        if top["num_units"] == 1 and (natural_provider_count(t["trait_id"]) == 1 or t["trait_id"] in own):
             continue
         out.append({
             "trait_id": t["trait_id"],
@@ -253,7 +259,8 @@ def evidence_summary(
         parts.append(f"frequent teammates include {_names(mates[:2])}")
     if traits:
         t = traits[0]
-        parts.append(f"the most common buildable trait direction is {t['name']} at {t['num_units']} units")
+        units = t["num_units"]
+        parts.append(f"the most common buildable trait direction is {t['name']} at {units} unit{'' if units == 1 else 's'}")
     if not parts:
         return None
     return (
@@ -273,6 +280,7 @@ def how_to_play(
     trait_rows: Sequence[dict[str, Any]],
     four_unit_cores: Sequence[dict[str, Any]] = (),
     three_unit_cores: Sequence[dict[str, Any]] = (),
+    carry_id: str | None = None,
 ) -> dict[str, Any]:
     """The concise view: existing evidence rows on `MIN_BOARDS`+ carry
     boards, most boards first, shortened (see "Common rows" above). Empty
@@ -282,7 +290,7 @@ def how_to_play(
     pairs = common_rows([r for r in pair_rows if _normal(r) and meets_board_floor(r)])[:CONCISE_PAIRS]
     builds = common_rows([r for r in build_rows if _normal(r) and meets_board_floor(r)])[:CONCISE_BUILDS]
     mates = teammates(partner_rows)
-    traits = trait_directions(trait_rows)
+    traits = trait_directions(trait_rows, carry_id=carry_id)
     return {
         "evidence": "observed",
         # Kept under its original key for API compatibility: the board floor.
