@@ -263,7 +263,9 @@ def test_art_lookups_never_touch_the_network(client: TestClient, monkeypatch: py
 
     app = create_app()
     routes = {r.path: r.endpoint for r in app.routes if hasattr(r, "endpoint")}
-    assert routes["/api/discovery"](max_cost=3, min_samples=1, balance_window=None, top_n=5, limit=20, costs=None)["candidates"]
+    assert routes["/api/discovery"](
+        max_cost=3, min_samples=1, balance_window=None, top_n=5, limit=20, costs=None, order="boards_desc"
+    )["candidates"]
     assert routes["/api/experiments"](status=None, lifecycle=None, carry=None, tag=None)["experiments"]
 
 

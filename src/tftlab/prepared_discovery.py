@@ -11,10 +11,12 @@ as rows the web application only reads and filters.
 What one published run holds: every carry in the window (any cost,
 `min_samples=1`), each as its complete `DiscoveryCandidate` -- the same
 object `discover_candidates` builds -- with evidence lists kept to
-`PREPARED_TOP_N` (the API's own `top_n` maximum). A request takes the rows
+`PREPARED_TOP_N` (the API's own `top_n` maximum). Candidates are stored in
+recurrence order (`order_by_carry_boards`: carry boards, most first, ties by
+name then character id) as `population_rank`. A request takes the rows
 matching its costs and `min_samples`, ordered exactly like
-`discover_candidates` (Opportunity Score descending, ties in population
-order), truncates the evidence lists to its `top_n`, and applies `limit`.
+`discover_candidates` (carry boards descending or ascending, ties by that
+rank), truncates the evidence lists to its `top_n`, and applies `limit`.
 
 Keys and freshness. A run is only served when all three match:
 
@@ -56,7 +58,14 @@ from pathlib import Path
 from typing import Any, Collection, Sequence
 
 from .analytics.commitment import available_balance_windows
-from .analytics.discovery import DiscoveryCandidate, discovery_population, population_candidates
+from .analytics.discovery import (
+    DEFAULT_DISCOVERY_ORDER,
+    DISCOVERY_ORDERS,
+    DiscoveryCandidate,
+    discovery_population,
+    order_by_carry_boards,
+    population_candidates,
+)
 from .storage import Database
 
 #: Bump when the stored row/JSON layout changes. Analytics changes are
@@ -242,19 +251,23 @@ def read_prepared_candidates(
     min_samples: int,
     top_n: int,
     limit: int,
+    order: str = DEFAULT_DISCOVERY_ORDER,
 ) -> list[dict[str, Any]]:
     """The run's candidates for these filters, as `asdict(DiscoveryCandidate)`
-    dicts in `discover_candidates` order (score descending, ties in
-    population order). No aggregation: an indexed read of at most `limit`
-    rows."""
+    dicts in `discover_candidates` order for `order` (carry boards, most or
+    fewest first; ties by name, then character id, via `population_rank`).
+    No aggregation: an indexed read of at most `limit` rows."""
+    if order not in DISCOVERY_ORDERS:
+        raise ValueError(f"unknown Discovery order {order!r}; expected one of {DISCOVERY_ORDERS}")
     wanted = sorted({int(c) for c in costs})
     if not wanted:
         return []
+    direction = "DESC" if order == "boards_desc" else "ASC"
     rows = db.query_all(
         f"""
         SELECT candidate_json FROM discovery_prepared_candidates
         WHERE run_id = ? AND cost IN ({", ".join("?" for _ in wanted)}) AND commitment_games >= ?
-        ORDER BY opportunity_score DESC, population_rank ASC
+        ORDER BY commitment_games {direction}, population_rank ASC
         LIMIT ?
         """,
         (run.run_id, *wanted, min_samples, limit),
@@ -290,7 +303,9 @@ def _lock_key(balance_window: str) -> int:
 
 def _compute(db: Database, balance_window: str) -> tuple[list[DiscoveryCandidate], int]:
     population = discovery_population(db, balance_window)
-    return population_candidates(db, balance_window, population, top_n=PREPARED_TOP_N), len(population)
+    # Stored in recurrence order, so `population_rank` is the name/id tie-break.
+    candidates = order_by_carry_boards(population_candidates(db, balance_window, population, top_n=PREPARED_TOP_N))
+    return candidates, len(population)
 
 
 def _publish(
