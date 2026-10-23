@@ -257,7 +257,7 @@ def choose_windows(db: Database, current: Sequence[str], *, min_current_alone: i
 
 
 def publication_gate(live: dict[str, Any], windows: Sequence[str], counts: dict[str, int], current: Sequence[str], *,
-                     min_new: int, min_first: int) -> tuple[str | None, str]:
+                     min_new: int, min_first: int, live_discovery: str | None = None) -> tuple[str | None, str]:
     """(why not to publish, or None; what was compared).
 
     Each current balance window the live site does not serve yet is a first
@@ -266,7 +266,12 @@ def publication_gate(live: dict[str, Any], windows: Sequence[str], counts: dict[
     window of the same client patch (`18.2a` next to a new `18.2b`) ever
     counts towards it. Otherwise new data is compared window by window with
     the live site's own per-window counts (`/api/balance-windows`), never
-    total against total, and needs `min_new` new matches."""
+    total against total, and needs `min_new` new matches -- unless the live
+    site's Discovery for the current window is `stale` (`live_discovery`):
+    the deployed code's analytics version no longer matches the snapshot
+    (e.g. after a code change), so the site computes Discovery live until a
+    snapshot prepared by that code is published. That waives only the
+    new-matches minimum, never a new window's own floor."""
     live_counts: dict[str, int] = live.get("window_matches") or {} if live.get("mode") == "snapshot" else {}
     new_windows = [w for w in current if w not in live_counts]
     if new_windows:
@@ -281,6 +286,9 @@ def publication_gate(live: dict[str, Any], windows: Sequence[str], counts: dict[
     comparable = [w for w in windows if w in live_counts]
     new = sum(max(0, counts.get(w, 0) - int(live_counts[w] or 0)) for w in comparable)
     label = ", ".join(comparable)
+    if new < min_new and live_discovery == "stale":
+        return None, (f"the site computes Discovery for {current[0]} live (prepared data is stale: the deployed "
+                      f"analytics version changed), so the snapshot is republished with {new} new matches in {label}")
     if new < min_new:
         return (f"only {new} new matches in {label} since the snapshot the site serves (at least {min_new} are "
                 "needed); the site keeps its current snapshot", f"new matches in {label}")
@@ -698,8 +706,10 @@ def run_local_publish(
         report.live = live_state(http, site)
         step("Website now", "info", f"{', '.join(report.live['balance_windows']) or report.live['mode']}: "
              f"{report.live['matches']} matches, exported {report.live['exported_at']}")
+        live_discovery = discovery_status(http, site, current[0]) if current[0] in report.live["window_matches"] else None
+        report.live["discovery"] = live_discovery
         reason, compared = publication_gate(report.live, windows, counts, current, min_new=config.min_new_matches,
-                                            min_first=config.min_first_publish_matches)
+                                            min_first=config.min_first_publish_matches, live_discovery=live_discovery)
         if reason and not config.force:
             step("New data", "skip", reason)
             return finish(SKIPPED, f"Not published: {reason}.")
