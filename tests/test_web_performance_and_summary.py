@@ -24,6 +24,7 @@ def demo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     import tftlab.webapp as webapp
 
     webapp._POPULATION_CACHE.clear()
+    webapp._WINDOW_AVERAGE_CACHE.clear()
     return TestClient(webapp.create_app())
 
 
@@ -61,10 +62,11 @@ def test_champion_picker_never_runs_full_carry_statistics(demo: TestClient, monk
 
 def test_champion_detail_aggregates_only_that_champion(demo: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     import tftlab.champion_investigation as ci
+    import tftlab.webapp as webapp
 
     full = _spy(monkeypatch, ci, "carry_commitment_stats")
     counts = _spy(monkeypatch, ci, "carry_board_counts")
-    average = _spy(monkeypatch, ci, "carry_board_average")
+    average = _spy(monkeypatch, webapp, "carry_board_average")
     assert demo.get("/api/champions/khazix").status_code == 200
     assert len(full) == 1 and full[0][1]["character_ids"] == [KHA]
     assert counts == [] and len(average) == 1
@@ -129,6 +131,63 @@ def test_population_is_reused_until_the_window_changes(
     after = demo.get(f"/api/discovery/{KHA}").json()["candidate"]
     assert len(calls) == 2  # a new match in the window invalidates the cached population
     assert after["commitment_games"] == kha["commitment_games"] + 1
+
+
+# ---------------------------------------------------------------- window-average cache
+
+
+def _other_carry_slug(demo: TestClient) -> str:
+    return next(c["slug"] for c in demo.get("/api/champions").json()["champions"]
+                if c["slug"] != "khazix" and c["carry_games"] > 0)
+
+
+def test_window_average_is_shared_by_champion_pages_until_the_window_changes(
+    demo: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tftlab.webapp as webapp
+
+    other = _other_carry_slug(demo)
+    calls = _spy(monkeypatch, webapp, "carry_board_average")
+    kha = demo.get("/api/champions/khazix").json()
+    second = demo.get(f"/api/champions/{other}").json()
+    demo.get("/api/champions/khazix")
+    assert len(calls) == 1  # same window, same matches: one aggregate for every champion page
+    assert second["window_average"] == kha["window_average"]
+
+    window = kha["balance_window"]
+    with _demo_db(tmp_path) as db:
+        latest = db.query_one("SELECT MAX(game_datetime) FROM matches WHERE balance_window = ?", (window,))[0]
+        version = db.query_one("SELECT game_version FROM matches WHERE balance_window = ? LIMIT 1", (window,))[0]
+        db.ingest_match(make_match("NEW_AFTER_AVERAGE", game_version=version, game_datetime=latest + 1,
+                                   units=[{"character_id": KHA, "rarity": 2, "tier": 2,
+                                           "itemNames": ["TFT_Item_BlueBuff", "TFT_Item_JeweledGauntlet"]}]))
+    after = demo.get("/api/champions/khazix").json()
+    assert len(calls) == 2  # a new match in the window invalidates the cached average
+    assert after["window_average"]["carry_games"] == kha["window_average"]["carry_games"] + 1
+
+
+def test_cached_window_average_equals_the_direct_query(demo: TestClient, tmp_path: Path) -> None:
+    from tftlab.analytics import carry_board_average
+
+    first = demo.get("/api/champions/khazix").json()
+    cached = demo.get(f"/api/champions/{_other_carry_slug(demo)}").json()["window_average"]
+    with _demo_db(tmp_path) as db:
+        direct = carry_board_average(db, first["balance_window"])
+    assert first["window_average"] == cached == direct
+    assert direct is not None and direct["carry_games"] > 0
+
+
+def test_a_response_cannot_change_the_cached_window_average(demo: TestClient, tmp_path: Path) -> None:
+    import tftlab.webapp as webapp
+
+    demo.get("/api/health")
+    with _demo_db(tmp_path) as db:
+        from tftlab.analytics import default_balance_window
+
+        window = default_balance_window(db)
+        first = webapp.cached_carry_board_average(db, window)
+        first["carry_games"] = -1
+        assert webapp.cached_carry_board_average(db, window)["carry_games"] > 0
 
 
 # ---------------------------------------------------------------- equivalence of the cheaper paths

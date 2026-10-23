@@ -16,7 +16,7 @@ player can pick a champion by name instead of by Riot id.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .analytics import (
     available_balance_windows,
@@ -603,13 +603,16 @@ def champion_investigation(
     *,
     top_n: int = 6,
     trait_top_n: int = 8,
+    window_average: Callable[[Database, str], dict[str, float | int] | None] | None = None,
 ) -> dict[str, Any]:
     """Everything the Champion Investigation page shows for `champion` (a
     `champion_directory` entry) in one balance window. `carry` is None when
     the champion has no carry boards there; the evidence lists are empty then.
 
     Only this champion's carry statistics are aggregated (`character_ids`);
-    the window-wide comparison is one light `carry_board_average` query."""
+    the window-wide comparison is one `carry_board_average` query, the same
+    for every champion. `window_average` replaces that query (the web app
+    passes its cached copy, `cached_carry_board_average`)."""
     window = next((w for w in available_balance_windows(db) if w[0] == balance_window), None)
     character_id = champion["character_id"]
     body: dict[str, Any] = {
@@ -649,7 +652,7 @@ def champion_investigation(
     }
     if balance_window is None or window is None:
         return body
-    body["window_average"] = carry_board_average(db, balance_window)
+    body["window_average"] = (window_average or carry_board_average)(db, balance_window)
     stats = carry_commitment_stats(
         db, balance_window=balance_window, min_cost=1, max_cost=5, min_samples=1, character_ids=[character_id]
     )
