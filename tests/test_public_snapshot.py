@@ -198,6 +198,45 @@ def test_a_source_without_completed_ingestion_provenance_is_refused(tmp_path) ->
         _export(src, tmp_path / "out.sqlite3")
 
 
+def test_every_exported_match_linked_to_a_completed_run_passes_and_says_so(source, tmp_path) -> None:
+    src, _ = source
+    checks = _export(src, tmp_path / "all.sqlite3").provenance["real_ingestion_checks"]
+    assert checks["matches_exported"] == checks["matches_linked_to_completed_runs"] == 24
+    assert checks["every_match_linked_to_a_completed_run"] is True and checks["discovery_ledger_coverage"] == 1.0
+
+
+def _first_match(path: Path) -> str:
+    with Database.open_existing(path) as db:
+        return db.query_one("SELECT match_id FROM matches ORDER BY match_id LIMIT 1")[0]
+
+
+def test_one_match_without_any_completed_run_link_blocks_the_export(source, tmp_path) -> None:
+    src, _ = source
+    orphan = _first_match(src)
+    with Database(src) as db:
+        db.execute("DELETE FROM match_discoveries WHERE match_id = ?", (orphan,))
+        db.commit()
+    with pytest.raises(ps.SnapshotExportError, match="1 of 24 exported matches are not linked to a completed"):
+        _export(src, tmp_path / "out.sqlite3")
+    assert not (tmp_path / "out.sqlite3").exists()
+
+
+@pytest.mark.parametrize("status", ["failed", "started"])
+def test_a_match_linked_only_to_an_unfinished_run_blocks_the_export(status, source, tmp_path) -> None:
+    src, _ = source
+    orphan = _first_match(src)
+    with Database(src) as db:
+        db.start_ingest_run("run-unfinished", 10)
+        db.execute("UPDATE ingest_runs SET status = ? WHERE run_id = 'run-unfinished'", (status,))
+        puuid = db.query_one("SELECT puuid FROM match_discoveries WHERE match_id = ?", (orphan,))[0]
+        db.execute("DELETE FROM match_discoveries WHERE match_id = ?", (orphan,))
+        db.execute("INSERT INTO match_discoveries (match_id, run_id, puuid, cohort, discovered_at) VALUES (?, ?, ?, ?, ?)",
+                   (orphan, "run-unfinished", puuid, "challenger", 11))
+        db.commit()
+    with pytest.raises(ps.SnapshotExportError, match="1 of 24 exported matches"):
+        _export(src, tmp_path / "out.sqlite3")
+
+
 @pytest.mark.parametrize(("sql", "reason"), [
     ("UPDATE matches SET queue_id = 1090 WHERE rowid = 1", "queue_id is not ranked TFT (1100): 1"),
     ("UPDATE matches SET payload_json = '{}' WHERE rowid = 2", "payload metadata.match_id does not match: 1"),
