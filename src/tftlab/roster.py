@@ -64,6 +64,18 @@ class Roster:
     #: snapshot did not check; anything but an empty list means the
     #: trait-item guard is incomplete.
     unresolved_emblems: list[str] | None = None
+    #: Trait id -> its breakpoints (CommunityDragon `effects[].minUnits`,
+    #: verified by `tftlab.cdragon.trait_breakpoints`). A trait that failed
+    #: validation is absent (and listed in `trait_breakpoints_rejected`
+    #: with the reason). None when the snapshot has no breakpoint data.
+    trait_breakpoints: dict[str, list[int]] | None = None
+    trait_breakpoints_rejected: dict[str, str] | None = None
+
+    def breakpoints(self, trait_id: str | None) -> tuple[int, ...] | None:
+        """The trait's verified breakpoints as game data, or None (unknown,
+        or failed validation). Never derived from match data."""
+        found = (self.trait_breakpoints or {}).get(trait_id or "")
+        return tuple(found) if found else None
 
     @property
     def trait_item_guard_verified(self) -> bool:
@@ -146,4 +158,6 @@ def load_roster() -> Roster:
     return Roster(
         set_number=data["set_number"], champions=data["champions"], traits=data["traits"],
         trait_items=data.get("trait_items"), unresolved_emblems=data.get("unresolved_emblems"),
+        trait_breakpoints=data.get("trait_breakpoints"),
+        trait_breakpoints_rejected=data.get("trait_breakpoints_rejected"),
     )

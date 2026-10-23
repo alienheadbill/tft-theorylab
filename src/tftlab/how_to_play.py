@@ -215,6 +215,8 @@ def trait_directions(
             "games": t["games"],
             "share_of_carry_games": t["share_of_carry_games"],
             "above_baseline_only": t.get("above_baseline_only", False),
+            # Game data beside the observed count (see `champion_investigation._trait_rows`).
+            "breakpoints": t.get("breakpoints"),
         })
     return out[:limit]
 

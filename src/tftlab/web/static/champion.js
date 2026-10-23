@@ -452,6 +452,16 @@ function traitCountRow(c) {
     </li>`;
 }
 
+// A trait's breakpoints are game data (CommunityDragon), shown beside the
+// observed unit counts, never in place of them.
+const breakpointsText = bp => `breakpoints ${bp.join(' / ')}`;
+function traitBreakpoints(t) {
+  if (t.breakpoints && t.breakpoints.length) {
+    return `<p class="trait-bp">${esc(breakpointsText(t.breakpoints))} <span class="trait-bp-src">game data, CommunityDragon</span></p>`;
+  }
+  return t.breakpoints_note ? `<p class="trait-bp trait-bp-none">${esc(t.breakpoints_note)}</p>` : '';
+}
+
 function traitSection(inv, name) {
   const total = inv.carry.games;
   const render = t => `
@@ -461,12 +471,13 @@ function traitSection(inv, name) {
         <span class="row-name">${esc(t.name)}</span>
         ${rowMeta(t, name)}
       </div>
+      ${traitBreakpoints(t)}
       <ol class="count-list" aria-label="${esc(t.name)} by observed unit count">${t.counts.map(traitCountRow).join('')}</ol>
     </li>`;
   return `
     <section class="inv-section" aria-labelledby="sec-traits">
       <h3 id="sec-traits">Traits around ${esc(name)} ${stamp('observed', 'Observed')}</h3>
-      <p class="inv-help">The traits most often active on ${esc(name)} carry boards, most common first. Under each, the unit counts Riot reported for that trait on those final boards ("4 units"), with how many carry boards had that count and how they placed; "other" is top 4 on the rest of its carry boards. Every share is out of the same ${plural(total, 'carry board')}, and one board counts under each trait it had active, so shares don't add up to 100%. These are associations: forcing a trait won't necessarily produce the same result.</p>
+      <p class="inv-help">The traits most often active on ${esc(name)} carry boards, most common first. Under each, the unit counts Riot reported for that trait on those final boards ("4 units"), with how many carry boards had that count and how they placed; "other" is top 4 on the rest of its carry boards. Every share is out of the same ${plural(total, 'carry board')}, and one board counts under each trait it had active, so shares don't add up to 100%. Each trait's breakpoints, where shown, are game data from CommunityDragon, for reference beside the observed counts. These are associations: forcing a trait won't necessarily produce the same result.</p>
       ${inv.traits.length ? `<ol class="ev-list trait-list">${inv.traits.map(render).join('')}</ol>` : '<p class="none-note">No active traits recorded on these carry boards yet.</p>'}
     </section>`;
 }
@@ -594,7 +605,7 @@ function howToPlaySection(inv) {
     : htpEmpty('No recurring 3–4 unit core has enough boards yet.');
   const traits = h.trait_directions.length
     ? `<ul class="htp-tiles" aria-label="Trait directions">${h.trait_directions
-        .map(t => `<li>${tile(t.name, t.art_url, { kind: 'trait', sub: `<b>${plural(t.num_units, 'unit')}</b> · ${fmtPctShort(t.count_share)} of boards` })}</li>`)
+        .map(t => `<li>${tile(t.name, t.art_url, { kind: 'trait', sub: `<b>${plural(t.num_units, 'unit')}</b> · ${fmtPctShort(t.count_share)} of boards${t.breakpoints ? `<span class="htp-bp">${esc(breakpointsText(t.breakpoints))}</span>` : ''}` })}</li>`)
         .join('')}</ul>`
     : htpEmpty('No useful buildable trait direction in this sample.');
   return `
@@ -614,7 +625,7 @@ function howToPlaySection(inv) {
       <h3 class="htp-heading" id="htp-around">Build around</h3>
       <div class="htp-grid">
         <section class="htp-card" aria-labelledby="htp-mates"><h4 id="htp-mates">Teammates</h4>${mates}</section>
-        <section class="htp-card" aria-labelledby="htp-traits"><h4 id="htp-traits">Trait direction</h4>${traits}<p class="htp-foot">Unit counts Riot reported on the final boards, not official trait thresholds.</p></section>
+        <section class="htp-card" aria-labelledby="htp-traits"><h4 id="htp-traits">Trait direction</h4>${traits}<p class="htp-foot">Unit counts Riot reported on the final boards. Breakpoints are game data from CommunityDragon, shown for reference.</p></section>
         <section class="htp-card htp-span" aria-labelledby="htp-cores"><h4 id="htp-cores">Recurring cores</h4>${coreLines}<p class="htp-foot">Units seen together on the same final carry boards, most common first. Other units were there too: not exact comps.</p></section>
         ${distributionCard(inv)}
         ${boardsPreview(inv)}

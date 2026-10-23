@@ -365,3 +365,69 @@ def test_fetch_game_json_reads_raw_game_exports_uncached(tmp_path) -> None:
         client.fetch_game_json(MAP22_BIN_PATH)
     assert seen == ["https://raw.communitydragon.org/latest/game/data/maps/shipping/map22/map22.bin.json"] * 2
     assert not list(tmp_path.iterdir())  # nothing cached
+
+
+# ---------------------------------------------------------------- trait breakpoints (game data)
+
+from tftlab.cdragon import roster_snapshot, trait_breakpoints  # noqa: E402
+
+
+def _effect(low, high, style=1):
+    return {"minUnits": low, "maxUnits": high, "style": style, "variables": {}}
+
+
+@pytest.mark.parametrize(("effects", "expected"), [
+    ([_effect(2, 2), _effect(3, 3, 3), _effect(4, 25000, 5)], (2, 3, 4)),  # Executioner, as served
+    ([_effect(1, 25000, 4)], (1,)),                                        # a unique trait: one breakpoint
+    ([_effect(2, 3), _effect(4, 5), _effect(6, 25000)], (2, 4, 6)),        # gaps between ranges are fine
+])
+def test_trait_breakpoints_are_the_effects_min_units(effects, expected) -> None:
+    assert trait_breakpoints(effects) == (expected, None)
+
+
+@pytest.mark.parametrize(("effects", "why"), [
+    (None, "no effects"),
+    ([], "no effects"),
+    ([_effect("2", 2)], "no integer minUnits"),                            # Set 18's Eclipse kind of value
+    ([_effect(2.0, 2)], "no integer minUnits"),
+    ([_effect(True, 2)], "no integer minUnits"),
+    ([_effect(0, 2)], "no integer minUnits"),
+    ([_effect(2, None)], "no valid maxUnits"),
+    ([_effect(3, 2)], "no valid maxUnits"),
+    ([_effect(3, 3), _effect(2, 2)], "not strictly increasing"),           # unordered
+    ([_effect(2, 2), _effect(2, 25000)], "not strictly increasing"),       # duplicated
+    ([_effect(1, 25000, 5), _effect(1, 1), _effect(2, 25000, 5)], "not strictly increasing"),  # Rival: overlapping
+    (["not an effect"], "no integer minUnits"),
+])
+def test_malformed_trait_effects_give_no_breakpoints(effects, why) -> None:
+    breakpoints, issue = trait_breakpoints(effects)
+    assert breakpoints is None and why in issue
+
+
+def test_breakpoints_reach_trait_metadata_and_the_roster_snapshot() -> None:
+    payload = {"items": [], "setData": [{"number": 18, "champions": [], "traits": [
+        {"apiName": "DA_18_Executioner", "name": "Executioner", "icon": "x.tex",
+         "effects": [_effect(2, 2), _effect(3, 3, 3), _effect(4, 25000, 5)]},
+        {"apiName": "DA_18_Rival", "name": "Rival", "icon": "r.tex",
+         "effects": [_effect(1, 25000, 5), _effect(1, 1), _effect(2, 25000, 5)]},
+        {"apiName": "DA_18_Quiet", "name": "Quiet", "icon": "q.tex"},
+    ]}]}
+    meta = parse_set_metadata(payload, patch="latest")
+    assert meta.traits["DA_18_Executioner"].breakpoints == (2, 3, 4)
+    assert meta.traits["DA_18_Executioner"].breakpoint_issue is None
+    assert meta.traits["DA_18_Rival"].breakpoints is None and meta.traits["DA_18_Quiet"].breakpoints is None
+    snapshot = roster_snapshot(meta)
+    assert snapshot["trait_breakpoints"] == {"DA_18_Executioner": [2, 3, 4]}
+    assert set(snapshot["trait_breakpoints_rejected"]) == {"DA_18_Quiet", "DA_18_Rival"}
+
+
+def test_the_committed_roster_ships_verified_breakpoints() -> None:
+    from tftlab.roster import load_roster
+
+    roster = load_roster()
+    executioner, = roster.trait_ids("Executioner")
+    rival, = roster.trait_ids("Rival")
+    assert roster.breakpoints(executioner) == (2, 3, 4)
+    assert roster.breakpoints(rival) is None and rival in roster.trait_breakpoints_rejected
+    assert roster.breakpoints("DA_Not_A_Trait") is None
+    assert set(roster.trait_breakpoints) | set(roster.trait_breakpoints_rejected) == set(roster.traits)

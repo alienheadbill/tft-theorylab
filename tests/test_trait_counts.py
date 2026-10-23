@@ -248,10 +248,30 @@ def test_trait_rows_keep_their_with_vs_without_numbers(db: Database) -> None:
 WEB = Path(__file__).parent.parent / "src" / "tftlab" / "web"
 
 
+#: The only places champion.js may say "breakpoint": CommunityDragon game data
+#: shown beside the observed counts (verified `Roster.breakpoints`).
+GAME_DATA_BREAKPOINT_TEXT = (
+    "A trait's breakpoints are game data (CommunityDragon)",
+    "Each trait's breakpoints, where shown, are game data from CommunityDragon",
+    "Breakpoints are game data from CommunityDragon",
+    "const breakpointsText = bp => `breakpoints ${bp.join(' / ')}`",
+    "breakpointsText(t.breakpoints)", "function traitBreakpoints(t)", "traitBreakpoints(t)",
+    "t.breakpoints && t.breakpoints.length", "t.breakpoints ?", "t.breakpoints_note", "trait-bp",
+)
+
+
 def test_no_breakpoint_ordinal_labels_remain_in_the_pages() -> None:
-    champion_js = (WEB / "static" / "champion.js").read_text()
-    app_js = (WEB / "static" / "app.js").read_text().replace("best_trait_breakpoints", "")
-    for text in (champion_js, app_js, (WEB / "index.html").read_text(), (WEB / "champion.html").read_text()):
+    """Riot's tier ordinal is never shown, and "breakpoint" appears only as
+    CommunityDragon game data beside the observed counts."""
+    champion_js = (WEB / "static" / "champion.js").read_text(encoding="utf-8")
+    rest = champion_js
+    for allowed in GAME_DATA_BREAKPOINT_TEXT:
+        assert allowed in champion_js, allowed
+        rest = rest.replace(allowed, "")
+    app_js = (WEB / "static" / "app.js").read_text(encoding="utf-8").replace("best_trait_breakpoints", "")
+    for text in (rest, app_js, (WEB / "index.html").read_text(encoding="utf-8"),
+                 (WEB / "champion.html").read_text(encoding="utf-8")):
         assert "breakpoint" not in text.lower()
+    for text in (champion_js, app_js):
         assert not re.search(r"row\.tier|\.tier\b|traitTier", text)
-    assert "Traits around" in champion_js and "'unit'" in champion_js
+    assert "Traits around" in champion_js and "'unit'" in champion_js and "game data, CommunityDragon" in champion_js

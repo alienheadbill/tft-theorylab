@@ -601,13 +601,23 @@ def intrinsic_trait_rows(character_id: str, champion_name: str) -> list[dict[str
     ]
 
 
+#: Shown instead of breakpoints for a trait whose game data failed validation.
+BREAKPOINTS_REJECTED_NOTE = "breakpoints not shown: CommunityDragon's data for this trait did not pass validation"
+
+
 def _trait_rows(profile: TraitProfile) -> list[dict[str, Any]]:
     """One row per active trait (most common first; ties by display name,
     then id), each with its observed unit counts (lowest count first).
     Shares are of the champion's carry boards; one board is counted under
     every trait it had active. For the champion's own singleton-provider
     traits (`above_baseline_only`), a row covers only boards that reported
-    the trait above the one unit picking the champion guarantees."""
+    the trait above the one unit picking the champion guarantees.
+
+    `breakpoints` is game data beside the evidence: the trait's verified
+    CommunityDragon breakpoints (`Roster.breakpoints`), or None where none
+    passed validation. The observed unit counts stay the evidence; Riot's
+    `tier_current` is never used."""
+    roster = load_roster()
     rows = [
         {
             "trait_id": a.key,
@@ -616,6 +626,9 @@ def _trait_rows(profile: TraitProfile) -> list[dict[str, Any]]:
             **_comparison(a),
             "above_baseline_only": a.key in profile.baseline_traits,
             "counts": [_trait_count_row(c) for c in profile.counts.get(a.key, [])],
+            "breakpoints": list(roster.breakpoints(a.key) or []) or None,
+            "breakpoints_note": BREAKPOINTS_REJECTED_NOTE
+            if a.key in (roster.trait_breakpoints_rejected or {}) else None,
         }
         for a in profile.active
     ]

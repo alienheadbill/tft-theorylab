@@ -885,6 +885,12 @@ input[type="search"]::placeholder { color: var(--graphite); opacity: 0.8; }
 .htp-note { margin: 10px 0 0; font-size: 14px; }
 .htp-num { font: 12.5px var(--mono); color: var(--graphite); white-space: nowrap; }
 
+/* trait breakpoints: game data beside the observed counts */
+.trait-bp { margin: 2px 0 4px 46px; font: 12.5px var(--mono); color: var(--graphite); }
+.trait-bp-src { margin-left: 6px; font-style: italic; font-family: var(--serif); font-size: 12.5px; }
+.trait-bp-none { font-style: italic; font-family: var(--serif); }
+.htp-bp { display: block; font: 11.5px var(--mono); color: var(--graphite); }
+
 /* distributions: one bar per value, in value order (levels, stars, items) */
 .dist-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px 22px; }
 .dist-block { min-width: 0; }
