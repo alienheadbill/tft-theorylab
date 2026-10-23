@@ -248,7 +248,7 @@ Run it by hand for now. Running it unattended (on a schedule) is for after these
 - **The right code:** this folder is exactly `origin/main` with no local changes, so the snapshot's analytics match the code the website runs (`git pull` keeps it there).
 - **A successful collection:** the newest collection report that changed data is readable and says `success`. A run stopped before collecting (`preflight_failed`, for example an expired key) changed nothing and is passed over. Any other outcome blocks. So does a report that can't be read or has no outcome, because that collection may have changed data and then crashed.
 - **A trusted current patch:** not the pause around a patch change.
-- **Enough data for a new patch:** when the website doesn't serve the current patch yet, the current patch alone needs at least **200 matches**. Matches from the previous patch included alongside never count towards it.
+- **Enough data for a new patch:** every current balance window the website doesn't serve yet needs at least **200 matches of its own**. Usually that's the patch itself (`18.5`); after a registered mid-patch cutover it's each new balance window (`18.2b`). Neither the previous patch included alongside nor an older balance window of the same patch (`18.2a`) counts towards it.
 - **Enough new data:** otherwise there must be at least **200 new matches**, compared patch by patch with what the website reports (`/api/balance-windows`). `--force` skips this check and the new-patch one, and nothing else.
 - **A known way back:** a read-only Render check finds exactly one web service at `TFT_PUBLIC_SITE_URL` and reads its current `TFT_SNAPSHOT_URL` and `TFT_SNAPSHOT_SHA256`. Both must be present and well-formed, and the website must report the snapshot it serves now (`/api/source`). This is the snapshot it would roll back to. Without one, it refuses to start.
 - **A verified snapshot:** the exporter checks every match, including that **every exported match** is linked to a completed collection run (see "Making a public website snapshot"). If a collection is running, it skips with "Collection is still running; publication was skipped." and changes nothing.
@@ -258,7 +258,7 @@ Run it by hand for now. Running it unattended (on a schedule) is for after these
 **Then:**
 1. It creates a new GitHub Release (`public-snapshot-<patch>-<date>`, `-r2` and so on if that tag exists) with exactly the `.gz` and its manifest, and checks both uploaded completely. If not, Render is never touched. The release is kept whatever happens later, for diagnosis or a retry.
 2. It sets `TFT_SNAPSHOT_URL` and `TFT_SNAPSHOT_SHA256` on Render (nothing else) and starts a deploy.
-3. It counts as published only when the deploy is `live`, `/api/source` reports the new snapshot, and `/api/discovery` serves the newest patch from prepared data (`prepared.status = current`).
+3. It counts as published only when the deploy is `live`, `/api/source` reports the new snapshot, and `/api/discovery` serves the **newest current balance window** from prepared data (`prepared.status = current`).
 
 **If anything fails once Render has been changed**, it rolls back and checks the rollback:
 - It puts back whichever of the two settings differ from the previous values.

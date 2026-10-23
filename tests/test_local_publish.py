@@ -50,7 +50,9 @@ class World:
     put_failures: set[str] = field(default_factory=set)
     deploy_post_fails: bool = False
     source_stuck: bool = False
-    discovery: str | int = "current"
+    #: Prepared status for every window, a per-window dict, or an HTTP status code.
+    discovery: str | int | dict = "current"
+    discovery_windows: list[str] = field(default_factory=list)
     render_status: int = 200
     services: list[tuple[str, str]] = field(default_factory=lambda: [("srv-other", "https://other.onrender.com"),
                                                                       (SERVICE, SITE)])
@@ -115,9 +117,12 @@ class World:
                 return httpx.Response(200, json={"windows": [{"balance_window": w, "matches": n}
                                                              for w, n in shown["windows"].items()]})
             if request.url.path == "/api/discovery":
-                if isinstance(self.discovery, int):
-                    return httpx.Response(self.discovery, text="<html>Internal Server Error</html>")
-                return httpx.Response(200, json={"prepared": {"status": self.discovery}})
+                window = request.url.params.get("balance_window")
+                self.discovery_windows.append(window)
+                status = self.discovery.get(window, "current") if isinstance(self.discovery, dict) else self.discovery
+                if isinstance(status, int):
+                    return httpx.Response(status, text="<html>Internal Server Error</html>")
+                return httpx.Response(200, json={"prepared": {"status": status}})
         assert url.startswith(lp.RENDER_API), url
         assert request.headers["authorization"] == f"Bearer {RENDER_KEY}"
         if self.render_status != 200:
@@ -273,7 +278,7 @@ def test_a_new_patch_below_its_floor_is_skipped(tmp_path, monkeypatch) -> None:
     world = World()
     report = publish(local, world)
     assert report.outcome == lp.SKIPPED and report.exit_code == 0
-    assert "first publication of patch window 18.5: 199 current-patch matches, at least 200" in report.message
+    assert "first publication of balance window 18.5: 18.5: 199 matches of its own, at least 200" in report.message
     assert local.exports == [] and world.gh_calls() == [] and world.render() == []
 
 
@@ -282,7 +287,8 @@ def test_a_new_patch_at_its_floor_is_published_with_the_previous_patch_alongside
     report = publish(local, World())
     assert report.outcome == lp.PUBLISHED, report.message
     assert local.exports == [["18.4", "18.5"]] and report.tag == "public-snapshot-18.4_18.5-20261024"
-    assert any(s.name == "New data" and "first publication of 18.5: 200" in s.detail for s in report.steps)
+    assert any(s.name == "New data" and "first publication of 18.5: 18.5: 200 matches of its own" in s.detail
+               for s in report.steps)
 
 
 def test_force_overrides_the_new_patch_floor(tmp_path, monkeypatch) -> None:
@@ -295,7 +301,58 @@ def test_force_overrides_the_new_patch_floor(tmp_path, monkeypatch) -> None:
 def test_previous_patch_matches_never_count_towards_the_new_patch_floor(tmp_path, monkeypatch) -> None:
     local = Local(tmp_path, monkeypatch, windows=[("18.5", 150, 2), ("18.4", 9000, 1)])  # 5,584 new 18.4 matches
     report = publish(local, World())
-    assert report.outcome == lp.SKIPPED and "previous-patch matches do not count" in report.message
+    assert report.outcome == lp.SKIPPED and "18.5: 150 matches of its own" in report.message
+    assert "previous-patch matches and older balance windows of the same patch do not count" in report.message
+
+
+# Two balance windows inside one client patch (a registered mid-patch cutover), latest first, as
+# `local_collector._window_balance_windows` returns them. The site already serves the older one.
+LIVE_18_2A = {"exported_at": OLD["exported_at"], "windows": {"18.2a": 1000}}
+
+
+def _two_windows(tmp_path, monkeypatch, new_count: int) -> Local:
+    return Local(tmp_path, monkeypatch, current=("18.2b", "18.2a"),
+                 windows=[("18.2b", new_count, 3), ("18.2a", 1000, 2), ("18.1", 3000, 1)])
+
+
+def test_a_new_balance_window_cannot_borrow_its_older_siblings_matches(tmp_path, monkeypatch) -> None:
+    local = _two_windows(tmp_path, monkeypatch, 50)
+    world = World(serving=LIVE_18_2A, snapshots={OLD_URL: LIVE_18_2A})
+    report = publish(local, world)
+    assert report.outcome == lp.SKIPPED, report.message  # 50 + 1,000 = 1,050 must not count
+    assert "first publication of balance window 18.2b: 18.2b: 50 matches of its own" in report.message
+    assert local.exports == [] and world.gh_calls() == [] and world.render("PUT") == []
+
+
+def test_every_new_balance_window_needs_its_own_floor(tmp_path, monkeypatch) -> None:
+    local = Local(tmp_path, monkeypatch, current=("18.2b", "18.2a"), windows=[("18.2b", 500, 3), ("18.2a", 150, 2)])
+    report = publish(local, World())  # the site serves 18.4 only: both windows are new, 18.2a is short
+    assert report.outcome == lp.SKIPPED and "first publication of balance window 18.2a" in report.message
+    assert "18.2b: 500, 18.2a: 150 matches of its own" in report.message
+
+
+def test_discovery_is_verified_for_the_newest_current_balance_window(tmp_path, monkeypatch) -> None:
+    local = _two_windows(tmp_path, monkeypatch, 200)
+    world = World(serving=LIVE_18_2A, snapshots={OLD_URL: LIVE_18_2A})
+    report = publish(local, world)
+    assert report.outcome == lp.PUBLISHED, report.message
+    assert local.exports == [["18.2b", "18.2a"]] and world.discovery_windows == ["18.2b"]
+    assert any(s.name == "Discovery" and s.detail.startswith("18.2b ") for s in report.steps)
+
+
+def test_stale_discovery_for_the_newest_window_fails_even_if_the_older_one_is_current(tmp_path, monkeypatch) -> None:
+    local = _two_windows(tmp_path, monkeypatch, 200)
+    world = World(serving=LIVE_18_2A, snapshots={OLD_URL: LIVE_18_2A}, discovery={"18.2b": "stale", "18.2a": "current"})
+    report = publish(local, world)
+    assert report.outcome == lp.FAILED and "Discovery for 18.2b is not served from prepared data (stale)" in report.message
+    assert report.rollback == lp.ROLLBACK_VERIFIED and world.serving == LIVE_18_2A
+
+
+def test_discovery_is_verified_for_the_current_patch_when_the_previous_one_is_included(tmp_path, monkeypatch) -> None:
+    local = Local(tmp_path, monkeypatch, windows=[("18.5", 600, 2), ("18.4", 3416, 1)])
+    world = World()
+    assert publish(local, world).outcome == lp.PUBLISHED
+    assert local.exports == [["18.4", "18.5"]] and world.discovery_windows == ["18.5"]
 
 
 def test_new_data_is_compared_window_by_window_with_the_live_site(tmp_path, monkeypatch) -> None:

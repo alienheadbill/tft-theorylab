@@ -260,22 +260,24 @@ def publication_gate(live: dict[str, Any], windows: Sequence[str], counts: dict[
                      min_new: int, min_first: int) -> tuple[str | None, str]:
     """(why not to publish, or None; what was compared).
 
-    A current-patch window the live site does not serve yet is a first
-    publication of that patch: it needs `min_first` matches in the current
-    patch itself -- previous-patch matches included alongside never count.
-    Otherwise new data is compared window by window with the live site's
-    own per-window counts (`/api/balance-windows`), never total against
-    total, and needs `min_new` new matches."""
+    Each current balance window the live site does not serve yet is a first
+    publication of that window: it needs `min_first` matches of its OWN.
+    Neither the previous patch included alongside nor an older balance
+    window of the same client patch (`18.2a` next to a new `18.2b`) ever
+    counts towards it. Otherwise new data is compared window by window with
+    the live site's own per-window counts (`/api/balance-windows`), never
+    total against total, and needs `min_new` new matches."""
     live_counts: dict[str, int] = live.get("window_matches") or {} if live.get("mode") == "snapshot" else {}
-    new_patch = [w for w in current if w not in live_counts]
-    if new_patch:
-        have = sum(counts.get(w, 0) for w in current)
-        label = ", ".join(new_patch)
-        if have < min_first:
-            return (f"first publication of patch window {label}: {have} current-patch matches, at least {min_first} "
-                    "are needed (previous-patch matches do not count); the site keeps its current snapshot",
-                    f"first publication of {label}")
-        return None, f"first publication of {label}: {have} current-patch matches (at least {min_first})"
+    new_windows = [w for w in current if w not in live_counts]
+    if new_windows:
+        own = ", ".join(f"{w}: {counts.get(w, 0)}" for w in new_windows)
+        short = [w for w in new_windows if counts.get(w, 0) < min_first]
+        if short:
+            return (f"first publication of balance window {', '.join(short)}: {own} matches of its own, at least "
+                    f"{min_first} are needed per new window (previous-patch matches and older balance windows of "
+                    "the same patch do not count); the site keeps its current snapshot",
+                    f"first publication of {', '.join(new_windows)}")
+        return None, f"first publication of {', '.join(new_windows)}: {own} matches of its own (at least {min_first} each)"
     comparable = [w for w in windows if w in live_counts]
     new = sum(max(0, counts.get(w, 0) - int(live_counts[w] or 0)) for w in comparable)
     label = ", ".join(comparable)
@@ -763,7 +765,7 @@ def run_local_publish(
                 step("Website", "fail", "/api/source does not report the new snapshot")
                 return fail_after_change("the website did not report the new snapshot after the deploy")
             step("Website", "ok", f"serves the new snapshot ({prov['matches']} matches)")
-            latest = windows[-1]
+            latest = current[0]  # the newest current balance window (`current` is latest first)
             prepared = discovery_status(http, site, latest)
             if prepared != "current":
                 step("Discovery", "fail", f"{latest}: prepared status {prepared}")
