@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from .analytics import (
     CANONICAL_UNIT_TIEBREAK_SQL,
     available_balance_windows,
+    carry_board_average,
     carry_commitment_stats,
     carry_partner_associations,
     default_balance_window,
@@ -35,7 +36,13 @@ from .demo import generate_demo_matches
 from .experiments import ExperimentNotFound, get_experiment, list_experiments, seed_demo_experiments
 from .game_art import enrich_candidate, experiment_art, field_note_art
 from .public_snapshot import read_snapshot_provenance
-from .prepared_discovery import PreparedLookup, lookup_prepared, read_prepared_candidate, read_prepared_candidates
+from .prepared_discovery import (
+    PreparedLookup,
+    lookup_prepared,
+    read_prepared_candidate,
+    read_prepared_candidates,
+    source_fingerprint,
+)
 from .storage import Database
 from .scout import comp_fingerprint
 from .sources import scout_checklist
@@ -432,6 +439,40 @@ def cached_discovery_population(db: Database, balance_window: str) -> list:
         while len(_POPULATION_CACHE) > _POPULATION_CACHE_SIZE:
             _POPULATION_CACHE.pop(next(iter(_POPULATION_CACHE)))
         return population
+
+
+# ---------------------------------------------------------------- window-average cache
+#
+# The Champion Investigation page compares a champion with "All carries": the
+# window-wide `carry_board_average`. It is identical for every champion in a
+# window and was most of a champion page's request time, so it is kept the
+# same way as the population above:
+#   key       : (database target, balance window)
+#   freshness : prepared Discovery's `source_fingerprint` (match count, latest
+#               and summed game times, data migrations), read on every
+#               request; an ingest in live mode changes it and forces a
+#               recompute. The champion's own statistics are never cached.
+#   size      : a handful of windows; the oldest entry is dropped first.
+_WINDOW_AVERAGE_CACHE: dict[tuple[str, str], tuple[str, dict[str, float | int] | None]] = {}
+_WINDOW_AVERAGE_CACHE_SIZE = 8
+_WINDOW_AVERAGE_LOCK = threading.Lock()
+
+
+def cached_carry_board_average(db: Database, balance_window: str) -> dict[str, float | int] | None:
+    fingerprint = source_fingerprint(db, balance_window).fingerprint
+    key = (_database_target(), balance_window)
+    with _WINDOW_AVERAGE_LOCK:
+        hit = _WINDOW_AVERAGE_CACHE.get(key)
+        if hit is not None and hit[0] == fingerprint:
+            average = hit[1]
+        else:
+            average = carry_board_average(db, balance_window)
+            _WINDOW_AVERAGE_CACHE.pop(key, None)
+            _WINDOW_AVERAGE_CACHE[key] = (fingerprint, average)
+            while len(_WINDOW_AVERAGE_CACHE) > _WINDOW_AVERAGE_CACHE_SIZE:
+                _WINDOW_AVERAGE_CACHE.pop(next(iter(_WINDOW_AVERAGE_CACHE)))
+    # A copy, so no response can change the cached entry.
+    return dict(average) if average is not None else None
 
 
 def carry_partners(db: Database, character_id: str, balance_window: str) -> list[tuple[Any, ...]]:
@@ -845,7 +886,9 @@ def create_app() -> FastAPI:
             champion = resolve_champion(db, resolved_window, key)
             if champion is None:
                 raise HTTPException(status_code=404, detail="Champion not found")
-            body = champion_investigation(db, champion, resolved_window, top_n=top_n)
+            body = champion_investigation(
+                db, champion, resolved_window, top_n=top_n, window_average=cached_carry_board_average
+            )
         return {"demo": demo, "backend": db.dialect, **body}
 
     @app.get("/api/discovery")
