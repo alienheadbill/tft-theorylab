@@ -19,9 +19,11 @@ implementation instead of duplicating it:
      and CommunityDragon costs -- all before the database is modified;
   2. a consistent pre-run backup (SQLite's online backup API) with
      retention;
-  3. bounded collection: `ingest.ingest_ladder` with the production
-     cohort defaults, bounded to the trusted window, with its own rate
-     limiting, seed rotation, deduplication and run finalization;
+  3. collection, bounded to the trusted window, with its own rate
+     limiting, seed rotation, deduplication and run finalization:
+     `ingest.ingest_ladder` with the production cohort defaults
+     (`bounded`, the default), or `collection.collect_maximum` within hard
+     duration/request/match-fetch budgets (`maximum`, opt-in);
   4. `validate.validate_live_data` for the window's balance window(s);
   5. `prepared_discovery.prepare_window` for those windows only;
   6. a plain-language report (no PUUIDs, match ids or secrets).
@@ -41,6 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
+from .collection import CollectionBudgets, collect_maximum
 from .ingest import DEFAULT_MAX_LADDER_PAGES, ingest_ladder
 from .prepared_discovery import lookup_prepared, prepare_window
 from .riot import RiotApiError, check_riot_key, classify_riot_error, is_fatal_riot_error
@@ -69,6 +72,12 @@ DEFAULT_SEED_ALLOCATION: Mapping[str, int] = {
 DEFAULT_MATCHES_PER_SEED = 10
 #: Operator policy cap on top of Riot's advertised limits, as in production.
 DEFAULT_RATE_CEILING = "10:10"
+#: `bounded` (default) or `maximum` (`collection.collect_maximum`, opt-in).
+COLLECTION_MODES = ("bounded", "maximum")
+#: Maximum mode's default budgets for one local run: 45 minutes, and request
+#: and match-fetch budgets a development key can reach in that time under the
+#: 10:10 ceiling (at most 1 request/s), so the clock usually stops it first.
+DEFAULT_MAXIMUM_BUDGETS = CollectionBudgets(max_duration_s=45 * 60, max_requests=2400, max_match_fetches=2000)
 DEFAULT_KEEP_BACKUPS = 7
 #: Free space required before collecting, besides room for one backup.
 MIN_FREE_BYTES = 512 * 1024 * 1024
@@ -372,6 +381,13 @@ class CollectConfig:
     seed_allocation: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_SEED_ALLOCATION))
     matches_per_seed: int = DEFAULT_MATCHES_PER_SEED
     max_ladder_pages: int = DEFAULT_MAX_LADDER_PAGES
+    #: `bounded` uses seed_allocation/matches_per_seed; `maximum` uses budgets.
+    collection_mode: str = "bounded"
+    budgets: CollectionBudgets = DEFAULT_MAXIMUM_BUDGETS
+
+    def __post_init__(self) -> None:
+        if self.collection_mode not in COLLECTION_MODES:
+            raise ValueError(f"collection_mode must be one of {', '.join(COLLECTION_MODES)}")
 
 
 #: Outcomes, in the order a run can reach them. Only SUCCESS exits 0.
@@ -457,6 +473,7 @@ def run_local_collect(
     client_factory: Callable[..., Any],
     fetch_metadata: Callable[[], Any],
     ingest: Callable[..., Any] = ingest_ladder,
+    collect: Callable[..., Any] = collect_maximum,
     validate: Callable[..., Any] = validate_live_data,
     prepare: Callable[..., Any] = prepare_window,
     database_url_set: bool = False,
@@ -593,10 +610,19 @@ def run_local_collect(
                          "removed": list(backup.removed), "note": backup.note}
         check("Backup", "ok", f"{backup.path.name} ({human_bytes(backup.bytes)})" if backup.path else backup.note)
 
-        # 7. bounded collection with the existing ingest implementation.
-        check("Collection", "info",
-              f"bounded: {', '.join(f'{c} {n}' for c, n in config.seed_allocation.items())} seeds x "
-              f"{config.matches_per_seed} recent matches, patch {window.client_patch} only (this can take 10-25 minutes)")
+        # 7. collection with the existing implementations: bounded, or maximum within budgets.
+        maximum = config.collection_mode == "maximum"
+        if maximum:
+            budgets = config.budgets
+            check("Collection", "info",
+                  f"maximum: every Challenger-Platinum ladder, breadth-first, patch {window.client_patch} only, "
+                  f"until {budgets.max_duration_s / 60:g} minutes, {budgets.max_requests} Riot requests or "
+                  f"{budgets.max_match_fetches} match fetches, whichever comes first")
+        else:
+            check("Collection", "info",
+                  f"bounded: {', '.join(f'{c} {n}' for c, n in config.seed_allocation.items())} seeds x "
+                  f"{config.matches_per_seed} recent matches, patch {window.client_patch} only "
+                  "(this can take 10-25 minutes)")
         # Always `local-<ms>`: never derived from CI variables (GITHUB_RUN_ID would give
         # every run in one job the same id), and unique per run on one computer.
         run_id = f"local-{at_ms}"
@@ -619,17 +645,28 @@ def run_local_collect(
             if db.dialect != "sqlite":  # pragma: no cover - resolve_local_db makes this unreachable
                 raise LocalTargetError("the local collector only writes to SQLite")
             try:
-                result = ingest(
-                    client, db,
-                    seed_allocation=dict(config.seed_allocation),
-                    matches_per_player=config.matches_per_seed,
-                    max_ladder_pages=config.max_ladder_pages,
-                    cost_lookup=metadata.cost_for_champion,
-                    history_start_time=window.starts_at // 1000,
-                    history_end_time=window.ends_at // 1000,
-                    run_id=run_id,
-                    now_ms=at_ms,
-                )
+                if maximum:
+                    result = collect(
+                        client, db,
+                        budgets=config.budgets,
+                        cost_lookup=metadata.cost_for_champion,
+                        history_start_time=window.starts_at // 1000,
+                        history_end_time=window.ends_at // 1000,
+                        run_id=run_id,
+                        now_ms=lambda: at_ms,
+                    )
+                else:
+                    result = ingest(
+                        client, db,
+                        seed_allocation=dict(config.seed_allocation),
+                        matches_per_player=config.matches_per_seed,
+                        max_ladder_pages=config.max_ladder_pages,
+                        cost_lookup=metadata.cost_for_champion,
+                        history_start_time=window.starts_at // 1000,
+                        history_end_time=window.ends_at // 1000,
+                        run_id=run_id,
+                        now_ms=at_ms,
+                    )
             except Exception as exc:
                 report.riot = _riot_telemetry(client)
                 report.ingest = {"run_id": run_id, "run_status": "failed", "error": type(exc).__name__}
@@ -655,7 +692,8 @@ def run_local_collect(
                     COLLECTION_FAILED,
                 )
             report.riot = _riot_telemetry(client)
-            report.ingest = {
+            report.ingest = _maximum_summary(result) if maximum else {
+                "mode": "bounded",
                 "run_id": result.run_id, "run_status": result.run_status,
                 "inserted": result.matches_inserted, "duplicates_skipped": result.duplicates_skipped,
                 "fetched": result.matches_fetched, "failed_match_requests": result.failed_requests,
@@ -666,8 +704,10 @@ def run_local_collect(
                 "empty_histories": result.seeds_with_empty_history,
                 "seed_ledger_rows": result.seed_ledger_rows, "discovery_rows": result.discovery_rows,
             }
-            check("Collection", "ok", f"{result.matches_inserted} new matches, {result.duplicates_skipped} already stored")
-            if result.seed_players and result.failed_history_requests == result.seed_players:
+            check("Collection", "ok", f"{report.ingest['inserted']} new matches, "
+                  f"{report.ingest['duplicates_skipped']} already stored"
+                  + (f"; stopped at {report.ingest['stop_reason'].replace('_', ' ')}" if maximum else ""))
+            if report.ingest["seed_players"] and report.ingest["failed_histories"] == report.ingest["seed_players"]:
                 db.close()
                 report.database_ok = _quick_check(db_path)
                 _fill_after(report, db_path, window)
@@ -756,6 +796,23 @@ def _riot_telemetry(client: Any) -> dict[str, Any]:
         "network_retries": data.get("network_retries", 0), "elapsed_s": round(float(data.get("elapsed_s") or 0), 1),
         "waited_s": round(float(data.get("pacing_sleep_s") or 0) + float(data.get("rate_limit_sleep_s") or 0)
                           + float(data.get("backoff_sleep_s") or 0), 1),
+    }
+
+
+def _maximum_summary(result: Any) -> dict[str, Any]:
+    """`collect_maximum`'s result in the report's `ingest` shape (aggregates
+    only), plus where it stopped. Each wave is its own finalized ingest run."""
+    return {
+        "mode": "maximum",
+        "run_id": result.run_id, "run_status": "completed", "stop_reason": result.stop_reason,
+        "waves": len(result.wave_run_ids),
+        "inserted": result.matches_inserted, "duplicates_skipped": result.already_stored_skipped,
+        "fetched": result.matches_fetched, "failed_match_requests": result.failed_match_fetches,
+        "non_ranked_skipped": result.non_target_matches_skipped,
+        "seeds": {c: {"selected": s.seeds_started, "requested": s.candidates} for c, s in result.cohorts.items()},
+        "seed_players": result.seeds_started, "failed_histories": result.seeds_failed,
+        "empty_histories": result.seeds_with_empty_history,
+        "seed_ledger_rows": result.seed_ledger_rows, "discovery_rows": result.discovery_rows,
     }
 
 

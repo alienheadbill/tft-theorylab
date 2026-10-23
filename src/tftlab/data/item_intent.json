@@ -7,7 +7,7 @@
   "champion_roles": "https://raw.communitydragon.org/latest/game/characters/<id>.cdtb.bin.json (TFTCharacterRecord.CharacterRole)",
   "item_tags": "https://raw.communitydragon.org/latest/game/data/maps/shipping/map22/map22.bin.json (TftItemData: mName, ItemTags)"
  },
- "_fetched": "2026-09-26 via the cdragon-live GitHub Actions workflow (run 36248400455); Riot content 16.19.8217343+branch.releases-16-19.content.release (live)",
+ "_fetched": "2026-10-23 (UTC) from a local run against live CommunityDragon latest (tftlab.cdragon snapshot generators, as in tests/test_cdragon_live.py); Riot content 16.21.8298620+branch.releases-16-21.content.release",
  "set_number": 18,
  "roles": {
   "ADCasterMana": {
@@ -1461,7 +1461,7 @@
    "intent": "damage"
   },
   "DA_WarmogsArmor": {
-   "name": "Warmogs Armor",
+   "name": "Warmog's Armor",
    "riot_items": [
     "TFT_Item_CorruptedWarmogsArmor",
     "TFT_Item_WarmogsArmor"

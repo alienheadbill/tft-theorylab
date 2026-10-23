@@ -112,6 +112,28 @@ def test_selection_keeps_playable_units_all_traits_and_standard_items() -> None:
     assert shape["duplicate_item_names"] == []
 
 
+def test_set_components_count_for_recipes_but_get_no_art_of_their_own() -> None:
+    """Set 18 lists its own `DA_Component_*` ids next to the standard
+    components, with the same names. Only the standard ones get art (two
+    "B.F. Sword" entries broke the live smoke), and a craft built from the
+    set's ids is still a standard craft."""
+    payload = _payload()
+    payload["items"] += [
+        {"apiName": "DA_Component_BFSword", "name": "B.F. Sword", "icon": "ASSETS/Items/DABFSword.png"},
+        {"apiName": "DA_Component_SparringGloves", "name": "Sparring Gloves", "icon": "ASSETS/Items/DAGloves.png"},
+        {
+            "apiName": "TFT_Item_Deathblade", "name": "Deathblade", "icon": "ASSETS/Items/DB.png",
+            "composition": ["DA_Component_BFSword", "DA_Component_BFSword"],
+        },
+    ]
+    _, picks, shape = select_assets(payload)
+    items = {p.asset_id for p in picks if p.kind == "items"}
+    assert "DA_Component_BFSword" not in items and "DA_Component_SparringGloves" not in items
+    assert {"TFT_Item_BFSword", "TFT_Item_SparringGloves", "TFT_Item_Deathblade"} <= items
+    assert shape["duplicate_item_names"] == []
+    assert "DA_Component_BFSword" in shape["components_found"]  # still reported in the dry-run shape
+
+
 def test_selection_refuses_a_set_that_is_not_the_shipped_roster() -> None:
     with pytest.raises(GameArtError, match="roster"):
         select_assets(_payload(set_number=19))

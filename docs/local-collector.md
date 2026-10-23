@@ -146,6 +146,20 @@ The steps run in order. If any check fails, the command stops **before** changin
 
 The command never uses `DATABASE_URL`, never contacts Neon or any other cloud database, and never uploads anything.
 
+### Collecting more: maximum mode
+
+The default run is a small sample: about 300 Riot requests in 10–25 minutes. To collect as much of the current patch as a time budget allows, run:
+
+```powershell
+.\.venv\Scripts\tftlab local-collect --collection-mode maximum
+```
+
+- It reads every Challenger, Grandmaster and Master player and every Diamond and Platinum division, breadth-first: players never sampled before come first, spread across every rank band, so stopping early still covers every rank.
+- For each player it reads their whole current-patch history, not only the last 10 games. A game already stored is never fetched again.
+- It stops cleanly at the first budget reached: `--max-duration-minutes` (default 45), `--max-requests` (default 2,400) or `--max-match-fetches` (default 2,000). The report says which one.
+- Everything else is the same as a normal run: the checks, the backup, the same rate limits (at most 10 requests every 10 seconds with a development key), validation and Discovery preparation. It uses the same code as the `--collection-mode maximum` option of `tftlab ingest-riot` (README, "Maximum collection mode and Riot rate limits").
+- If the key expires during a run, the matches stored so far are kept, and the next run carries on with the players it did not finish.
+
 ### Reading the report
 
 | Line | Meaning |
@@ -300,6 +314,8 @@ After updating, run `.\.venv\Scripts\pip install -e .` again: it is harmless and
 tftlab local-collect [--db PATH] [--keep-backups 7]
                      [--challenger-seeds 15] [--grandmaster-seeds 15] [--master-seeds 20]
                      [--diamond-seeds 25] [--platinum-seeds 25] [--matches-per-seed 10]
+                     [--collection-mode bounded|maximum]
+                     [--max-duration-minutes 45] [--max-requests 2400] [--max-match-fetches 2000]
 tftlab local-status [--db PATH] [--check-riot]
 tftlab local-patch-schedule [--db PATH] [--refresh] [--json]
 tftlab local-snapshot [--db PATH] [--out PATH] [--balance-window W ...]
@@ -309,7 +325,7 @@ tftlab local-init
 tftlab local-set-key
 ```
 
-The defaults are the bounded settings that worked in production. Collection is always bounded and limited to the current verified patch; there is no "collect everything" mode here.
+The defaults are the bounded settings that worked in production. Collection is always limited to the current verified patch. Maximum mode (above) is opt-in and always stops at its budgets; there is no unlimited mode.
 
 ## Limitations
 

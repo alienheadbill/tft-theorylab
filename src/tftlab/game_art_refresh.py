@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .items import is_component
+from .items import LEGACY_COMPONENT_IDS, is_component
 from .roster import load_roster
 
 if TYPE_CHECKING:
@@ -83,11 +83,15 @@ def select_assets(payload: dict[str, Any], *, patch: str = "latest") -> tuple[in
       Elder Dragon, Pebbles, Mama Beak and each Lux form). Their art is only
       shown when their own id appears in our data.
     - Traits: every trait of the current set.
-    - Items: the standard components (`tftlab.items`) plus every
-      bundle-wide `TFT_Item_*` item crafted from exactly two of them. Older
-      sets' variants, radiant/artifact items and event items are left out,
-      as are the craftable "Corrupted" variants, which reuse the base
-      items' names, and unnamed placeholders.
+    - Items: the standard `TFT_Item_*` components
+      (`tftlab.items.LEGACY_COMPONENT_IDS`) plus every bundle-wide
+      `TFT_Item_*` item crafted from exactly two components. A set's own
+      component ids (Set 18's `DA_Component_*`) count for that recipe check
+      but get no art of their own: they reuse the standard components'
+      names, and `game_art.item_art` resolves them through `alias_of` or
+      that unique name. Older sets' variants, radiant/artifact items and
+      event items are left out, as are the craftable "Corrupted" variants,
+      which reuse the base items' names, and unnamed placeholders.
     """
     from .cdragon import parse_set_metadata
 
@@ -105,12 +109,13 @@ def select_assets(payload: dict[str, Any], *, patch: str = "latest") -> tuple[in
     for tid, t in sorted(meta.traits.items()):
         picks.append(Selection("traits", tid, t.name, t.icon_url))
     components = {iid for iid in meta.items if is_component(iid)}
+    art_components = components & LEGACY_COMPONENT_IDS
     for iid, item in sorted(meta.items.items()):
         standard_craft = (
             iid.startswith("TFT_Item_") and not iid.startswith(_VARIANT_ITEM_PREFIXES)
             and len(item.composition) == 2 and set(item.composition) <= components
         )
-        if (iid in components or standard_craft) and item.name != iid:
+        if (iid in art_components or standard_craft) and item.name != iid:
             picks.append(Selection("items", iid, item.name, item.icon_url, {"component": iid in components}))
 
     names = Counter(p.name for p in picks if p.kind == "items")
