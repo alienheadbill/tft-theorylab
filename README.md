@@ -807,7 +807,7 @@ With no `DATABASE_URL` and no `TFT_DATA_SOURCE` configured, the app automaticall
 New data comes from the **local data engine**:
 1. `tftlab local-collect` collects into local SQLite on the owner's computer (Riot development key, current trusted window, pre-run backups; see "Collect data on your own computer" and [docs/local-collector.md](docs/local-collector.md)).
 2. `tftlab local-snapshot` exports a sanitized snapshot from it.
-3. A reviewed publication step (a GitHub Release, as above) makes it available to the site. Nothing is uploaded or deployed automatically.
+3. A publication step makes it available to the site: a new immutable GitHub Release, then Render's `TFT_SNAPSHOT_URL`/`TFT_SNAPSHOT_SHA256` and a deploy. `tftlab local-publish` does this step when its checks pass (this checkout is `origin/main`, the latest collection succeeded, a current trusted patch, enough new matches), restores Render's settings if the deploy fails, and checks the live site afterwards ([docs/local-collector.md](docs/local-collector.md), "Publishing automatically"). Nothing is published unless it is run.
 
 ## Live ingestion via GitHub Actions
 

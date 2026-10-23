@@ -230,7 +230,33 @@ By default it exports the current patch; use `--balance-window 18.3` for another
 - `theorylabs-public-snapshot.sqlite3`: the same snapshot, uncompressed;
 - `theorylabs-public-snapshot.sqlite3.manifest.json`: counts, provenance and SHA-256 checksums.
 
-The command prints the match and board counts, file sizes and SHA-256 checksums. **Nothing is uploaded or deployed automatically.** Publishing is a separate, deliberate step (see the README, "Public website snapshots").
+The command prints the match and board counts, file sizes and SHA-256 checksums. **Nothing is uploaded or deployed.** Publishing is a separate step: `tftlab local-publish` (below), or by hand (see the README, "Public website snapshots").
+
+## Publishing automatically: `tftlab local-publish`
+
+`local-publish` does the whole publishing job: it makes the snapshot, publishes it as a GitHub Release, points the Render website at it, deploys, and checks the live site. It is safe to run on a schedule (for example once a day after a collection).
+
+**One-time setup:**
+1. `gh auth login` (the GitHub CLI), so releases are created as you.
+2. In the Render dashboard, **Account Settings → API Keys → Create API Key**, then run `.\.venv\Scripts\tftlab local-set-render-key` and paste it (hidden, saved only in `.env`).
+3. Add your website's address to `.env`: `TFT_PUBLIC_SITE_URL=https://<your-service>.onrender.com`.
+4. Try it without uploading anything: `.\.venv\Scripts\tftlab local-publish --dry-run`.
+
+**What it checks first.** It publishes only when all of these hold; otherwise it stops and the website keeps the snapshot it has:
+- this folder is exactly `origin/main` with no local changes, so the snapshot's analytics match the code the website runs (`git pull` keeps it there);
+- the latest collection that changed data succeeded (validation and Discovery preparation passed). A run stopped before collecting, such as one with an expired key, changed nothing and doesn't count;
+- there is a current trusted patch (not the pause around a patch change);
+- there are at least 200 new matches since the snapshot the website serves (`--force` skips only this check).
+
+**What it publishes.** The current patch. While the current patch has fewer than 1,000 matches, the previous patch is included as well, so the site never shows a thin new patch on its own.
+
+**Then:**
+1. It creates a new GitHub Release (`public-snapshot-<patch>-<date>`, `-r2` and so on if that tag exists) with exactly the `.gz` and its manifest, and checks both uploaded completely.
+2. It sets the website's `TFT_SNAPSHOT_URL` and `TFT_SNAPSHOT_SHA256` on Render and starts a deploy. If the deploy fails, it puts both settings back, so the site keeps serving the previous snapshot.
+3. It checks the live site reports the new snapshot (`/api/source`) and serves Discovery from prepared data (`/api/discovery`).
+4. It deletes its own releases beyond the newest 5. Releases published any other way (by hand, or by the release workflow) are never deleted.
+
+Each run saves a report as `data/local/reports/local-publish-<UTC time>.json`. The Render key is only sent to api.render.com and is never printed. Exit code 0 means published, or nothing worth publishing yet; 1 means something failed (the message says what was and wasn't changed).
 
 ## Where everything is stored
 
@@ -293,6 +319,8 @@ tftlab local-collect [--db PATH] [--keep-backups 7]
 tftlab local-status [--db PATH] [--check-riot]
 tftlab local-patch-schedule [--db PATH] [--refresh] [--json]
 tftlab local-snapshot [--db PATH] [--out PATH] [--balance-window W ...]
+tftlab local-publish [--db PATH] [--dry-run] [--force]
+tftlab local-set-render-key
 tftlab local-init
 tftlab local-set-key
 ```
