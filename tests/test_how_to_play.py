@@ -348,6 +348,46 @@ def test_provider_count_comes_from_the_roster_not_names(monkeypatch: pytest.Monk
     assert [(t["trait_id"], t["num_units"]) for t in htp.trait_directions(rows)] == [(BOUNTY, 1), (ADAPTOR, 1)]
 
 
+def _trait_row(trait_id: str, counts: list[tuple[int, int]]) -> dict:
+    return {"trait_id": trait_id, "name": trait_id, "art_url": None, "games": sum(g for _, g in counts),
+            "share_of_carry_games": 0.5,
+            "counts": [{"num_units": n, "games": g, "share_of_carry_games": g / 100} for n, g in counts]}
+
+
+def test_the_carrys_own_shared_trait_at_one_unit_is_not_a_direction() -> None:
+    """Adaptor has five providers, Kog'Maw among them. On Kog'Maw's own
+    boards, Adaptor at 1 unit is Kog'Maw: not a direction. At 3 units it
+    stays one, and a shared trait the carry does not have stays one at 1."""
+    other = next(t for t in ROSTER.traits if len(ROSTER.trait_champions(t)) > 1
+                 and t not in ROSTER.champion_traits(KOGMAW))
+    rows = [_trait_row(ADAPTOR, [(1, 60), (3, 9)]), _trait_row(other, [(1, 40)]), _trait_row(INVOKER, [(2, 30)])]
+    assert ADAPTOR in ROSTER.champion_traits(KOGMAW) and htp.natural_provider_count(ADAPTOR) > 1
+    picks = [(t["trait_id"], t["num_units"]) for t in htp.trait_directions(rows, carry_id=KOGMAW)]
+    assert picks == [(other, 1), (INVOKER, 2)]
+    without_carry = [(t["trait_id"], t["num_units"]) for t in htp.trait_directions(rows)]
+    assert without_carry == [(ADAPTOR, 1), (other, 1), (INVOKER, 2)]  # unchanged when the carry is unknown
+    rows[0] = _trait_row(ADAPTOR, [(3, 60), (1, 9)])
+    assert (ADAPTOR, 3) in [(t["trait_id"], t["num_units"]) for t in htp.trait_directions(rows, carry_id=KOGMAW)]
+
+
+def test_rival_at_one_unit_is_skipped_for_either_rival_but_not_for_others() -> None:
+    rival, = ROSTER.trait_ids("Rival")
+    khazix, = ROSTER.champion_ids("Kha'Zix")
+    rengar, = ROSTER.champion_ids("Rengar")
+    assert set(ROSTER.trait_champions(rival)) == {khazix, rengar}  # two providers: not a singleton trait
+    rows = [_trait_row(rival, [(1, 90)])]
+    assert htp.trait_directions(rows, carry_id=khazix) == []
+    assert htp.trait_directions(rows, carry_id=rengar) == []
+    assert [t["trait_id"] for t in htp.trait_directions(rows, carry_id=KOGMAW)] == [rival]
+
+
+@pytest.mark.parametrize(("units", "text"), [(1, "Adaptor at 1 unit;"), (2, "Adaptor at 2 units;"), (3, "Adaptor at 3 units;")])
+def test_the_summary_says_unit_or_units(units, text) -> None:
+    traits = [{"name": "Adaptor", "num_units": units}]
+    summary = htp.evidence_summary("Kog'Maw", 120, [], [], traits)
+    assert text.rstrip(";") + "." in summary and "1 units" not in summary
+
+
 def test_a_singleton_trait_above_its_baseline_can_be_a_direction(db: Database) -> None:
     for i in range(13):  # more boards than Bounty Seeker's 12, so it makes the top three
         db.ingest_match(_board(f"KOG_EXT_{i}", KOGMAW, [GUINSOO, IE], 2,

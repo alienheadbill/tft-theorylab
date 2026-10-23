@@ -713,7 +713,7 @@ def champion_investigation(
     body["how_to_play"] = how_to_play(
         champion["name"], body["carry"],
         item_rows=singles, pair_rows=pairs, build_rows=rows, partner_rows=partners, trait_rows=traits,
-        four_unit_cores=all_cores[4], three_unit_cores=all_cores[3],
+        four_unit_cores=all_cores[4], three_unit_cores=all_cores[3], carry_id=character_id,
     )
     return body
 
