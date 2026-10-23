@@ -32,8 +32,11 @@ from .analytics.boards import (
     Alternative,
     BoardEvidence,
     BoardPattern,
+    Distribution,
     LineupGroup,
+    ObservedBoard,
     board_patterns,
+    carry_board_distributions,
     committed_carry_boards,
     group_boards,
     one_slot_alternatives,
@@ -517,19 +520,57 @@ def board_evidence_payload(evidence: BoardEvidence, carry_id: str, names: Mappin
 
 
 def observed_board_section(db: Database, champion: dict[str, Any], balance_window: str, *,
-                           carry_boards: int, top_n: int) -> dict[str, Any]:
+                           carry_boards: int, top_n: int,
+                           loaded: tuple[list[ObservedBoard], dict[str, str], dict[str, int]] | None = None
+                           ) -> dict[str, Any]:
     """`observed_boards` for one carry: unavailable (with a reason, never a
     "level 0" group) when the data source holds no trustworthy final player
-    level, else the exact lineups per level."""
-    if snapshot_participant_level(db) not in (None, PARTICIPANT_LEVEL_PRESERVED):
+    level, else the exact lineups per level. `loaded` is the result of
+    `committed_carry_boards` when the caller already has it."""
+    if not levels_preserved(db):
         body = _boards_base(carry_boards)
         body["reason"] = LEVEL_NOT_PRESERVED
         return body
-    roster = load_roster()
-    boards, names, costs = committed_carry_boards(
-        db, champion["character_id"], balance_window, roster=roster)
+    boards, names, costs = loaded or committed_carry_boards(
+        db, champion["character_id"], balance_window, roster=load_roster())
     evidence = group_boards(boards, min_boards=OBSERVED_BOARD_MIN_BOARDS)
     return board_evidence_payload(evidence, champion["character_id"], names, costs, top_n=top_n)
+
+
+def levels_preserved(db: Database) -> bool:
+    """Whether this data source holds trustworthy final player levels."""
+    return snapshot_participant_level(db) in (None, PARTICIPANT_LEVEL_PRESERVED)
+
+
+#: Below this many boards a value's row is labelled limited sample.
+DISTRIBUTION_MIN_BOARDS = OBSERVED_BOARD_MIN_BOARDS
+
+
+def _distribution_payload(d: Distribution) -> dict[str, Any]:
+    return {
+        "available": True,
+        "boards": d.boards,
+        "missing": d.missing,
+        "rows": [{"value": v, "boards": n, "share": d.share(n), "limited_sample": n < DISTRIBUTION_MIN_BOARDS}
+                 for v, n in d.counts],
+    }
+
+
+def distribution_section(boards: list[ObservedBoard], *, levels_ok: bool) -> dict[str, Any]:
+    """`distributions`: how the carry boards split by final player level,
+    the carry's star level and its completed items. Board counts per value,
+    in value order (never by results); every board counts once in each.
+    Final level is only what boards ended at -- match data has no timeline."""
+    dist = carry_board_distributions(boards)
+    return {
+        "evidence_type": OBSERVED,
+        "carry_boards": len(boards),
+        "min_boards": DISTRIBUTION_MIN_BOARDS,
+        "final_level": _distribution_payload(dist["final_level"]) if levels_ok
+        else {"available": False, "reason": LEVEL_NOT_PRESERVED},
+        "carry_stars": _distribution_payload(dist["carry_stars"]),
+        "carry_items": _distribution_payload(dist["carry_items"]),
+    }
 
 
 def _trait_count_row(a: Association) -> dict[str, Any]:
@@ -641,6 +682,9 @@ def champion_investigation(
         # Exact final lineups around the carry, grouped by player level
         # (`observed_board_section`); None without carry boards.
         "observed_boards": None,
+        # How the carry boards split by final level, the carry's star level
+        # and its completed items (`distribution_section`); None without carry boards.
+        "distributions": None,
         # Active traits on the carry boards, each with Riot's observed unit
         # counts (`num_units`). Denominator: `carry.games`.
         "traits": [],
@@ -706,8 +750,12 @@ def champion_investigation(
     traits = _trait_rows(trait_profile(db, character_id, balance_window))
     body["partners"] = partners[:top_n]
     body["cores"] = cores
-    body["observed_boards"] = observed_board_section(db, champion, balance_window,
-                                                     carry_boards=stat.commitment_games, top_n=top_n)
+    # One board query feeds both the exact boards and the distributions.
+    loaded = committed_carry_boards(db, character_id, balance_window, roster=load_roster())
+    levels_ok = levels_preserved(db)
+    body["observed_boards"] = observed_board_section(db, champion, balance_window, carry_boards=stat.commitment_games,
+                                                     top_n=top_n, loaded=loaded)
+    body["distributions"] = distribution_section(loaded[0], levels_ok=levels_ok)
     body["traits"] = traits[:trait_top_n]
     body["summary"] = carry_summary(champion["name"], body["carry"], rows, partners, traits)
     body["how_to_play"] = how_to_play(

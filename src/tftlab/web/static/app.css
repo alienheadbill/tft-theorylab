@@ -885,6 +885,20 @@ input[type="search"]::placeholder { color: var(--graphite); opacity: 0.8; }
 .htp-note { margin: 10px 0 0; font-size: 14px; }
 .htp-num { font: 12.5px var(--mono); color: var(--graphite); white-space: nowrap; }
 
+/* distributions: one bar per value, in value order (levels, stars, items) */
+.dist-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px 22px; }
+.dist-block { min-width: 0; }
+.dist-block h5, .board-levels h4 { margin: 0 0 6px; font: 600 12px/1.2 var(--mono); color: var(--graphite); }
+.dist-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.dist-row { display: grid; grid-template-columns: 4.8em minmax(40px, 1fr) minmax(0, max-content); align-items: center; gap: 8px; font-size: 14px; }
+.dist-row .htp-num { white-space: normal; text-align: right; }
+.dist-label { white-space: nowrap; }
+.dist-track { height: 9px; border-bottom: 1px solid var(--rule-soft); }
+.dist-bar { display: block; height: 8px; background: var(--ink-blue); opacity: 0.55; border-radius: 1px 3px 2px 1px; }
+.dist-limited .dist-label, .dist-limited .dist-bar { opacity: 0.55; }
+.dist-low { margin-left: 4px; padding: 0 4px; border: 1px solid var(--scribble); border-radius: 3px; font-size: 10px; letter-spacing: 0.04em; color: var(--scribble); }
+.board-levels { margin: 10px 0 16px; max-width: 560px; }
+
 /* art tiles: icon first, name and a small number beside it */
 .htp-tiles { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 12px; }
 .htp-tile { display: flex; align-items: center; gap: 10px; min-width: 0; }

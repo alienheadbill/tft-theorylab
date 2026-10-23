@@ -539,6 +539,41 @@ function componentCard(direction, minBoards) {
     </section>`;
 }
 
+// How the carry boards split by final level, the carry's star level and its
+// completed items (`distributions`). Board counts in value order: an ordered
+// scale, never ranked by results. Final level is only what boards ended at.
+const DIST_LABELS = {
+  final_level: ['Final player level', v => `Level ${v}`],
+  carry_stars: ['Carry star level', v => `${v}★`],
+  carry_items: ['Completed items on the carry', v => plural(v, 'item')],
+};
+
+function distributionRows(d, label) {
+  if (!d.available) return htpEmpty(d.reason || 'Not available for this data source.');
+  if (!d.rows.length) return htpEmpty('No boards with this value yet.');
+  const top = Math.max(...d.rows.map(r => r.share));
+  return `<ul class="dist-rows">${d.rows
+    .map(
+      r => `<li class="dist-row${r.limited_sample ? ' dist-limited' : ''}"><span class="dist-label">${esc(label(r.value))}</span><span class="dist-track"><span class="dist-bar" style="width:${top ? Math.max(2, Math.round((r.share / top) * 100)) : 0}%"></span></span><span class="htp-num">${r.share > 0 && r.share < 0.005 ? '&lt;1%' : fmtPctShort(r.share)} · ${plural(r.boards, 'board')}${r.limited_sample ? ' <span class="dist-low" title="Limited sample">limited</span>' : ''}</span></li>`,
+    )
+    .join('')}</ul>${d.missing ? `<p class="htp-foot">${plural(d.missing, 'board')} without this value ${d.missing === 1 ? 'is' : 'are'} not counted.</p>` : ''}`;
+}
+
+function distributionCard(inv) {
+  const dist = inv.distributions;
+  if (!dist) return '';
+  const blocks = Object.entries(DIST_LABELS)
+    .map(([key, [title, label]]) => `<div class="dist-block"><h5>${title}</h5>${distributionRows(dist[key], label)}</div>`)
+    .join('');
+  return `
+    <section class="htp-card htp-span" aria-labelledby="htp-dist">
+      <h4 id="htp-dist">On these carry boards ${stamp('observed', 'Observed')}</h4>
+      <p class="htp-sub">How ${plural(dist.carry_boards, 'carry board')} ended, by level, star level and items: shares of boards, in order, not ranked by results.</p>
+      <div class="dist-grid">${blocks}</div>
+      <p class="htp-foot">Final values only: match data has no timeline, so this says nothing about when anyone levelled or rolled. Rows marked "limited" have under ${dist.min_boards} boards.</p>
+    </section>`;
+}
+
 function howToPlaySection(inv) {
   const h = inv.how_to_play;
   const c = inv.champion;
@@ -581,6 +616,7 @@ function howToPlaySection(inv) {
         <section class="htp-card" aria-labelledby="htp-mates"><h4 id="htp-mates">Teammates</h4>${mates}</section>
         <section class="htp-card" aria-labelledby="htp-traits"><h4 id="htp-traits">Trait direction</h4>${traits}<p class="htp-foot">Unit counts Riot reported on the final boards, not official trait thresholds.</p></section>
         <section class="htp-card htp-span" aria-labelledby="htp-cores"><h4 id="htp-cores">Recurring cores</h4>${coreLines}<p class="htp-foot">Units seen together on the same final carry boards, most common first. Other units were there too: not exact comps.</p></section>
+        ${distributionCard(inv)}
         ${boardsPreview(inv)}
       </div>
       <section class="htp-why" aria-labelledby="htp-why">
@@ -708,6 +744,9 @@ function boardsSection(inv) {
     return `<section class="inv-section boards" aria-labelledby="sec-boards">${head}${intro}${ob ? boardsUnavailable(ob) : ''}</section>`;
   }
   const coverage = `<p class="board-coverage">${plural(ob.boards_with_level, 'carry board')} of ${fmtNum(ob.carry_boards)} (${fmtPct(ob.level_coverage)}) have an observed final level. Lineups on ${plural(ob.min_boards, 'board')} or more at one level are shown.</p>`;
+  const levels = inv.distributions && inv.distributions.final_level.available
+    ? `<div class="board-levels"><h4>Final player level on these boards</h4>${distributionRows(inv.distributions.final_level, DIST_LABELS.final_level[1])}</div>`
+    : '';
   // A standalone pattern carries its row only when `top_n` left it out of `g.boards`.
   const patternsOf = g => {
     const rows = new Map(g.boards.map(b => [b.lineup_key, b]));
@@ -738,7 +777,7 @@ function boardsSection(inv) {
   const patternNote = anyShell ? `<p class="board-coverage board-pattern-note">${esc(PATTERN_NOTE)}</p>` : '';
   return `
     <section class="inv-section boards" aria-labelledby="sec-boards">
-      ${head}${intro}${coverage}${patternNote}${empty}${groups}${quietNote}
+      ${head}${intro}${coverage}${levels}${patternNote}${empty}${groups}${quietNote}
       <p class="htp-foot">${esc(BOARD_NOTE)} Exact observations only: not composition families and not a plan to copy.</p>
     </section>`;
 }
