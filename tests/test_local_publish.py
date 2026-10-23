@@ -53,6 +53,8 @@ class World:
     #: Prepared status for every window, a per-window dict, or an HTTP status code.
     discovery: str | int | dict = "current"
     discovery_windows: list[str] = field(default_factory=list)
+    #: Discovery status (or HTTP code) while the site still serves a snapshot other than the new one.
+    discovery_before_publish: str | int | None = None
     render_status: int = 200
     services: list[tuple[str, str]] = field(default_factory=lambda: [("srv-other", "https://other.onrender.com"),
                                                                       (SERVICE, SITE)])
@@ -120,6 +122,8 @@ class World:
                 window = request.url.params.get("balance_window")
                 self.discovery_windows.append(window)
                 status = self.discovery.get(window, "current") if isinstance(self.discovery, dict) else self.discovery
+                if self.discovery_before_publish is not None and shown["exported_at"] != NEW_EXPORTED:
+                    status = self.discovery_before_publish  # what the old snapshot gets from the deployed code
                 if isinstance(status, int):
                     return httpx.Response(status, text="<html>Internal Server Error</html>")
                 return httpx.Response(200, json={"prepared": {"status": status}})
@@ -362,6 +366,46 @@ def test_new_data_is_compared_window_by_window_with_the_live_site(tmp_path, monk
     assert report.outcome == lp.SKIPPED and "only 100 new matches in 18.5" in report.message and local.exports == []
     world = World(serving=live_18_5, snapshots={OLD_URL: live_18_5})
     assert publish(local, world, force=True).outcome == lp.PUBLISHED
+
+
+# The site already serves 18.5 (1,400 matches) and the local store has only 100 more.
+LIVE_18_5 = {"exported_at": OLD["exported_at"], "windows": {"18.5": 1400}}
+
+
+def _thin_new_data(tmp_path, monkeypatch) -> Local:
+    return Local(tmp_path, monkeypatch, windows=[("18.5", 1500, 2), ("18.4", 3416, 1)])
+
+
+def test_stale_live_discovery_republishes_without_new_matches(tmp_path, monkeypatch) -> None:
+    """After a code change moves the analytics version, the deployed site
+    reports its snapshot's prepared Discovery as stale and computes it live.
+    That alone is a reason to publish: the new snapshot is prepared by the
+    deployed code."""
+    local = _thin_new_data(tmp_path, monkeypatch)
+    world = World(serving=LIVE_18_5, snapshots={OLD_URL: LIVE_18_5}, discovery_before_publish="stale")
+    report = publish(local, world)
+    assert report.outcome == lp.PUBLISHED, report.message
+    assert report.live["discovery"] == "stale" and world.discovery_windows[0] == "18.5"
+    assert any(s.name == "New data" and "prepared data is stale" in s.detail for s in report.steps)
+
+
+@pytest.mark.parametrize("before", ["current", "missing", 500])
+def test_only_a_stale_live_discovery_waives_the_new_matches_minimum(before, tmp_path, monkeypatch) -> None:
+    local = _thin_new_data(tmp_path, monkeypatch)
+    world = World(serving=LIVE_18_5, snapshots={OLD_URL: LIVE_18_5}, discovery_before_publish=before)
+    report = publish(local, world)
+    assert report.outcome == lp.SKIPPED and "only 100 new matches in 18.5" in report.message
+    assert local.exports == [] and world.render("PUT") == []
+
+
+def test_a_stale_live_discovery_never_waives_a_new_windows_own_floor(tmp_path, monkeypatch) -> None:
+    local = Local(tmp_path, monkeypatch, current=("18.2b", "18.2a"),
+                  windows=[("18.2b", 50, 3), ("18.2a", 1000, 2)])
+    live_18_2a = {"exported_at": OLD["exported_at"], "windows": {"18.2a": 1000}}
+    world = World(serving=live_18_2a, snapshots={OLD_URL: live_18_2a}, discovery_before_publish="stale")
+    report = publish(local, world)
+    assert report.outcome == lp.SKIPPED and "18.2b: 50 matches of its own" in report.message
+    assert world.discovery_windows == []  # a new window: the live site has nothing to check for it
 
 
 def test_no_current_patch_is_a_skip_and_the_site_keeps_its_snapshot(tmp_path, monkeypatch) -> None:
