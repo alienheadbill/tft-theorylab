@@ -765,14 +765,22 @@ function boardsSection(inv) {
       .map(p => (p.type === 'exact_board' ? { ...p, board: p.board || rows.get(p.lineup_key) } : p))
       .filter(p => p.type === 'flex_shell' || p.board);
   };
+  // Open on the level with the most carry boards (a recurrence default, said
+  // on the page); the other levels stay one click away, in level order.
+  const commonest = ob.levels.reduce((a, g) => (!a || g.carry_boards_at_level > a.carry_boards_at_level ? g : a), null);
+  const openNote = commonest && ob.levels.length > 1
+    ? `<p class="board-coverage board-open-note">Opened: level ${commonest.level}, the level with the most ${esc(name)} carry boards (${fmtNum(commonest.carry_boards_at_level)}). Other levels are collapsed below, in level order.</p>`
+    : '';
   const groups = ob.levels
     .map(
       g => `
       <section class="board-level" aria-labelledby="board-level-${g.level}">
-        <h4 id="board-level-${g.level}">Level ${g.level}</h4>
-        <p class="htp-sub">${plural(g.carry_boards_at_level, 'carry board')} · ${plural(g.distinct_lineups, 'distinct lineup')} · ${fmtNum(g.qualifying_lineups)} on ${ob.min_boards}+ boards</p>
-        <ol class="board-list">${patternsOf(g).map(p => (p.type === 'flex_shell' ? shellCard(p, name) : boardCard(p.board, name))).join('')}</ol>
-        ${rawLineups(g, name)}
+        <details class="board-level-body"${g === commonest ? ' open' : ''}>
+          <summary><h4 id="board-level-${g.level}">Level ${g.level}</h4>
+          <p class="htp-sub">${plural(g.carry_boards_at_level, 'carry board')} · ${plural(g.distinct_lineups, 'distinct lineup')} · ${fmtNum(g.qualifying_lineups)} on ${ob.min_boards}+ boards</p></summary>
+          <ol class="board-list">${patternsOf(g).map(p => (p.type === 'flex_shell' ? shellCard(p, name) : boardCard(p.board, name))).join('')}</ol>
+          ${rawLineups(g, name)}
+        </details>
       </section>`,
     )
     .join('');
@@ -788,7 +796,7 @@ function boardsSection(inv) {
   const patternNote = anyShell ? `<p class="board-coverage board-pattern-note">${esc(PATTERN_NOTE)}</p>` : '';
   return `
     <section class="inv-section boards" aria-labelledby="sec-boards">
-      ${head}${intro}${coverage}${levels}${patternNote}${empty}${groups}${quietNote}
+      ${head}${intro}${coverage}${levels}${patternNote}${openNote}${empty}${groups}${quietNote}
       <p class="htp-foot">${esc(BOARD_NOTE)} Exact observations only: not composition families and not a plan to copy.</p>
     </section>`;
 }

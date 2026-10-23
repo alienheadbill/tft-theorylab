@@ -208,7 +208,8 @@ function render(data) {
   countEl.textContent =
     `${plural(data.matching_patterns, 'pattern')} shown of ${fmtNum(data.qualifying_patterns)} ` +
     `(${plural(data.qualifying_lineups, 'exact lineup')} on ${data.promotion_rule.min_boards}+ boards at one level), most boards first.` +
-    (data.patterns.length < data.matching_patterns ? ` The first ${fmtNum(data.patterns.length)} are listed.` : '');
+    (data.patterns.length < data.matching_patterns ? ` The first ${fmtNum(data.patterns.length)} are listed.` : '') +
+    ` Balance window ${data.balance_window} · ${fmtNum(data.boards)} boards · latest game ${fmtDate(data.latest_game)}.`;
   if (!data.patterns.length) {
     listEl.innerHTML = `<div class="state-note empty-evidence"><p>${esc(data.note || 'No observed pattern matches these filters.')}</p></div>`;
     return;

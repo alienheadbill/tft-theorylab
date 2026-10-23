@@ -309,3 +309,16 @@ def test_riot_api_key_never_reaches_the_browser(monkeypatch, tmp_path) -> None:
     for p in WEB.rglob("*"):
         if p.is_file() and p.suffix in (".html", ".js", ".css"):
             assert "RIOT_API_KEY" not in p.read_text(), p.name
+
+
+def test_discovery_shows_a_freshness_line_beside_its_filters() -> None:
+    web = Path(__file__).parent.parent / "src" / "tftlab" / "web"
+    index = (web / "index.html").read_text(encoding="utf-8")
+    app = (web / "static" / "app.js").read_text(encoding="utf-8")
+    assert index.index('id="controls"') < index.index('id="filter-summary"') < index.index('id="cards"')
+    assert 'aria-live="polite"' in index[index.index('id="filter-summary"') - 80:index.index('id="filter-summary"') + 80]
+    summary = app[app.index("function filterSummary"):app.index("function filterSummary") + 700]
+    for part in ("carry line", "carry boards", "balance window", "matches", "latest game"):
+        assert part in summary, part
+    comps = (web / "static" / "comps.js").read_text(encoding="utf-8")
+    assert "latest game ${fmtDate(data.latest_game)}" in comps

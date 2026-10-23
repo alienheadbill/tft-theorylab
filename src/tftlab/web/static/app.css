@@ -957,6 +957,14 @@ input[type="search"]::placeholder { color: var(--graphite); opacity: 0.8; }
 .board-coverage, .board-quiet { font-size: 14.5px; color: var(--graphite); max-width: 820px; }
 .board-level { margin-top: 22px; }
 .board-level h4 { margin: 0 0 4px; font: 700 18px var(--serif); }
+/* each level collapses; the one with the most carry boards starts open */
+.board-level-body > summary { list-style: none; cursor: pointer; }
+.board-level-body > summary::-webkit-details-marker { display: none; }
+.board-level-body > summary h4 { display: inline; }
+.board-level-body > summary h4::before { content: "+ "; color: var(--graphite); font-family: var(--mono); font-size: 15px; }
+.board-level-body[open] > summary h4::before { content: "– "; }
+.board-level-body > summary .htp-sub { margin-top: 2px; }
+.board-open-note { font-style: italic; }
 .board-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
 .board-card {
   min-width: 0; padding: 12px 14px 10px;
