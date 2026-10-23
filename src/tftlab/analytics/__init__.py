@@ -8,12 +8,16 @@ from .commitment import (
     default_balance_window,
 )
 from .discovery import (
+    DEFAULT_DISCOVERY_ORDER,
+    DISCOVERY_ORDERS,
     DiscoveryCandidate,
     compute_item_flexibility,
     compute_opportunity_score,
     discover_candidates,
     discovery_candidate_for,
     discovery_population,
+    most_common_first,
+    order_by_carry_boards,
 )
 from .item_packages import CANONICAL_UNIT_TIEBREAK_SQL, item_package_stats
 from .partners import carry_commitment_games_with_partners, carry_partner_associations
@@ -40,6 +44,10 @@ __all__ = [
     "discover_candidates",
     "discovery_candidate_for",
     "discovery_population",
+    "DISCOVERY_ORDERS",
+    "DEFAULT_DISCOVERY_ORDER",
+    "order_by_carry_boards",
+    "most_common_first",
     "compute_opportunity_score",
     "compute_item_flexibility",
 ]

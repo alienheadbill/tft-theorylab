@@ -48,9 +48,56 @@ def test_discovery_endpoint_returns_candidates(client: TestClient) -> None:
     ):
         assert field in candidate, f"missing field {field}"
 
-    # Candidates must be sorted by opportunity_score, descending.
-    scores = [c["opportunity_score"] for c in body["candidates"]]
-    assert scores == sorted(scores, reverse=True)
+    # Recurrence order by default: carry boards, most first; ties by name, then id.
+    assert body["order"] == "boards_desc"
+    keys = [(-c["commitment_games"], c["name"], c["character_id"]) for c in body["candidates"]]
+    assert keys == sorted(keys)
+
+
+def test_discovery_fewest_first_reverses_under_the_same_floor(client: TestClient) -> None:
+    params = {"max_cost": 5, "min_samples": 5, "limit": 200}
+    most = client.get("/api/discovery", params=params).json()["candidates"]
+    fewest = client.get("/api/discovery", params={**params, "order": "boards_asc"}).json()
+    assert fewest["order"] == "boards_asc"
+    keys = [(c["commitment_games"], c["name"], c["character_id"]) for c in fewest["candidates"]]
+    assert keys == sorted(keys)
+    assert {c["character_id"] for c in fewest["candidates"]} == {c["character_id"] for c in most}
+    assert all(c["commitment_games"] >= 5 for c in fewest["candidates"])
+    # `limit` applies after the order: the fewest-first page starts at the other end.
+    one = client.get("/api/discovery", params={**params, "order": "boards_asc", "limit": 1}).json()
+    assert one["candidates"] == fewest["candidates"][:1]
+
+
+@pytest.mark.parametrize("order", ["top4_desc", "opportunity_score", "", "BOARDS_DESC"])
+def test_discovery_rejects_unknown_order(client: TestClient, order: str) -> None:
+    assert client.get("/api/discovery", params={"order": order}).status_code == 422
+
+
+def test_most_carried_line_comes_first_even_when_it_places_worst(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from _helpers import make_match, make_unit
+    from tftlab.storage import Database
+    import tftlab.webapp as webapp
+
+    path = tmp_path / "order.sqlite3"
+    items = ["TFT_Item_BlueBuff", "TFT_Item_JeweledGauntlet"]
+    with Database(path) as db:
+        for cid, boards, placement in (("TFT14_Popular", 30, 8), ("TFT14_Winner", 12, 1), ("TFT14_Tiny", 4, 1)):
+            for i in range(boards):
+                db.ingest_match(make_match(f"{cid}_{i}", placement=placement,
+                                           units=[make_unit(cid, rarity=0, tier=2, items=items)]))
+    for key in ("TFT_DATA_SOURCE", "TFT_SNAPSHOT_PATH"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("DATABASE_URL", str(path))
+    monkeypatch.setenv("TFT_DEMO_DB_PATH", str(tmp_path / "unused-demo.sqlite3"))
+    webapp._POPULATION_CACHE.clear()
+    client = TestClient(webapp.create_app())
+
+    most = client.get("/api/discovery", params={"min_samples": 10}).json()["candidates"]
+    assert [c["character_id"] for c in most] == ["TFT14_Popular", "TFT14_Winner"]
+    assert most[0]["top4_rate"] < most[1]["top4_rate"]
+    assert "opportunity_score" in most[0]  # still in the JSON (additive change)
+    fewest = client.get("/api/discovery", params={"min_samples": 10, "order": "boards_asc"}).json()["candidates"]
+    assert [c["character_id"] for c in fewest] == ["TFT14_Winner", "TFT14_Popular"]
 
 
 def test_discovery_detail_endpoint(client: TestClient) -> None:

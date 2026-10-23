@@ -93,6 +93,13 @@ _ITEM_FLEXIBILITY_CAP = 3  # this many independently-viable items maps to full c
 # still have only a handful of hits (or misses).
 _FLOOR_CEILING_PRIOR_STRENGTH = 10.0
 
+# Discovery orders carries by recurrence, never by results: carry boards
+# (`commitment_games`), most first by default or fewest first ("less common
+# carry lines"). The Opportunity Score is still computed and returned for the
+# API, CLI and research reports, but nothing is sorted by it.
+DISCOVERY_ORDERS = ("boards_desc", "boards_asc")
+DEFAULT_DISCOVERY_ORDER = "boards_desc"
+
 
 def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
@@ -264,6 +271,28 @@ def _evidence_for(db: Database, stats: Sequence[CarryStat], balance_window: str)
     return {cid: (partners[cid], items[cid], traits[cid]) for cid in ids}
 
 
+def most_common_first(associations: Sequence[Association]) -> list[Association]:
+    """A carry's partners, item packages or traits by boards together (`games`),
+    most first; ties by label, then key. Recurrence order: how they placed
+    stays on each row (`top4_rate`, `top4_delta`) and plays no part in it."""
+    return sorted(associations, key=lambda a: (-a.games, a.label, a.key))
+
+
+def order_by_carry_boards(
+    candidates: Sequence[DiscoveryCandidate], order: str = DEFAULT_DISCOVERY_ORDER
+) -> list[DiscoveryCandidate]:
+    """Carries by carry boards (`commitment_games`): most first for
+    "boards_desc", fewest first for "boards_asc". Ties by name, then character
+    id, in both directions. The prepared read (`tftlab.prepared_discovery`)
+    stores this "boards_desc" order as `population_rank`, so prepared and live
+    Discovery agree for both orders."""
+    if order not in DISCOVERY_ORDERS:
+        raise ValueError(f"unknown Discovery order {order!r}; expected one of {DISCOVERY_ORDERS}")
+    by_name = sorted(candidates, key=lambda c: (c.name, c.character_id))
+    # A stable sort keeps the name order among equal board counts, reversed or not.
+    return sorted(by_name, key=lambda c: c.commitment_games, reverse=order == "boards_desc")
+
+
 def _build_candidate(
     stat: CarryStat,
     balance_window: str,
@@ -274,14 +303,11 @@ def _build_candidate(
 ) -> DiscoveryCandidate:
     partners, item_stats, traits = evidence
 
+    # The score still reads the strongest association, whatever the display order.
     best_partner_score = max((a.association_score for a in partners), default=0.0)
     item_flexibility = compute_item_flexibility(item_stats["items"])
 
-    best_item_packages = sorted(
-        item_stats["pairs"] + item_stats["packages"],
-        key=lambda a: a.association_score,
-        reverse=True,
-    )[:top_n]
+    best_item_packages = most_common_first(item_stats["pairs"] + item_stats["packages"])[:top_n]
 
     score, components = compute_opportunity_score(
         stat,
@@ -306,9 +332,9 @@ def _build_candidate(
         hit_3star_rate=stat.hit_3star_rate,
         hit_top4_rate=stat.hit_top4_rate,
         miss_top4_rate=stat.miss_top4_rate,
-        best_partners=partners[:top_n],
+        best_partners=most_common_first(partners)[:top_n],
         best_item_packages=best_item_packages,
-        best_trait_breakpoints=traits[:top_n],
+        best_trait_breakpoints=most_common_first(traits)[:top_n],
         confidence=stat.confidence,
         opportunity_score=score,
         opportunity_components=components,
@@ -349,10 +375,17 @@ def discover_candidates(
     top_n: int = 5,
     costs: Collection[int] | None = None,
     population: Sequence[CarryStat] | None = None,
+    order: str = DEFAULT_DISCOVERY_ORDER,
 ) -> list[DiscoveryCandidate]:
     """The first comp-discovery pass: carries enriched with statistically-
     adjusted partner/item/trait evidence and a confidence-adjusted
     Opportunity Score, all scoped to a single balance window.
+
+    Returned in recurrence order (`order_by_carry_boards`): carry boards,
+    most first by default, fewest first with `order="boards_asc"`; never by
+    the score or by results. Partners, item packages and traits inside each
+    candidate are most-common-first (`most_common_first`). Callers that want
+    a score ranking (the research report) sort it themselves.
 
     The search space is every carry observed in the window's sampled
     matches (see `tftlab.sampling` for the population): no champion
@@ -364,9 +397,9 @@ def discover_candidates(
 
     `min_cost`/`max_cost` default to 1..3 to favor reroll-style discovery,
     matching the rest of the API's defaults; pass `max_cost=5` for full
-    coverage. Ranking itself also biases toward 1-3 cost carries via the
-    Opportunity Score's `cost_bias` component (see `compute_opportunity_score`),
-    but a 4/5-cost carry can still rank if its evidence is strong.
+    coverage. The Opportunity Score's `cost_bias` component (see
+    `compute_opportunity_score`) still favors 1-3 cost carries within the
+    score, but the score no longer decides the order.
 
     `costs` selects exact costs (e.g. {4} or {1, 3, 5}) instead of the
     `min_cost`..`max_cost` range. The window-wide population aggregate runs
@@ -374,6 +407,8 @@ def discover_candidates(
     and only the carries that pass the cost and `min_samples` filters get
     their partner/item/trait evidence built -- the expensive per-carry part.
     """
+    if order not in DISCOVERY_ORDERS:
+        raise ValueError(f"unknown Discovery order {order!r}; expected one of {DISCOVERY_ORDERS}")
     resolved_window = balance_window or default_balance_window(db)
     if resolved_window is None:
         return []
@@ -392,7 +427,7 @@ def discover_candidates(
         )
         for stat in stats
     ]
-    return sorted(candidates, key=lambda c: c.opportunity_score, reverse=True)
+    return order_by_carry_boards(candidates, order)
 
 
 def discovery_candidate_for(

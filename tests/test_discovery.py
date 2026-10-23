@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from tftlab.analytics import Association, CarryStat, compute_item_flexibility, discover_candidates
+from tftlab.analytics import (
+    Association,
+    CarryStat,
+    compute_item_flexibility,
+    discover_candidates,
+    discovery_candidate_for,
+)
 from tftlab.analytics.discovery import (
     OPPORTUNITY_WEIGHTS,
     _population_baseline_top4,
@@ -255,8 +261,6 @@ def test_survivorship_bias_carry_ranks_below_consistent_carry(tmp_path: Path) ->
     # Whatever the exact weighting, the overall score must not let the
     # "great when it hits" carry outrank the genuinely consistent one.
     assert solid.opportunity_score > volatile.opportunity_score
-    ranked_ids = [c.character_id for c in candidates]
-    assert ranked_ids.index("TFT14_Solid") < ranked_ids.index("TFT14_Volatile")
 
 
 def test_low_usage_carry_with_evidence_surfaces_above_common_carry(tmp_path: Path) -> None:
@@ -329,3 +333,63 @@ def test_population_baseline_is_commitment_weighted(tmp_path: Path) -> None:
     # The extreme carry's 2 games out of (5*80 + 2) = 402 total commitment
     # games can only shift a weighted baseline by a tiny amount.
     assert baseline_with_extreme == pytest.approx(baseline_with_normals_only, abs=0.01)
+
+
+ITEMS_2 = ["TFT_Item_BlueBuff", "TFT_Item_JeweledGauntlet"]
+ITEMS_3 = [*ITEMS_2, "TFT_Item_Deathblade"]
+
+
+def _carry_boards(db: Database, character_id: str, boards: int, placement: int, *, name: str | None = None) -> None:
+    for i in range(boards):
+        db.ingest_match(make_match(
+            f"{character_id}_{i}", placement=placement,
+            units=[make_unit(character_id, name=name, rarity=0, tier=2, items=ITEMS_2)],
+        ))
+
+
+def test_candidates_are_ordered_by_carry_boards_never_by_results(tmp_path: Path) -> None:
+    """Recurrence order (owner decision 2026-10-22): the most-carried line
+    comes first even though it placed worst; ties by name, then id; the
+    fewest-first view keeps the same `min_samples` floor."""
+    with Database(tmp_path / "order.sqlite3") as db:
+        _carry_boards(db, "TFT14_Popular", 30, placement=8)  # most carried, places worst
+        _carry_boards(db, "TFT14_Zed", 12, placement=1, name="Alpha")  # tie on boards: name decides
+        _carry_boards(db, "TFT14_Aatrox", 12, placement=2, name="Beta")
+        _carry_boards(db, "TFT14_Rare", 5, placement=1)  # under the floor in both orders
+        most = discover_candidates(db, min_cost=1, max_cost=3, min_samples=10)
+        fewest = discover_candidates(db, min_cost=1, max_cost=3, min_samples=10, order="boards_asc")
+        with pytest.raises(ValueError):
+            discover_candidates(db, min_samples=10, order="top4_desc")
+
+    assert [c.character_id for c in most] == ["TFT14_Popular", "TFT14_Zed", "TFT14_Aatrox"]
+    assert [c.character_id for c in fewest] == ["TFT14_Zed", "TFT14_Aatrox", "TFT14_Popular"]
+    popular = most[0]
+    assert popular.top4_rate == 0.0 and popular.top4_rate < most[1].top4_rate
+    # The score is still computed and returned (API/research only), just not used to order.
+    assert all(isinstance(c.opportunity_score, float) for c in most)
+    assert max(most, key=lambda c: c.opportunity_score).character_id != "TFT14_Popular"
+
+
+def test_partners_and_item_packages_are_most_common_first(tmp_path: Path) -> None:
+    """Inside an entry, rows are ordered by boards together, not by the
+    shrinkage-adjusted association: a frequent partner/pair that placed
+    badly still comes before a rare one that placed well."""
+    with Database(tmp_path / "evidence.sqlite3") as db:
+        for i in range(10):
+            won = i < 3
+            units = [make_unit("TFT14_Carry", rarity=0, tier=2, items=ITEMS_3 if won else ITEMS_2)]
+            if won:
+                units.append(make_unit("TFT14_Rarely", rarity=1))
+            if i >= 2:
+                units.append(make_unit("TFT14_Often", rarity=1))
+            db.ingest_match(make_match(f"EV_{i}", placement=1 if won else 8, units=units))
+        c = discovery_candidate_for(db, "TFT14_Carry", top_n=20)
+
+    assert c is not None
+    for rows in (c.best_partners, c.best_item_packages, c.best_trait_breakpoints):
+        assert [(-a.games, a.label, a.key) for a in rows] == sorted((-a.games, a.label, a.key) for a in rows)
+    assert c.best_partners[0].key == "TFT14_Often" and c.best_partners[0].games == 8
+    assert max(c.best_partners, key=lambda a: a.association_score).key == "TFT14_Rarely"
+    assert c.best_item_packages[0].games == 10  # the pair on every board
+    assert max(c.best_item_packages, key=lambda a: a.association_score).games == 3
+    assert isinstance(c.opportunity_score, float)

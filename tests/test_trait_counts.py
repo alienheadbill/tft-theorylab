@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from _helpers import make_match, make_unit
-from tftlab.analytics import trait_count_associations, trait_profile
+from tftlab.analytics import most_common_first, trait_count_associations, trait_profile
 from tftlab.champion_investigation import carry_summary, champion_investigation
 from tftlab.storage import Database
 
@@ -173,7 +173,9 @@ def test_discovery_trait_evidence_uses_unit_counts_and_never_moves_the_score(
 
     candidates = discovery.discover_candidates(db, balance_window=WINDOW, min_cost=1, max_cost=5, min_samples=1)
     carry = next(c for c in candidates if c.character_id == CARRY)
-    assert carry.best_trait_breakpoints == trait_count_associations(db, CARRY, WINDOW)[: len(carry.best_trait_breakpoints)]
+    # Discovery lists them most common first (boards together), not by association.
+    expected = most_common_first(trait_count_associations(db, CARRY, WINDOW))
+    assert carry.best_trait_breakpoints == expected[: len(carry.best_trait_breakpoints)]
     assert {a.key for a in carry.best_trait_breakpoints} <= {"Solar:4", "Arcanist:2", "Blackthorn:2"}
 
     # Trait evidence is shown next to the Opportunity Score but is not an input to it.

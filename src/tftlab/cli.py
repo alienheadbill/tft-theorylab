@@ -944,23 +944,23 @@ def discovery_smoke(
         console.print(f"  opportunity score: {c.opportunity_score:.2f}")
         if c.best_partners:
             p = c.best_partners[0]
-            console.print(f"  top partner: {p.label} (association {p.association_score:.4f}, {p.games} games)")
+            console.print(f"  most common partner: {p.label} (association {p.association_score:.4f}, {p.games} games)")
         else:
-            console.print("  top partner: none")
+            console.print("  most common partner: none")
         if c.best_item_packages:
             i = c.best_item_packages[0]
             console.print(
-                f"  top item package: {i.label} (association {i.association_score:.4f}, {i.games} games)"
+                f"  most common item package: {i.label} (association {i.association_score:.4f}, {i.games} games)"
             )
         else:
-            console.print("  top item package: none")
+            console.print("  most common item package: none")
         if c.best_trait_breakpoints:
             t = c.best_trait_breakpoints[0]
             console.print(
-                f"  top trait (unit count): {t.label} (association {t.association_score:.4f}, {t.games} games)"
+                f"  most common trait (unit count): {t.label} (association {t.association_score:.4f}, {t.games} games)"
             )
         else:
-            console.print("  top trait (unit count): none")
+            console.print("  most common trait (unit count): none")
         console.print("")
 
 
