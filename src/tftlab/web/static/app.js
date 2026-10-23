@@ -82,6 +82,9 @@ const state = {
   // Carries of any cost in the window (from the API), to tell "these filters
   // match nothing" apart from "this window has no carry data at all".
   windowCarries: null,
+  // balance window -> {matches, latest_game_datetime} from /api/balance-windows,
+  // for the freshness line beside the filters.
+  windowInfo: new Map(),
   requestSeq: 0,
   controller: null,
   selectedId: null,
@@ -93,6 +96,18 @@ const windowSelect = document.querySelector('#window-filter');
 const minGamesInput = document.querySelector('#min-games');
 const orderSelect = document.querySelector('#order-by');
 const gapNoteEl = document.querySelector('#gap-note');
+const summaryEl = document.querySelector('#filter-summary');
+const fmtDay = ms =>
+  (ms ? new Date(Number(ms)).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : 'unknown');
+
+// One line beside the filters: what is shown, from which window, how fresh.
+function filterSummary(shown) {
+  const info = state.windowInfo.get(state.balanceWindow);
+  const costs = [...state.costs].sort((a, b) => a - b).join(', ');
+  return `${fmtNum(shown)} carry line${shown === 1 ? '' : 's'} · ${costs}-cost · ${fmtNum(state.minGames)}+ carry boards` +
+    (state.balanceWindow ? ` · balance window ${state.balanceWindow}` : '') +
+    (info ? ` · ${fmtNum(info.matches)} matches · latest game ${fmtDay(info.latest_game_datetime)}` : '');
+}
 const statusDot = document.querySelector('#status-dot');
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -158,6 +173,7 @@ async function loadBalanceWindows() {
       .map(w => `<option value="${esc(w.balance_window)}">${esc(w.balance_window)} · ${fmtNum(w.matches)} matches</option>`)
       .join('');
     windowSelect.disabled = false;
+    state.windowInfo = new Map(data.windows.map(w => [w.balance_window, w]));
     state.balanceWindow = data.default_balance_window;
     windowSelect.value = state.balanceWindow;
   }
@@ -319,6 +335,7 @@ function entryHtml(c, i, isLead) {
 
 function renderCards() {
   const countEl = document.querySelector('#candidate-count');
+  if (summaryEl) summaryEl.textContent = state.status === 'loaded' ? filterSummary(filteredCandidates().length) : '';
   if (state.status === 'loading') {
     countEl.textContent = '…';
     const costs = [...state.costs].sort((a, b) => a - b).join(', ');

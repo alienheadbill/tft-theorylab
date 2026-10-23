@@ -360,3 +360,28 @@ test("a standalone board lists its one-unit differences in one compact line", as
   assert.ok(boards.includes(`Also observed with one unit different: ${escName(row.units[1].name)} → ${escName(row.units[2].name)} (11 boards)`));
   assert.match(boards, /; 1 more\.<\/p>/);
 });
+
+test("the Boards tab opens on the level with the most carry boards and says so", async () => {
+  const body = structuredClone(fixture("khazix"));
+  const real = levels(body)[0];
+  // Two levels: the most common one is NOT the first in level order.
+  body.observed_boards.levels = [
+    { ...real, level: 7, carry_boards_at_level: 40 },
+    { ...real, level: 8, carry_boards_at_level: 90 },
+  ];
+  const { boards } = await boardsOf(body);
+  assert.equal(count(boards, /<details class="board-level-body" open>/g), 1);
+  assert.equal(count(boards, /<details class="board-level-body">/g), 1);
+  const open = boards.slice(boards.indexOf('<details class="board-level-body" open>'));
+  assert.match(open.slice(0, 400), /id="board-level-8"/);
+  assert.ok(boards.indexOf('id="board-level-7"') < boards.indexOf('id="board-level-8"'), "levels stay in level order");
+  assert.match(boards, /Opened: level 8, the level with the most Kha&#39;Zix carry boards \(90\)/);
+});
+
+test("a single level opens without a note", async () => {
+  const body = structuredClone(fixture("khazix"));
+  body.observed_boards.levels = [levels(body)[0]];
+  const { boards } = await boardsOf(body);
+  assert.equal(count(boards, /<details class="board-level-body" open>/g), 1);
+  assert.doesNotMatch(boards, /board-open-note/);
+});
