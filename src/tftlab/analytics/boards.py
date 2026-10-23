@@ -52,7 +52,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Callable, Iterable, Sequence
 
 from ..carry import carry_commitment_sql
 from ..roster import Roster, id_key
@@ -109,6 +109,9 @@ class ObservedBoard:
     #: Filled only by the window-wide `tftlab.analytics.comps` universe; the
     #: per-champion boards above leave it empty.
     carries: tuple[str, ...] = ()
+    #: Most completed items on any committed copy of the carry (stored
+    #: `completed_item_count`); None where it was not loaded.
+    carry_items: int | None = None
 
 
 def committed_carry_boards(
@@ -131,10 +134,11 @@ def committed_carry_boards(
     eligible_sql, eligible_params = carry_commitment_sql("c", commitment_items)
     rows = db.query_all(
         f"""
-        SELECT b.match_id, b.participant_index, p.placement, p.level, b.carry_tier,
+        SELECT b.match_id, b.participant_index, p.placement, p.level, b.carry_tier, b.carry_items,
                f.unit_index, f.character_id, f.unit_name, f.cost
         FROM (
-            SELECT c.match_id, c.participant_index, MAX(c.tier) AS carry_tier
+            SELECT c.match_id, c.participant_index, MAX(c.tier) AS carry_tier,
+                   MAX(c.completed_item_count) AS carry_items
             FROM units c
             JOIN matches m ON m.match_id = c.match_id
             WHERE c.character_id = ? AND m.balance_window = ? AND {eligible_sql}
@@ -146,15 +150,16 @@ def committed_carry_boards(
         """,
         (character_id, balance_window, *eligible_params),
     )
-    head: dict[tuple[str, int], tuple[int, int | None, int]] = {}
+    head: dict[tuple[str, int], tuple[int, int | None, int, int | None]] = {}
     shop: dict[tuple[str, int], list[str]] = defaultdict(list)
     special: dict[tuple[str, int], list[str]] = defaultdict(list)
     names: dict[str, str] = {}
     costs: dict[str, int] = {}
     resolved: dict[str, str | None] = {}  # raw unit id -> shop identity, resolved once per id
-    for match_id, participant_index, placement, level, carry_tier, _ui, unit_id, unit_name, cost in rows:
+    for match_id, participant_index, placement, level, carry_tier, carry_items, _ui, unit_id, unit_name, cost in rows:
         key = (str(match_id), int(participant_index))
-        head[key] = (int(placement), None if level is None else int(level), int(carry_tier or 0))
+        head[key] = (int(placement), None if level is None else int(level), int(carry_tier or 0),
+                     None if carry_items is None else int(carry_items))
         unit_id = str(unit_id)
         if unit_id not in resolved:
             resolved[unit_id] = shop_champion_id(roster, unit_id)
@@ -168,10 +173,54 @@ def committed_carry_boards(
             costs.setdefault(unit_id, int(cost))
     boards = [
         ObservedBoard(key[0], key[1], placement, level, tier, tuple(sorted(shop.get(key, ()))),
-                      tuple(sorted(special.get(key, ()))))
-        for key, (placement, level, tier) in head.items()
+                      tuple(sorted(special.get(key, ()))), carry_items=items)
+        for key, (placement, level, tier, items) in head.items()
     ]
     return boards, names, costs
+
+
+# ---------------------------------------------------------------- distributions
+
+#: Star levels a final board can report for a unit.
+MIN_STAR, MAX_STAR = 1, 4
+
+
+@dataclass(frozen=True)
+class Distribution:
+    """How a champion's carry boards split by one observed value: boards per
+    value, in value order (an ordered scale; never by results). `boards`
+    (boards with a usable value) is the denominator of every share; boards
+    without one are counted in `missing`, never guessed."""
+
+    boards: int
+    missing: int
+    counts: tuple[tuple[int, int], ...]
+
+    def share(self, n: int) -> float:
+        return n / self.boards if self.boards else 0.0
+
+
+def distribution(values: Iterable[int | None], usable: Callable[[int | None], bool]) -> Distribution:
+    tally: dict[int, int] = defaultdict(int)
+    missing = 0
+    for value in values:
+        if usable(value):
+            tally[int(value)] += 1  # type: ignore[arg-type]
+        else:
+            missing += 1
+    return Distribution(boards=sum(tally.values()), missing=missing, counts=tuple(sorted(tally.items())))
+
+
+def carry_board_distributions(boards: Sequence[ObservedBoard]) -> dict[str, Distribution]:
+    """Final player level, the carry's star level and its completed items on
+    every committed carry board -- each board counted once per distribution.
+    Final level is only what the board ended at: match data has no
+    timeline, so nothing here says when or how fast anyone levelled."""
+    return {
+        "final_level": distribution((b.level for b in boards), valid_level),
+        "carry_stars": distribution((b.carry_tier for b in boards), lambda v: v is not None and MIN_STAR <= v <= MAX_STAR),
+        "carry_items": distribution((b.carry_items for b in boards), lambda v: v is not None and v >= 0),
+    }
 
 
 @dataclass(frozen=True)
