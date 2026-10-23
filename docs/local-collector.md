@@ -218,7 +218,7 @@ The raw database is private: it contains Riot's raw match data and the list of s
 
 This uses TheoryLabs' verified exporter. It:
 
-- checks that the data really came from Riot collection (demo data is refused);
+- checks that the data really came from Riot collection (demo data is refused), and that every exported match is linked to a completed collection run (a match stored only by a failed or unfinished run blocks the export until a later completed run finds it again);
 - removes raw payloads, player identifiers and the collection ledger;
 - replaces match ids with opaque ones;
 - precomputes Discovery;
@@ -230,33 +230,47 @@ By default it exports the current patch; use `--balance-window 18.3` for another
 - `theorylabs-public-snapshot.sqlite3`: the same snapshot, uncompressed;
 - `theorylabs-public-snapshot.sqlite3.manifest.json`: counts, provenance and SHA-256 checksums.
 
-The command prints the match and board counts, file sizes and SHA-256 checksums. **Nothing is uploaded or deployed.** Publishing is a separate step: `tftlab local-publish` (below), or by hand (see the README, "Public website snapshots").
+The command prints the match and board counts, file sizes and SHA-256 checksums. **Nothing is uploaded or deployed.** Publishing is a separate step: `tftlab local-publish` (see "Publishing"), or by hand (see the README, "Public website snapshots").
 
-## Publishing automatically: `tftlab local-publish`
+## Publishing: `tftlab local-publish`
 
-`local-publish` does the whole publishing job: it makes the snapshot, publishes it as a GitHub Release, points the Render website at it, deploys, and checks the live site. It is safe to run on a schedule (for example once a day after a collection).
+`local-publish` does the whole publishing job: it makes the snapshot, publishes it as a GitHub Release, points the Render website at it, deploys, and checks the live site. Its guarantee: a failed or unclear publication leaves the website on the snapshot it served before, never deletes a release that might be needed to recover, and refuses to publish when it cannot be sure the collected data is complete.
+
+Run it by hand for now. Running it unattended (on a schedule) is for after these safeguards have been reviewed and a manual publication has gone through them.
 
 **One-time setup:**
 1. `gh auth login` (the GitHub CLI), so releases are created as you.
-2. In the Render dashboard, **Account Settings → API Keys → Create API Key**, then run `.\.venv\Scripts\tftlab local-set-render-key` and paste it (hidden, saved only in `.env`).
+2. In the Render dashboard, **Account Settings → API Keys → Create API Key**, then run `.\.venv\Scripts	ftlab local-set-render-key` and paste it (hidden, saved only in `.env`).
 3. Add your website's address to `.env`: `TFT_PUBLIC_SITE_URL=https://<your-service>.onrender.com`.
-4. Try it without uploading anything: `.\.venv\Scripts\tftlab local-publish --dry-run`.
+4. Try it without uploading anything: `.\.venv\Scripts	ftlab local-publish --dry-run`.
 
-**What it checks first.** It publishes only when all of these hold; otherwise it stops and the website keeps the snapshot it has:
-- this folder is exactly `origin/main` with no local changes, so the snapshot's analytics match the code the website runs (`git pull` keeps it there);
-- the latest collection that changed data succeeded (validation and Discovery preparation passed). A run stopped before collecting, such as one with an expired key, changed nothing and doesn't count;
-- there is a current trusted patch (not the pause around a patch change);
-- there are at least 200 new matches since the snapshot the website serves (`--force` skips only this check).
+**Before anything is changed.** It publishes only when all of these hold; otherwise it stops (or skips) and the website keeps the snapshot it has:
+- **The right code:** this folder is exactly `origin/main` with no local changes, so the snapshot's analytics match the code the website runs (`git pull` keeps it there).
+- **A successful collection:** the newest collection report that changed data is readable and says `success`. A run stopped before collecting (`preflight_failed`, for example an expired key) changed nothing and is passed over. Any other outcome blocks. So does a report that can't be read or has no outcome, because that collection may have changed data and then crashed.
+- **A trusted current patch:** not the pause around a patch change.
+- **Enough data for a new patch:** when the website doesn't serve the current patch yet, the current patch alone needs at least **200 matches**. Matches from the previous patch included alongside never count towards it.
+- **Enough new data:** otherwise there must be at least **200 new matches**, compared patch by patch with what the website reports (`/api/balance-windows`). `--force` skips this check and the new-patch one, and nothing else.
+- **A known way back:** a read-only Render check finds exactly one web service at `TFT_PUBLIC_SITE_URL` and reads its current `TFT_SNAPSHOT_URL` and `TFT_SNAPSHOT_SHA256`. Both must be present and well-formed, and the website must report the snapshot it serves now (`/api/source`). This is the snapshot it would roll back to. Without one, it refuses to start.
+- **A verified snapshot:** the exporter checks every match, including that **every exported match** is linked to a completed collection run (see "Making a public website snapshot"). If a collection is running, it skips with "Collection is still running; publication was skipped." and changes nothing.
 
-**What it publishes.** The current patch. While the current patch has fewer than 1,000 matches, the previous patch is included as well, so the site never shows a thin new patch on its own.
+**What it publishes.** The current patch. While the current patch has fewer than 1,000 matches, the previous patch is included as well.
 
 **Then:**
-1. It creates a new GitHub Release (`public-snapshot-<patch>-<date>`, `-r2` and so on if that tag exists) with exactly the `.gz` and its manifest, and checks both uploaded completely.
-2. It sets the website's `TFT_SNAPSHOT_URL` and `TFT_SNAPSHOT_SHA256` on Render and starts a deploy. If the deploy fails, it puts both settings back, so the site keeps serving the previous snapshot.
-3. It checks the live site reports the new snapshot (`/api/source`) and serves Discovery from prepared data (`/api/discovery`).
-4. It deletes its own releases beyond the newest 5. Releases published any other way (by hand, or by the release workflow) are never deleted.
+1. It creates a new GitHub Release (`public-snapshot-<patch>-<date>`, `-r2` and so on if that tag exists) with exactly the `.gz` and its manifest, and checks both uploaded completely. If not, Render is never touched. The release is kept whatever happens later, for diagnosis or a retry.
+2. It sets `TFT_SNAPSHOT_URL` and `TFT_SNAPSHOT_SHA256` on Render (nothing else) and starts a deploy.
+3. It counts as published only when the deploy is `live`, `/api/source` reports the new snapshot, and `/api/discovery` serves the newest patch from prepared data (`prepared.status = current`).
 
-Each run saves a report as `data/local/reports/local-publish-<UTC time>.json`. The Render key is only sent to api.render.com and is never printed. Exit code 0 means published, or nothing worth publishing yet; 1 means something failed (the message says what was and wasn't changed).
+**If anything fails once Render has been changed**, it rolls back and checks the rollback:
+- It puts back whichever of the two settings differ from the previous values.
+- If the new deploy went live, or timed out and might still go live, it cancels the new deploy (when one might still be running), starts a deploy of the previous snapshot and waits for it to be live.
+- The rollback counts as **verified** only when Render shows the previous values again and `/api/source` reports the previous snapshot.
+- Otherwise the report says **HIGH SEVERITY: … the rollback could not be verified** and that manual Render inspection is needed. It never claims the site was restored without checking.
+
+**Old releases** are deleted only after a fully verified publication. Only releases this command published are deleted (their notes start with "Published automatically by `tftlab local-publish`."), keeping the newest 5. The new release and the release the website served before are never deleted. If the previous release can't be identified from its URL, nothing is deleted. Releases published any other way (by hand, or by the release workflow) are never deleted. A failed cleanup is a warning; it never undoes a good publication.
+
+Each run saves a report as `data/local/reports/local-publish-<UTC time>.json`, with the outcome, every step, the previous snapshot it would roll back to, the release, the deploy ids and any rollback result. The Render key is only sent to api.render.com and is never printed or written into a report. Exit code 0 means published or skipped (nothing worth publishing, or a collection was running); 1 means something failed, and the message says what was and wasn't changed.
+
+The old cloud workflow `live-ingest.yml` no longer runs on a schedule (see the README, "Former scheduled collection").
 
 ## Where everything is stored
 

@@ -1589,7 +1589,7 @@ def local_publish_command(
 
 
 _PUBLISH_STYLE = {"ok": "[green]OK[/green]  ", "skip": "[yellow]SKIP[/yellow]", "fail": "[bold red]FAIL[/bold red]",
-                  "info": "[cyan]INFO[/cyan]"}
+                  "info": "[cyan]INFO[/cyan]", "warn": "[yellow]WARN[/yellow]"}
 
 
 @app.command("collector-ui")
