@@ -293,7 +293,7 @@ Riot access currently uses a **development key that must be regenerated regularl
 - **Candidate sections:**
   - **Shop odds:** level-by-level champion shop probabilities and related verified shop rules.
   - **Augments:** searchable augment database with names, descriptions, tiers/categories and icons where verified.
-  - **Traits:** trait descriptions, canonical thresholds/breakpoints, icons and special mechanics from verified static metadata.
+  - **Traits:** trait descriptions, icons and special mechanics from verified static metadata. Breakpoints are already stored and shown on champion pages as game data (CommunityDragon `effects[].minUnits`, fail-closed; competitor review brief C).
   - **Loot / orbs / encounters / Wisps:** current-set tables only when the underlying source and patch coverage are verified.
   - **Game timeline:** stage/round structure, PvE/carousel timing and other stable round-flow reference information.
   - **Patch schedule / current version context:** current patch, upcoming patch timing where officially published, and TheoryLabs balance-window context.

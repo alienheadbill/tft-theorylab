@@ -51,6 +51,11 @@ class TraitMeta:
     trait_id: str
     name: str
     icon_url: str | None
+    #: The unit counts where the trait's effects start (`effects[].minUnits`,
+    #: ascending), when they pass `trait_breakpoints`; else None and
+    #: `breakpoint_issue` says why. Game data, never inferred from matches.
+    breakpoints: tuple[int, ...] | None = None
+    breakpoint_issue: str | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +94,34 @@ def _set_number_of(entry: dict[str, Any]) -> int:
     return int(entry.get("number") or 0)
 
 
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def trait_breakpoints(effects: Any) -> tuple[tuple[int, ...] | None, str | None]:
+    """A trait's breakpoints from its CommunityDragon `effects`: each effect's
+    `minUnits`, in the order listed. Fails closed -- (None, reason) -- unless
+    every effect has an integer `minUnits` of at least 1 and an integer
+    `maxUnits` not below it, and the `minUnits` strictly increase (so a
+    missing, empty, non-integer, unordered or duplicated list, or overlapping
+    alternatives such as Set 18's Rival, gives no breakpoints). Raw values
+    only; nothing is derived from match data."""
+    if not isinstance(effects, list) or not effects:
+        return None, "no effects listed"
+    mins: list[int] = []
+    for effect in effects:
+        low = effect.get("minUnits") if isinstance(effect, dict) else None
+        high = effect.get("maxUnits") if isinstance(effect, dict) else None
+        if not _is_int(low) or low < 1:
+            return None, "an effect has no integer minUnits"
+        if not _is_int(high) or high < low:
+            return None, "an effect has no valid maxUnits"
+        mins.append(low)
+    if any(b <= a for a, b in zip(mins, mins[1:])):
+        return None, "minUnits are not strictly increasing (unordered, duplicated or overlapping effects)"
+    return tuple(mins), None
+
+
 def parse_set_metadata(
     payload: dict[str, Any],
     *,
@@ -124,15 +157,18 @@ def parse_set_metadata(
         for c in chosen.get("champions", [])
         if c.get("apiName")
     }
-    traits = {
-        str(t["apiName"]): TraitMeta(
+    traits = {}
+    for t in chosen.get("traits", []):
+        if not t.get("apiName"):
+            continue
+        breakpoints, issue = trait_breakpoints(t.get("effects"))
+        traits[str(t["apiName"])] = TraitMeta(
             trait_id=str(t["apiName"]),
             name=str(t.get("name") or t["apiName"]),
             icon_url=_icon_url(patch, t.get("icon")),
+            breakpoints=breakpoints,
+            breakpoint_issue=issue,
         )
-        for t in chosen.get("traits", [])
-        if t.get("apiName")
-    }
     items = {
         str(i["apiName"]): ItemMeta(
             item_id=str(i["apiName"]),
@@ -244,8 +280,10 @@ def unresolved_emblem_ids(meta: SetMetadata) -> tuple[str, ...]:
 def roster_snapshot(meta: SetMetadata) -> dict[str, Any]:
     """The committed shape of `data/set_roster.json` (`tftlab.roster`):
     champions with name, cost and canonical trait ids, trait names,
-    `trait_items` (`trait_item_ids`: which traits an item can add) and
-    `unresolved_emblems` (`unresolved_emblem_ids`: should be empty)."""
+    `trait_items` (`trait_item_ids`: which traits an item can add),
+    `unresolved_emblems` (`unresolved_emblem_ids`: should be empty), and the
+    traits' verified `trait_breakpoints` (`trait_breakpoints`), with every
+    trait that failed validation and why in `trait_breakpoints_rejected`."""
     trait_ids = champion_trait_ids(meta)
     return {
         "set_number": meta.set_number,
@@ -256,6 +294,10 @@ def roster_snapshot(meta: SetMetadata) -> dict[str, Any]:
         "traits": {tid: t.name for tid, t in sorted(meta.traits.items())},
         "trait_items": {tid: list(items) for tid, items in trait_item_ids(meta).items()},
         "unresolved_emblems": list(unresolved_emblem_ids(meta)),
+        "trait_breakpoints": {tid: list(t.breakpoints) for tid, t in sorted(meta.traits.items())
+                              if t.breakpoints is not None},
+        "trait_breakpoints_rejected": {tid: t.breakpoint_issue for tid, t in sorted(meta.traits.items())
+                                       if t.breakpoints is None},
     }
 
 

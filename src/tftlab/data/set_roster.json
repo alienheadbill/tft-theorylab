@@ -834,5 +834,167 @@
   "DA_PhantomEmblem18",
   "DA_PhantomEmblemUpgrade18"
  ],
- "_unresolved_emblems_fetched": "2026-10-01 from the live CommunityDragon feed (cdragon-live workflow_dispatch on PR #51, test_every_live_set_emblem_links_to_a_trait): 23 Set 18 emblem-like items, 21 linked to a trait, the two 'Phantom Emblem' items link to none, so tftlab.roster classifies nothing as intrinsic until they are resolved"
+ "_unresolved_emblems_fetched": "2026-10-01 from the live CommunityDragon feed (cdragon-live workflow_dispatch on PR #51, test_every_live_set_emblem_links_to_a_trait): 23 Set 18 emblem-like items, 21 linked to a trait, the two 'Phantom Emblem' items link to none, so tftlab.roster classifies nothing as intrinsic until they are resolved",
+ "_trait_breakpoints_fetched": "2026-10-23 (UTC) from a local run against live CommunityDragon latest (cdragon/tft/en_us.json traits[].effects[].minUnits, parsed by tftlab.cdragon.trait_breakpoints); the same run confirmed set_number, champions, traits, trait_items and unresolved_emblems still match this file; checked nightly by test_committed_roster_fixture_matches_live_set. Game data: where each trait's effects start, never inferred from matches",
+ "trait_breakpoints": {
+  "DA_18_Adaptor": [
+   2,
+   3,
+   4
+  ],
+  "DA_18_ApexPredator": [
+   1
+  ],
+  "DA_18_Battlemage": [
+   1
+  ],
+  "DA_18_Blackthorn": [
+   2,
+   4,
+   6
+  ],
+  "DA_18_Blossom": [
+   3,
+   5,
+   7,
+   9,
+   11
+  ],
+  "DA_18_Brawler": [
+   2,
+   4,
+   6
+  ],
+  "DA_18_Caustic": [
+   1
+  ],
+  "DA_18_Coven": [
+   3,
+   4,
+   5,
+   7
+  ],
+  "DA_18_Defender": [
+   2,
+   4,
+   6
+  ],
+  "DA_18_Elderwood": [
+   3,
+   5,
+   7,
+   9,
+   11
+  ],
+  "DA_18_Executioner": [
+   2,
+   3,
+   4
+  ],
+  "DA_18_Fae": [
+   2,
+   4
+  ],
+  "DA_18_Greenfather": [
+   1
+  ],
+  "DA_18_Hunter": [
+   2,
+   3,
+   4,
+   5
+  ],
+  "DA_18_Inferno": [
+   2,
+   3,
+   5,
+   7
+  ],
+  "DA_18_Invoker": [
+   2,
+   3,
+   4,
+   5
+  ],
+  "DA_18_Lunar": [
+   2,
+   3,
+   4,
+   5
+  ],
+  "DA_18_LuxUniqueTrait": [
+   1
+  ],
+  "DA_18_Maokai_UniqueTrait": [
+   1
+  ],
+  "DA_18_Rapidfire": [
+   2,
+   3,
+   4,
+   5
+  ],
+  "DA_18_Slayer": [
+   2,
+   4,
+   6
+  ],
+  "DA_18_Solar": [
+   3
+  ],
+  "DA_18_Spellweaver": [
+   2,
+   4,
+   6
+  ],
+  "DA_18_Sprykin": [
+   3,
+   5,
+   7
+  ],
+  "DA_18_Summoner": [
+   2,
+   3
+  ],
+  "DA_18_Vanguard": [
+   2,
+   4,
+   6
+  ],
+  "DA_18_ZyraUniqueTrait": [
+   1
+  ],
+  "DA_AluneUniqueTrait18": [
+   1
+  ],
+  "DA_DravenUniqueTrait18": [
+   1
+  ],
+  "DA_Emerald18": [
+   1
+  ],
+  "DA_FloraFatalis18": [
+   1,
+   2
+  ],
+  "DA_Juggernaut18": [
+   2,
+   4,
+   6
+  ],
+  "DA_Primal18": [
+   2,
+   4
+  ],
+  "DA_Riftbeast18": [
+   3,
+   5,
+   7,
+   10
+  ]
+ },
+ "trait_breakpoints_rejected": {
+  "DA_18_Eclipse": "an effect has no integer minUnits",
+  "DA_18_Rival": "minUnits are not strictly increasing (unordered, duplicated or overlapping effects)"
+ }
 }

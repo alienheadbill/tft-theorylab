@@ -469,3 +469,26 @@ def test_normal_items_fall_back_to_an_exact_display_name_icon_but_special_items_
     assert sword["kind"] == "component" and sword["art_url"] and "TFT_Item_BFSword" in sword["art_url"]
     assert item_ref("DA_Item_Artifact_TalismanOfAscension")["art_url"] is None
     assert item_ref(GUINSOO + "Radiant")["art_url"] is None
+
+
+def test_trait_rows_carry_game_data_breakpoints_beside_the_observed_counts(db: Database, monkeypatch) -> None:
+    """Breakpoints come from the roster (CommunityDragon), never from the
+    boards: the observed `num_units` rows are unchanged, a verified trait gets
+    its breakpoints, and a trait whose game data failed validation gets no
+    numbers, only a note."""
+    from tftlab import champion_investigation as ci
+
+    body = champion_investigation(db, KOG, WINDOW)
+    rows = {t["trait_id"]: t for t in body["traits"]}
+    assert rows[ADAPTOR]["breakpoints"] == list(ROSTER.breakpoints(ADAPTOR)) == [2, 3, 4]
+    assert rows[ADAPTOR]["breakpoints_note"] is None
+    assert all(isinstance(c["num_units"], int) for r in rows.values() for c in r["counts"])  # still Riot's num_units
+    for direction in body["how_to_play"]["trait_directions"]:
+        assert direction["breakpoints"] == rows[direction["trait_id"]]["breakpoints"]
+
+    unverified = dataclasses.replace(ROSTER, trait_breakpoints={k: v for k, v in ROSTER.trait_breakpoints.items()
+                                                                 if k != ADAPTOR},
+                                     trait_breakpoints_rejected={**ROSTER.trait_breakpoints_rejected, ADAPTOR: "bad"})
+    monkeypatch.setattr(ci, "load_roster", lambda: unverified)
+    row = {t["trait_id"]: t for t in champion_investigation(db, KOG, WINDOW)["traits"]}[ADAPTOR]
+    assert row["breakpoints"] is None and row["breakpoints_note"] == ci.BREAKPOINTS_REJECTED_NOTE
