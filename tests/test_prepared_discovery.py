@@ -275,6 +275,25 @@ def test_a_data_migration_or_new_analytics_code_makes_the_run_stale(
         assert lookup_prepared(db, window_a).status == "stale"
 
 
+def test_analytics_version_ignores_line_endings(tmp_path: Path) -> None:
+    """A Windows checkout (CRLF) of the same sources gets the Linux (LF) version."""
+    lf_dir, crlf_dir = tmp_path / "lf", tmp_path / "crlf"
+    lf_dir.mkdir()
+    crlf_dir.mkdir()
+    lf, crlf = [], []
+    for source in prepared.ANALYTICS_SOURCES:
+        text = source.read_bytes().replace(b"\r\n", b"\n")
+        assert b"\n" in text, source  # every source has lines, so CRLF really differs
+        (lf_dir / source.name).write_bytes(text)
+        (crlf_dir / source.name).write_bytes(text.replace(b"\n", b"\r\n"))
+        lf.append(lf_dir / source.name)
+        crlf.append(crlf_dir / source.name)
+    assert prepared.analytics_version(crlf) == prepared.analytics_version(lf) == prepared.ANALYTICS_VERSION
+    # Content changes still change it.
+    crlf[0].write_bytes(crlf[0].read_bytes() + b"\r\n# changed\r\n")
+    assert prepared.analytics_version(crlf) != prepared.ANALYTICS_VERSION
+
+
 def test_analytics_version_tracks_the_source_files(tmp_path: Path) -> None:
     one, two = tmp_path / "a.py", tmp_path / "b.json"
     one.write_text("x = 1\n")
