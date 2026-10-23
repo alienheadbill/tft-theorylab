@@ -949,3 +949,114 @@ def test_patterns_in_the_database_backed_section(db: Database) -> None:
     assert kinds == [("flex_shell", 2), ("exact_board", None), ("exact_board", None)]
     assert [o["unit"]["name"] for o in level8["patterns"][0]["options"]] == ["Vi", "Gromp"]
     assert section["preview"] and all("patterns" not in r for r in section["preview"])
+
+
+# ---------------------------------------------------------------- window-wide observed comps (tftlab.analytics.comps)
+
+from tftlab.analytics.comps import comp_patterns, group_window_boards, window_final_boards  # noqa: E402
+
+
+def _window(db: Database):
+    boards, _, _ = window_final_boards(db, WINDOW, roster=ROSTER)
+    return boards, group_window_boards(boards, min_boards=MIN_BOARDS)
+
+
+def test_window_boards_are_every_board_in_the_window_once(db: Database) -> None:
+    boards, _ = _window(db)
+    keys = [(b.match_id, b.participant_index) for b in boards]
+    assert len(keys) == len(set(keys)) == 96  # every seeded board of the window, none from the other window
+    assert not any(b.match_id.startswith("OLD_") for b in boards)
+    # Kog'Maw on tank items is still a board here (window-wide), just without a committed carry.
+    tank = [b for b in boards if b.match_id.startswith("T8_")]
+    assert len(tank) == 10 and all(b.carries == () for b in tank)
+    # Two committed Kog'Maw copies: one board, one carry entry, both copies in the lineup.
+    double = [b for b in boards if b.match_id.startswith("KK7_")]
+    assert len(double) == 10 and all(b.carries == (KOGMAW,) and b.lineup.count(KOGMAW) == 2 for b in double)
+
+
+def test_window_committed_carries_match_the_per_row_commitment_rule(db: Database) -> None:
+    from tftlab.carry import carry_commitment_sql
+
+    eligible, params = carry_commitment_sql("f")
+    per_row = {(str(m), int(i), shop_champion_id(ROSTER, c) or c) for m, i, c in db.query_all(
+        f"SELECT f.match_id, f.participant_index, f.character_id FROM units f JOIN matches m "
+        f"ON m.match_id = f.match_id WHERE m.balance_window = ? AND {eligible}", (WINDOW, *params))}
+    boards, _ = _window(db)
+    assert {(b.match_id, b.participant_index, c) for b in boards for c in b.carries} == per_row
+
+
+def test_window_lineups_count_each_board_once_and_keep_levels_apart(db: Database) -> None:
+    _, comps = _window(db)
+    level = {g.level: g for g in comps.evidence.levels}
+    assert sorted(level) == [7, 8, 9]  # level 0 is never a group
+    assert level[8].carry_boards == 54  # every level-8 board in the window: the denominator
+    a8 = next(lg for lg in level[8].lineups if lg.lineup == tuple(_lineup(*A)))
+    a9 = next(lg for lg in level[9].lineups if lg.lineup == tuple(_lineup(*A)))
+    assert (a8.boards, a9.boards) == (24, 12)  # A8 + the tank-item boards; level 9 apart
+    context = comps.lineup_carries[(8, a8.lineup)]
+    assert context.carries == {KOGMAW: 14} and context.without_carry == 10
+
+
+def test_window_promotion_floor() -> None:
+    def obs(lineup, n, tag):
+        return [ObservedBoard(f"{tag}{i}", 0, 4, 8, 0, tuple(sorted(lineup))) for i in range(n)]
+
+    comps = group_window_boards(obs([KOGMAW, DRAVEN], 10, "a") + obs([VI, KARMA], 9, "b"), min_boards=MIN_BOARDS)
+    assert [lg.lineup for lg in comps.promoted] == [tuple(sorted([KOGMAW, DRAVEN]))]
+    assert [p.boards for p in comp_patterns(comps, min_boards=MIN_BOARDS)] == [10]
+
+
+def _many_lineups() -> list[ObservedBoard]:
+    """Overlapping lineups at two levels with tied board counts."""
+    pool = [KOGMAW, DRAVEN, KARMA, GROMP, NIDALEE, VI, X1, X2, X3]
+    boards = []
+    for level in (8, 9):
+        for i, drop in enumerate(pool):
+            lineup = tuple(sorted(u for u in pool if u != drop)[:6])
+            boards += [ObservedBoard(f"{level}-{i}-{j}", 0, 1 + j % 8, level, 0, lineup, (), (lineup[0],))
+                       for j in range(10 + (i % 3))]
+    return boards
+
+
+def test_window_patterns_are_a_partition_of_the_promoted_lineups() -> None:
+    comps = group_window_boards(_many_lineups(), min_boards=MIN_BOARDS)
+    patterns = comp_patterns(comps, min_boards=MIN_BOARDS)
+    members = [(p.level, g.lineup) for p in patterns for _, g in p.pattern.options]
+    assert len(members) == len(set(members)) == len({(lg.level, lg.lineup) for lg in comps.promoted})
+    for p in patterns:
+        assert p.boards == sum(g.boards for _, g in p.pattern.options)
+        assert len({g.level for _, g in p.pattern.options}) == 1  # one level per pattern
+        if p.pattern.shell is not None:  # every member is the shell plus exactly one unit
+            for flex, g in p.pattern.options:
+                assert sorted([*p.pattern.shell, flex]) == list(g.lineup)
+
+
+def test_window_pattern_order_is_deterministic_under_ties() -> None:
+    import random
+
+    boards = _many_lineups()
+    expected = [(p.level, p.pattern.anchor.lineup, p.boards)
+                for p in comp_patterns(group_window_boards(boards, min_boards=MIN_BOARDS), min_boards=MIN_BOARDS)]
+    for seed in range(5):
+        shuffled = boards[:]
+        random.Random(seed).shuffle(shuffled)
+        got = [(p.level, p.pattern.anchor.lineup, p.boards)
+               for p in comp_patterns(group_window_boards(shuffled, min_boards=MIN_BOARDS), min_boards=MIN_BOARDS)]
+        assert got == expected
+    # Boards first, then the anchor's lineup order, then level: never placement.
+    keys = [(-b, lineup, level) for level, lineup, b in expected]
+    assert keys == sorted(keys)
+
+
+def test_carry_agnostic_patterns_let_any_unit_flex() -> None:
+    def obs(lineup, n, tag):
+        return [ObservedBoard(f"{tag}{i}", 0, 4, 8, 0, tuple(sorted(lineup)), (), (KOGMAW,)) for i in range(n)]
+
+    # Same three teammates, with Kog'Maw or Nidalee in the fourth slot.
+    boards = obs([KOGMAW, DRAVEN, KARMA, VI], 12, "k") + obs([NIDALEE, DRAVEN, KARMA, VI], 10, "n")
+    comps = group_window_boards(boards, min_boards=MIN_BOARDS)
+    (pattern,) = comp_patterns(comps, min_boards=MIN_BOARDS)
+    assert pattern.pattern.shell == tuple(sorted([DRAVEN, KARMA, VI]))
+    assert [f for f, _ in pattern.pattern.options] == [KOGMAW, NIDALEE]
+    # The per-champion rule still never lets the carry flex.
+    assert board_patterns(comps.promoted, carry_id=KOGMAW, min_boards=MIN_BOARDS)[8][0].shell is None

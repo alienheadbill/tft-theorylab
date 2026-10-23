@@ -37,6 +37,7 @@ from .champion_investigation import (
 from .demo import generate_demo_matches
 from .experiments import ExperimentNotFound, get_experiment, list_experiments, seed_demo_experiments
 from .game_art import enrich_candidate, experiment_art, field_note_art
+from .observed_comps import COMPS_MIN_BOARDS, ComputedWindow, comps_payload, compute_window
 from .public_snapshot import read_snapshot_provenance
 from .prepared_discovery import (
     PreparedLookup,
@@ -477,6 +478,38 @@ def cached_carry_board_average(db: Database, balance_window: str) -> dict[str, f
     return dict(average) if average is not None else None
 
 
+# ---------------------------------------------------------------- observed comps cache
+#
+# The Observed comps page groups every board of a window (one query over all
+# of the window's units, then grouping in memory). That grouping is the same
+# for every level / cost / min-boards filter, so it is kept the same way as
+# the window average above:
+#   key       : (database target, balance window)
+#   freshness : prepared Discovery's `source_fingerprint`, read on every
+#               request; new matches force a recompute.
+#   size      : a handful of windows; the oldest entry is dropped first.
+# Patterns, filters and rows are built per request from the cached grouping
+# (`comps_payload`); nothing in it is ever modified.
+_COMPS_CACHE: dict[tuple[str, str], tuple[str, ComputedWindow]] = {}
+_COMPS_CACHE_SIZE = 4
+_COMPS_LOCK = threading.Lock()
+
+
+def cached_window_comps(db: Database, balance_window: str) -> ComputedWindow:
+    fingerprint = source_fingerprint(db, balance_window).fingerprint
+    key = (_database_target(), balance_window)
+    with _COMPS_LOCK:
+        hit = _COMPS_CACHE.get(key)
+        if hit is not None and hit[0] == fingerprint:
+            return hit[1]
+        computed = compute_window(db, balance_window)
+        _COMPS_CACHE.pop(key, None)
+        _COMPS_CACHE[key] = (fingerprint, computed)
+        while len(_COMPS_CACHE) > _COMPS_CACHE_SIZE:
+            _COMPS_CACHE.pop(next(iter(_COMPS_CACHE)))
+        return computed
+
+
 def carry_partners(db: Database, character_id: str, balance_window: str) -> list[tuple[Any, ...]]:
     """Champions that most often finish on the same board as a committed `character_id`.
 
@@ -623,6 +656,54 @@ def create_app() -> FastAPI:
         # One page for the champion picker and each investigation;
         # champion.js reads the path and calls the read-only API below.
         return FileResponse(WEB_DIR / "champion.html")
+
+    @app.get("/comps", include_in_schema=False)
+    def comps_page() -> FileResponse:
+        # Observed comps; comps.js calls /api/comps.
+        return FileResponse(WEB_DIR / "comps.html")
+
+    @app.get("/api/comps")
+    def comps(
+        balance_window: str | None = Query(None),
+        level: int | None = Query(None, ge=1, le=10, description="One final player level; levels are never pooled"),
+        min_boards: int = Query(COMPS_MIN_BOARDS, ge=COMPS_MIN_BOARDS, le=100000,
+                                description="Boards an exact lineup needs at one level (never under the floor)"),
+        cost: str | None = Query(
+            None, description="Cost of the card's lead carry, comma-separated (e.g. '4' or '1,2,3')",
+            pattern=r"^[1-5](,[1-5])*$",
+        ),
+        limit: int = Query(50, ge=1, le=500),
+    ) -> dict[str, object]:
+        """Observed comps for one balance window: exact final lineups from
+        every board, grouped into observed board patterns and ordered by
+        boards (`tftlab.observed_comps`). Placement numbers are descriptive
+        only and never order or filter anything."""
+        costs = sorted({int(c) for c in cost.split(",")}) if cost else None
+        db, source = _resolve_source()
+        with db:
+            windows = available_balance_windows(db)
+            resolved_window = balance_window or (windows[0][0] if windows else None)
+            if resolved_window is None:
+                raise HTTPException(status_code=404, detail="No data available")
+            window = next((w for w in windows if w[0] == resolved_window), None)
+            if window is None:
+                raise HTTPException(status_code=404, detail="Balance window not found")
+            computed = cached_window_comps(db, resolved_window)
+            status = source_status(db, source)
+        body = comps_payload(computed, level=level, costs=costs, min_boards=min_boards, limit=limit)
+        return {
+            "demo": source.synthetic,
+            "backend": db.dialect,
+            "balance_window": resolved_window,
+            "matches": window[1],
+            "boards": computed.window_boards,
+            "latest_game": window[2],
+            "window": {"balance_window": window[0], "matches": window[1], "boards": computed.window_boards,
+                       "latest_game_datetime": window[2]},
+            # Where the numbers come from and how fresh they are (`/api/source`).
+            "source": status,
+            **body,
+        }
 
     @app.get("/experiments", include_in_schema=False)
     @app.get("/experiments/{key}", include_in_schema=False)
