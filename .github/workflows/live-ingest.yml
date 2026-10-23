@@ -1,27 +1,28 @@
 name: Live ingest
 
-# Hits the real Riot API and CommunityDragon and writes to the production
-# database (via its external Postgres URL), so it must never run on
-# push/pull_request. It runs in two ways, through the SAME steps:
+# LEGACY cloud collection path. The website now serves snapshots published
+# from the local collector (`tftlab local-collect` / `tftlab local-publish`),
+# and this workflow only writes to the legacy Neon database.
 #
-# - schedule: every 6 hours (UTC, below) with FIXED conservative settings
-#   -- bounded mode, 15/15/20/25/25 seeds (Challenger/Grandmaster/Master/
-#   Diamond/Platinum) x 10 matches each, the configuration of the two
-#   successful production runs 36286242686 and 36289198154 (about 600-730
-#   Riot requests and 15-20 minutes each). Dispatch inputs never apply to a
-#   scheduled run. Scheduled runs are bounded, not maximum: both production
-#   maximum-mode runs so far failed with 401 during deep Diamond/Platinum
-#   ladder enumeration, before any match was collected.
+# Hits the real Riot API and CommunityDragon and writes to that database
+# (via its external Postgres URL), so it must never run on push/pull_request.
+# It runs ONLY when someone starts it, through the SAME steps:
+#
 # - workflow_dispatch: the operator inputs below, unchanged.
 # - issue_comment: owner-only `/ingest smoke` on Ops Control issue #38,
 #   fixed at 3 Challenger seeds x 3 matches for a bounded post-cutover smoke.
 #
-# With the Riot development key (it expires about every 24 hours), a
-# scheduled run after expiry fails at the Riot key check, before anything
-# is ingested; a key that expires mid-run fails the ingest (401/403 are
-# fatal) with no seed-ledger or provenance progress for that run. Either
-# way the run is red, and the next scheduled run after the RIOT_API_KEY
-# secret is replaced collects normally.
+# There is NO schedule trigger any more: the former 6-hourly cron
+# ("41 */6 * * *") failed every run once its Riot development key expired,
+# and an automatic trigger could have revived this old path unnoticed if its
+# secrets were ever refreshed. The job-level `github.event_name ==
+# 'schedule'` settings below are kept only so the fixed bounded configuration
+# stays documented; nothing can select them while no schedule exists.
+#
+# With the Riot development key (it expires about every 24 hours), a run
+# after expiry fails at the Riot key check, before anything is ingested; a
+# key that expires mid-run fails the ingest (401/403 are fatal) with no
+# seed-ledger or provenance progress for that run.
 #
 # Sampling is chosen per run through the inputs below: one seed count per
 # rank cohort (validated in the first step, before checkout or any
@@ -40,13 +41,8 @@ name: Live ingest
 # match-detail fetches). Each wave of seeds is finalized as its own ingest
 # run, so a stopped or failed run loses at most one wave's bookkeeping and
 # the next dispatch continues the rotation. Nothing here dispatches another
-# run or retries a run; the schedule only starts fresh, independent runs.
+# run or retries a run.
 on:
-  schedule:
-    # 00:41, 06:41, 12:41 and 18:41 UTC. Off the hour on purpose: GitHub
-    # delays (and can drop) scheduled runs at busy top-of-hour times.
-    # Scheduled workflows run from the default branch (main) only.
-    - cron: "41 */6 * * *"
   workflow_dispatch:
     inputs:
       challenger_seeds:

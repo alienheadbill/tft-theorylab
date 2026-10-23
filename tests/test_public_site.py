@@ -244,6 +244,34 @@ def test_public_positioning_is_static_study_not_live_assistance() -> None:
         assert "live Riot data" not in script.read_text(), script.name
 
 
+#: Never on the Discovery page (owner decision 2026-10-22: order by recurrence, never by results).
+DISCOVERY_BANNED = ("best", "optimal", "recommended", "strong", "strongest", "top of the list", "hidden gem",
+                    "hidden gems", "underrated", "sleeper", "opportunity score")
+
+
+def _visible_text(html: str) -> str:
+    """Page text without tags, so markup such as `<strong>` isn't read as a word."""
+    return re.sub(r"<[^>]+>", " ", re.sub(r"<(script|style)\b.*?</\1>", " ", html, flags=re.S))
+
+
+def test_discovery_page_orders_by_recurrence_and_shows_no_score() -> None:
+    home = (WEB / "index.html").read_text(encoding="utf-8")
+    app_js = (WEB / "static" / "app.js").read_text(encoding="utf-8")
+    about = (WEB / "about.html").read_text(encoding="utf-8")
+    select = re.search(r'<select id="order-by">(.*?)</select>', home, re.S)
+    assert select, "Discovery has one order control"
+    assert re.findall(r'<option value="([^"]+)"', select.group(1)) == ["boards_desc", "boards_asc"]
+    assert "less common carry lines" in select.group(1)
+    assert 'id="sort-by"' not in home
+    # No result-based sort and no score anywhere in the page script.
+    for gone in ("opportunity_score", "sortBy", "top4_rate:", "avg_placement:"):
+        assert gone not in app_js, gone
+    assert "order: state.order" in app_js  # the server applies the order before `limit`
+    for name, text in (("index.html", _visible_text(home)), ("about.html", _visible_text(about)), ("app.js", app_js)):
+        for word in DISCOVERY_BANNED:
+            assert not re.search(rf"\b{re.escape(word)}\b", text, re.I), (name, word)
+
+
 # ---------------------------------------------------------------- /riot.txt and secrets
 
 

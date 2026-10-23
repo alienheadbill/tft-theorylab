@@ -28,9 +28,9 @@ copying that database:
   real-ingestion checks below (`read_snapshot_provenance`); anything else
   fails closed.
 
-Real-ingestion checks (fail closed; every one must hold): the source has
-completed live-ingest runs (`ingest_runs`) whose discovery ledger
-(`match_discoveries`) links to exported matches, and every exported match is
+Real-ingestion checks (fail closed; every one must hold): every exported
+match is linked through the discovery ledger (`match_discoveries`) to at
+least one completed live-ingest run (`ingest_runs`), and every exported match is
 a ranked (queue 1100) Riot Match-V1 record -- a regional Riot match id, the
 stored raw payload's `metadata.match_id` / `data_version` / participant list
 matching it, and a trusted numeric patch balance window. The deterministic
@@ -220,8 +220,11 @@ def _check_source(db: Database, balance_windows: Sequence[str] | None) -> dict[s
             JOIN ingest_runs r ON r.run_id = d.run_id AND r.status = 'completed'
             JOIN matches m ON m.match_id = d.match_id
             WHERE m.balance_window IN ({marks})""", windows)[0]
-    if not linked:
-        raise SnapshotExportError("no exported match is linked to a completed live-ingest run in the discovery ledger")
+    if linked != len(ids):
+        raise SnapshotExportError(
+            f"{len(ids) - linked} of {len(ids)} exported matches are not linked to a completed live-ingest run in the "
+            "discovery ledger (only to a failed or unfinished run, or to none); every exported match needs "
+            "completed-ingest provenance")
 
     # 2. Every exported match is a ranked Riot Match-V1 record.
     failures: dict[str, int] = {}
@@ -404,8 +407,10 @@ def export_public_snapshot(source: Database, out_path: Path | str, *, balance_wi
                 "real_ingestion_checks": {
                     "passed": True,
                     "completed_ingest_runs": facts["completed_ingest_runs"],
+                    "matches_exported": len(facts["match_ids"]),
                     "matches_linked_to_completed_runs": facts["matches_linked_to_completed_runs"],
                     "discovery_ledger_coverage": round(facts["matches_linked_to_completed_runs"] / len(facts["match_ids"]), 4),
+                    "every_match_linked_to_a_completed_run": True,
                     "per_match": "queue 1100; regional Riot match id; raw payload metadata.match_id, data_version and "
                                  "participant list consistent with the stored boards; numeric client patch; trusted "
                                  "balance window",

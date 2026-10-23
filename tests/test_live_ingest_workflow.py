@@ -19,13 +19,13 @@ def test_workflow_file_exists() -> None:
     assert WORKFLOW.is_file()
 
 
-def test_triggers_are_schedule_manual_and_exact_owner_ops_smoke_only() -> None:
-    """Production ingestion is schedule/manual plus one narrow owner-only
-    Ops Control command; never push/PR/general dispatch or arbitrary comments."""
+def test_triggers_are_manual_and_exact_owner_ops_smoke_only() -> None:
+    """This legacy cloud path only runs when someone starts it: a manual
+    dispatch or one narrow owner-only Ops Control command; never a schedule,
+    push/PR/general dispatch or arbitrary comments."""
     text = _text()
     on = text[text.index("\non:\n") : text.index("\npermissions:")]
     assert re.findall(r"^  ([a-z_]+):", on, flags=re.M) == [
-        "schedule",
         "workflow_dispatch",
         "issue_comment",
     ]
@@ -38,11 +38,13 @@ def test_triggers_are_schedule_manual_and_exact_owner_ops_smoke_only() -> None:
     assert "github.event.comment.body == '/ingest smoke'" in job
 
 
-def test_schedule_is_every_six_hours_off_the_hour() -> None:
-    """Four conservative collection opportunities a day (UTC), at minute 41
-    rather than :00, where GitHub delays or drops scheduled runs."""
-    crons = re.findall(r'^\s+- cron: "([^"]+)"', _text(), flags=re.M)
-    assert crons == ["41 */6 * * *"]
+def test_the_former_six_hourly_schedule_is_disabled() -> None:
+    """The cron that failed every run once its development key expired is
+    gone, and the header says so; nothing can start this path unattended."""
+    text = _text()
+    assert re.findall(r'^\s+- cron: "([^"]+)"', text, flags=re.M) == []
+    assert "\n  schedule:" not in text
+    assert "There is NO schedule trigger any more" in text
 
 
 #: What a scheduled run uses (the proven bounded configuration of production

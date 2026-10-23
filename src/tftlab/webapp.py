@@ -14,6 +14,8 @@ from fastapi.staticfiles import StaticFiles
 
 from .analytics import (
     CANONICAL_UNIT_TIEBREAK_SQL,
+    DEFAULT_DISCOVERY_ORDER,
+    DISCOVERY_ORDERS,
     available_balance_windows,
     carry_board_average,
     carry_commitment_stats,
@@ -985,6 +987,12 @@ def create_app() -> FastAPI:
             "carries get partner/item/trait evidence built.",
             pattern=r"^[1-5](,[1-5])*$",
         ),
+        order: str = Query(
+            DEFAULT_DISCOVERY_ORDER,
+            description="Carry boards, most first (boards_desc) or fewest first (boards_asc); ties by name, "
+            "then character id. Discovery never orders by results or by the Opportunity Score.",
+            pattern=f"^({'|'.join(DISCOVERY_ORDERS)})$",
+        ),
     ) -> dict[str, object]:
         selected = sorted({int(c) for c in costs.split(",")}) if costs else list(range(1, max_cost + 1))
         db, demo = _resolve_database()
@@ -995,7 +1003,8 @@ def create_app() -> FastAPI:
                 # Steady state: no aggregation, just the run's matching rows.
                 window_carries = prepared.run.window_carries
                 candidates = read_prepared_candidates(
-                    db, prepared.run, costs=selected, min_samples=min_samples, top_n=top_n, limit=limit
+                    db, prepared.run, costs=selected, min_samples=min_samples, top_n=top_n, limit=limit,
+                    order=order,
                 )
             else:
                 # No current prepared run (never prepared, or new matches /
@@ -1011,6 +1020,7 @@ def create_app() -> FastAPI:
                         min_samples=min_samples,
                         top_n=top_n,
                         population=population,
+                        order=order,
                     )[:limit]
                 ]
         return {
@@ -1019,6 +1029,7 @@ def create_app() -> FastAPI:
             "balance_window": resolved_window,
             "costs": selected,
             "min_samples": min_samples,
+            "order": order,
             # Carries of any cost in the window before the cost/min filters:
             # 0 means the window genuinely has no carry data; otherwise an
             # empty `candidates` list means the filters matched nothing.
