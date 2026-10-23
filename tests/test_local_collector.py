@@ -598,7 +598,8 @@ def test_local_collect_cli_passes_maximum_mode_and_budgets(tmp_path: Path, monke
 def test_local_collect_cli_rejects_an_unknown_collection_mode(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = CliRunner().invoke(cli.app, ["local-collect", "--collection-mode", "everything"])
-    assert result.exit_code == 2 and "collection-mode" in result.output
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)  # CI terminals get colored, boxed usage errors
+    assert result.exit_code == 2 and "bounded, maximum" in plain
 
 
 def test_seed_rotation_and_provenance_finalize_normally(tmp_path: Path) -> None:
