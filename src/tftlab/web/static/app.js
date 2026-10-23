@@ -47,15 +47,16 @@ const investigationHref = c => {
 // Matches `_LOW_SAMPLE_COMMITMENT_GAMES` in tftlab.cli's discovery-smoke.
 const LOW_SAMPLE_COMMITMENT_GAMES = 30;
 
-const SORT_LABELS = {
-  opportunity_score: 'opportunity score',
-  top4_rate: 'top 4 rate',
-  avg_placement: 'average placement',
-  commitment_rate: 'rarity',
+// Discovery lists carry lines by how often they were carried (carry boards),
+// never by results. The server orders them (`order` on /api/discovery); the
+// note on the first entry says which end of the list it is.
+const ORDER_LEAD_NOTES = {
+  boards_desc: 'most carry boards in this window',
+  boards_asc: 'fewest carry boards at this minimum',
 };
 
-// Hand-drawn loops for the circled score. Picked by list position (or a
-// hash of the champion id), never randomly, so a page always renders the same.
+// Hand-drawn loops for the circled carry-board count. Picked by list position
+// (or a hash of the champion id), never randomly, so a page always renders the same.
 // Every point stays outside the digits' box (roughly x 22-98, y 16-56 in this
 // viewBox), including the overshooting tail, so the stroke never crosses a number.
 const CIRCLES = [
@@ -71,7 +72,7 @@ const ARROW_UP =
 const state = {
   costs: new Set([1, 2, 3]),
   minGames: 10,
-  sortBy: 'opportunity_score',
+  order: 'boards_desc',
   balanceWindow: null,
   candidates: [],
   // 'loading' | 'loaded' | 'error'. Nothing is ever called "empty" while a
@@ -90,7 +91,7 @@ const cardsEl = document.querySelector('#cards');
 const detailEl = document.querySelector('#detail');
 const windowSelect = document.querySelector('#window-filter');
 const minGamesInput = document.querySelector('#min-games');
-const sortSelect = document.querySelector('#sort-by');
+const orderSelect = document.querySelector('#order-by');
 const gapNoteEl = document.querySelector('#gap-note');
 const statusDot = document.querySelector('#status-dot');
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -103,14 +104,14 @@ function stamp(kind) {
   return `<span class="stamp stamp-${kind}">${label}</span>`;
 }
 
-function scoreMark(score, variant) {
+function boardsMark(boards, variant) {
   return `
-    <div class="score-mark">
-      <span class="score-ring">
-        <svg class="score-circle" viewBox="0 0 120 70" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path d="${CIRCLES[variant % CIRCLES.length]}"/></svg>
-        <span class="score-num">${score.toFixed(1)}</span>
+    <div class="board-mark">
+      <span class="board-ring">
+        <svg class="board-circle" viewBox="0 0 120 70" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path d="${CIRCLES[variant % CIRCLES.length]}"/></svg>
+        <span class="board-num">${fmtNum(boards)}</span>
       </span>
-      <span class="score-label">opportunity score</span>
+      <span class="board-label">carry boards</span>
     </div>`;
 }
 
@@ -216,6 +217,7 @@ async function loadDiscovery() {
       min_samples: String(state.minGames),
       top_n: '5',
       limit: '200',
+      order: state.order,
     });
     if (state.balanceWindow) params.set('balance_window', state.balanceWindow);
     const data = await fetchJson(`/api/discovery?${params}`, { signal: controller.signal });
@@ -245,12 +247,10 @@ function filtersChanged() {
   filterTimer = setTimeout(loadDiscovery, 350);
 }
 
-function filteredSortedCandidates() {
-  // The server already applied these filters; re-applying them only guards
-  // against a response for an older selection ever being shown.
-  const list = state.candidates.filter(c => state.costs.has(c.cost) && c.commitment_games >= state.minGames);
-  const dir = { opportunity_score: -1, top4_rate: -1, avg_placement: 1, commitment_rate: 1 }[state.sortBy] ?? -1;
-  return [...list].sort((a, b) => dir * (a[state.sortBy] - b[state.sortBy]));
+function filteredCandidates() {
+  // The server already applied these filters and the order; re-applying the
+  // filters only guards against a response for an older selection ever being shown.
+  return state.candidates.filter(c => state.costs.has(c.cost) && c.commitment_games >= state.minGames);
 }
 
 function evidenceNote(kindLabel, assoc, kind) {
@@ -277,19 +277,19 @@ function entryHtml(c, i, isLead) {
       <div class="entry-tab">
         <span class="entry-no">№ ${pad2(i + 1)}</span>
         <span class="cost-marker">${c.cost}-cost</span>
-        ${isLead ? `<span class="lead-note">top of the list, by ${SORT_LABELS[state.sortBy]}</span>` : ''}
+        ${isLead ? `<span class="lead-note">${ORDER_LEAD_NOTES[state.order]}</span>` : ''}
       </div>
       <div class="entry-head">
         ${portrait(displayName(c), c.cost, c.art_url)}
         <div class="entry-title">
           <h3>${esc(displayName(c))}</h3>
-          <p class="sample"><b>${fmtNum(n)}</b> carry boards</p>
           ${low ? lowSampleNote() : ''}
         </div>
-        ${scoreMark(c.opportunity_score, i)}
+        ${boardsMark(n, i)}
       </div>
       <div class="entry-body">
         <div class="entry-stats">
+          <p class="evidence-head"><span>how these boards placed</span>${stamp('observed')}</p>
           <dl class="results">
             <div><dt>avg place</dt><dd>${fmtPlace(c.avg_placement)}</dd></div>
             <div><dt>top 4</dt><dd>${fmtPct(c.top4_rate)}</dd></div>
@@ -330,7 +330,7 @@ function renderCards() {
     showState(`Couldn't load discovery data: ${state.errorMessage}`, { error: true, retry: true });
     return;
   }
-  const list = filteredSortedCandidates();
+  const list = filteredCandidates();
   countEl.textContent = fmtNum(list.length);
   if (!list.length) {
     showState(
@@ -399,18 +399,18 @@ async function showDetail(id) {
           <div>
             <p class="notes-kicker">working notes</p>
             <h3 tabindex="-1">${esc(displayName(c))}</h3>
-            <p class="notes-meta">${c.cost}-cost · <b>${fmtNum(n)}</b> carry boards</p>
+            <p class="notes-meta">${c.cost}-cost</p>
             <p class="notes-meta"><a class="back-link" href="${esc(investigationHref(c))}">full champion investigation →</a></p>
             ${low ? lowSampleNote() : ''}
           </div>
-          ${scoreMark(c.opportunity_score, hashIndex(c.character_id))}
+          ${boardsMark(n, hashIndex(c.character_id))}
         </div>
       </div>
 
       <div class="notes-row">
         <p class="margin-note quiet">every game where it held 2+ completed items</p>
         <section class="notes-section" aria-label="Results when committed">
-          <h4>Results when committed</h4>
+          <h4>Results when committed ${stamp('observed')}</h4>
           <dl class="results big">
             <div><dt>avg place</dt><dd>${fmtPlace(c.avg_placement)}</dd></div>
             <div><dt>top 4</dt><dd>${fmtPct(c.top4_rate)}</dd></div>
@@ -423,7 +423,7 @@ async function showDetail(id) {
       <div class="notes-row">
         <p class="margin-note">ceiling vs. floor: a line that only works on the hit is fragile</p>
         <section class="notes-section" aria-label="Hit versus miss">
-          <h4><span class="underlined">Hit vs. miss</span></h4>
+          <h4><span class="underlined">Hit vs. miss</span> ${stamp('observed')}</h4>
           <div class="hitmiss">
             <div>
               <p class="hm-label">when it hits 3★</p>
@@ -441,7 +441,7 @@ async function showDetail(id) {
       </div>
 
       <div class="notes-row">
-        <p class="margin-note">ranked by shrinkage-adjusted association, not raw top 4</p>
+        <p class="margin-note">most common first; how they placed is shown on each row</p>
         <section class="notes-section" aria-label="Partners">
           <h4>Partners ${stamp('observed')}</h4>
           ${ledgerList(c.best_partners, 'partner')}
@@ -499,9 +499,9 @@ function bindControls() {
     filtersChanged();
   });
 
-  sortSelect.addEventListener('change', () => {
-    state.sortBy = sortSelect.value;
-    renderCards();
+  orderSelect.addEventListener('change', () => {
+    state.order = orderSelect.value;
+    filtersChanged(); // the server applies the order before `limit`
   });
 
   windowSelect.addEventListener('change', () => {

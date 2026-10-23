@@ -105,6 +105,10 @@ class ObservedBoard:
     lineup: tuple[str, ...]
     #: Non-shop units on the board (sorted ids, duplicates kept); context only.
     special_units: tuple[str, ...] = ()
+    #: Every committed carry on the board (sorted distinct shop identities).
+    #: Filled only by the window-wide `tftlab.analytics.comps` universe; the
+    #: per-champion boards above leave it empty.
+    carries: tuple[str, ...] = ()
 
 
 def committed_carry_boards(
@@ -307,9 +311,9 @@ class BoardPattern:
         return self.options[0][1]
 
 
-def _flex_unit(lineup: tuple[str, ...], shell: Counter, size: int, carry_id: str) -> str | None:
+def _flex_unit(lineup: tuple[str, ...], shell: Counter, size: int, carry_id: str | None) -> str | None:
     """The one non-carry copy `lineup` has beyond `shell` (a literal multiset
-    containing it), else None."""
+    containing it), else None. With `carry_id=None` any unit may be it."""
     if len(lineup) != size:
         return None
     extra = Counter(lineup) - shell
@@ -319,11 +323,15 @@ def _flex_unit(lineup: tuple[str, ...], shell: Counter, size: int, carry_id: str
     return None if unit == carry_id else unit
 
 
-def board_patterns(groups: Iterable[LineupGroup], *, carry_id: str,
+def board_patterns(groups: Iterable[LineupGroup], *, carry_id: str | None,
                    min_boards: int) -> dict[int, list[BoardPattern]]:
     """The non-overlapping default presentation of every promoted lineup, per
     level, derived in memory. Pass ALL promoted groups (never a display-trimmed
     subset), so a display cap cannot change any shell.
+
+    `carry_id=None` is the carry-agnostic form used window-wide
+    (`tftlab.analytics.comps`): the same rule with no unit protected, so any
+    unit of the anchor may be the one left out of the shell.
 
     Per level, lineups with `min_boards`+ boards are taken in recurrence order
     (`lineup_order_key`). The first unassigned one is the anchor; each distinct
@@ -352,7 +360,7 @@ def board_patterns(groups: Iterable[LineupGroup], *, carry_id: str,
             for unit in sorted(set(anchor.lineup) - {carry_id}):
                 shell = Counter(anchor.lineup)
                 shell[unit] -= 1
-                if not shell[carry_id]:
+                if carry_id is not None and not shell[carry_id]:
                     continue
                 members = []
                 for g in pool:

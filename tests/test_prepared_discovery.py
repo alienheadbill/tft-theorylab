@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import tftlab.prepared_discovery as prepared
-from tftlab.analytics import available_balance_windows, discovery_population
+from tftlab.analytics import DISCOVERY_ORDERS, available_balance_windows, discovery_population
 from tftlab.prepared_discovery import (
     PreparedLookup,
     PreparedSourceChanged,
@@ -153,14 +153,18 @@ def test_prepared_responses_equal_live_computation_for_every_filter(
     assert len(windows) == 2
     _prepare(target)
     seen_costs: set[int] = set()
+    seen_orders: set[str] = set()
     for window in [None, *windows]:
         for params in FILTERS:
-            params = {**params, **({"balance_window": window} if window else {})}
-            expected = _live(client, monkeypatch, "/api/discovery", params)
-            got = _get(client, "/api/discovery", params, "current")
-            assert got == expected, params
-            seen_costs |= {c["cost"] for c in got["candidates"]}
+            for order in (None, *DISCOVERY_ORDERS):  # None: the API default
+                params = {**params, **({"balance_window": window} if window else {}), **({"order": order} if order else {})}
+                expected = _live(client, monkeypatch, "/api/discovery", params)
+                got = _get(client, "/api/discovery", params, "current")
+                assert got == expected, params
+                seen_costs |= {c["cost"] for c in got["candidates"]}
+                seen_orders.add(got["order"])
     assert seen_costs == {1, 2, 3, 4, 5}
+    assert seen_orders == set(DISCOVERY_ORDERS)
 
 
 def test_prepared_detail_equals_live_for_every_carry(
@@ -187,8 +191,16 @@ def test_exact_costs_limit_top_n_and_ordering(target: str, client: TestClient) -
     assert odd["costs"] == [1, 3] and odd == _get(client, "/api/discovery", {**base, "costs": "1,3"}, "current")
     ranged = _get(client, "/api/discovery", {**base, "max_cost": 2}, "current")
     assert ranged["costs"] == [1, 2] and {c["cost"] for c in ranged["candidates"]} <= {1, 2}
-    scores = [c["opportunity_score"] for c in odd["candidates"]]
-    assert scores == sorted(scores, reverse=True)
+    keys = [(-c["commitment_games"], c["name"], c["character_id"]) for c in odd["candidates"]]
+    assert keys == sorted(keys)  # carry boards, most first; ties by name, then id
+    fewest = _get(client, "/api/discovery", {**base, "costs": "1,3", "order": "boards_asc"}, "current")
+    keys = [(c["commitment_games"], c["name"], c["character_id"]) for c in fewest["candidates"]]
+    assert keys == sorted(keys)
+    assert sorted(c["character_id"] for c in fewest["candidates"]) == sorted(c["character_id"] for c in odd["candidates"])
+    for c in odd["candidates"]:
+        for key in ("best_partners", "best_item_packages", "best_trait_breakpoints"):
+            rows = [(-a["games"], a["label"], a["key"]) for a in c[key]]
+            assert rows == sorted(rows)  # most common first, not by association
     top3 = _get(client, "/api/discovery", {**base, "costs": "1,3", "limit": 3}, "current")
     assert top3["candidates"] == odd["candidates"][:3]
     one = _get(client, "/api/discovery", {**base, "costs": "1,3", "top_n": 1}, "current")

@@ -18,6 +18,7 @@
       <p class="cover-kicker">theorycrafting notebook</p>
       <nav class="cover-nav" aria-label="Main">
         <a href="/#discoveries">discover</a>
+        <a href="/comps">comps</a>
         <a href="/champions">champions</a>
         <a href="/experiments">experiments</a>
         <a href="/about">about</a>
@@ -57,10 +58,10 @@
     <section class="page" id="discoveries" aria-labelledby="discoveries-title">
       <header class="page-head">
         <h2 id="discoveries-title"><span class="hl">Discoveries</span></h2>
-        <p class="page-sub">Strong results, low usage, and enough evidence to be interesting. Starts on 1&ndash;3 cost, ranked by Opportunity Score.</p>
+        <p class="page-sub">Carry lines observed in this balance window, most carried first. Switch to fewest first to see less common carry lines. Every number shows its sample size. Starts on 1&ndash;3 cost.</p>
       </header>
 
-      <form class="controls" id="controls" aria-label="Filter and sort candidates">
+      <form class="controls" id="controls" aria-label="Filter and order carry lines">
         <fieldset class="cost-tabs">
           <legend>cost</legend>
           <div class="cost-tab-row">
@@ -76,12 +77,10 @@
           <input type="number" id="min-games" min="1" max="1000" value="10" inputmode="numeric" />
         </label>
         <label class="field">
-          <span class="field-label">sort by</span>
-          <select id="sort-by">
-            <option value="opportunity_score" selected>Opportunity Score</option>
-            <option value="top4_rate">Top 4 rate</option>
-            <option value="avg_placement">Average placement</option>
-            <option value="commitment_rate">Rarity (commitment rate)</option>
+          <span class="field-label">order</span>
+          <select id="order-by">
+            <option value="boards_desc" selected>Most carry boards first</option>
+            <option value="boards_asc">Fewest carry boards first (less common carry lines)</option>
           </select>
         </label>
       </form>
@@ -107,8 +106,8 @@
       <ol class="method-list">
         <li><h3>Commitment first</h3><p>A carry enters the sample when it holds at least two completed items, even if the reroll never reaches 3★. The misses are counted, not quietly dropped. Counts are player <em>boards</em>, not matches: every match has eight boards, so a champion can be carried on more boards than there are matches.</p></li>
         <li><h3>Hit vs. miss</h3><p>Boards that actually hit 3★ are kept apart from committed boards that missed, so you can see both the ceiling and what happens when it goes wrong.</p></li>
-        <li><h3>Sample shrinkage</h3><p>Small samples are pulled toward baseline performance, so a handful of lucky games can't outrank a line with real evidence behind it.</p></li>
-        <li><h3>Rarity matters</h3><p>The Opportunity Score rewards strong, low-usage lines instead of re-ranking the boards everyone already plays.</p></li>
+        <li><h3>Sample shrinkage</h3><p>The &Delta; top 4 beside each partner, item package and trait is pulled toward the carry's own baseline when the sample is small, so a handful of lucky games doesn't read as a real difference.</p></li>
+        <li><h3>Ordered by how often, not how well</h3><p>Carry lines are listed by carry boards: most first, or fewest first to see the less common lines (still at the minimum you set, 10 by default). Partners, item packages and traits inside each entry are most common first. How those boards placed is shown as an observed result with its sample size, never used to order the list.</p></li>
       </ol>
       <div class="stamp-legend">
         <p class="stamp-legend-intro">Every piece of evidence carries a stamp saying where it came from.</p>
@@ -123,7 +122,7 @@
   </main>
 
   <footer class="colophon site-footer">
-    <nav class="footer-nav" aria-label="Site"><a href="/#discoveries">Discover</a><a href="/champions">Champions</a><a href="/experiments">Experiments</a><a href="/about">About</a><a href="/methodology">Methodology &amp; data</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+    <nav class="footer-nav" aria-label="Site"><a href="/#discoveries">Discover</a><a href="/comps">Comps</a><a href="/champions">Champions</a><a href="/experiments">Experiments</a><a href="/about">About</a><a href="/methodology">Methodology &amp; data</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
     <p>TheoryLabs &middot; <span id="footer-mode">&mdash;</span> &middot; aggregate historical match statistics for study before and after you play; not a live in-game assistant.</p>
     <p class="riot-disclaimer">TheoryLabs isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.</p>
   </footer>

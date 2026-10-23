@@ -291,16 +291,16 @@ h2 { margin: 0 0 6px; font: 700 clamp(28px, 3.4vw, 36px)/1.15 var(--serif); disp
 .spread .entry:nth-child(even) .portrait::before { left: 34%; rotate: -5deg; }
 
 /* the analyst's circled number */
-.score-mark { text-align: center; min-width: 92px; }
-.score-ring { position: relative; display: inline-block; padding: 12px 20px 10px; }
-.score-num { position: relative; font: 700 28px/1 var(--mono); }
-.score-circle {
+.board-mark { text-align: center; min-width: 92px; }
+.board-ring { position: relative; display: inline-block; padding: 12px 20px 10px; }
+.board-num { position: relative; font: 700 28px/1 var(--mono); }
+.board-circle {
   position: absolute; left: -6px; top: -3px;
   width: calc(100% + 12px); height: calc(100% + 6px);
   overflow: visible; pointer-events: none;
 }
-.score-circle path { fill: none; stroke: var(--pencil); stroke-width: 2.2; stroke-linecap: round; vector-effect: non-scaling-stroke; }
-.score-label { display: block; font-style: italic; font-size: 13.5px; color: var(--graphite); }
+.board-circle path { fill: none; stroke: var(--pencil); stroke-width: 2.2; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.board-label { display: block; font-style: italic; font-size: 13.5px; color: var(--graphite); }
 
 .entry-body { margin-top: 12px; }
 .results { display: flex; flex-wrap: wrap; gap: 6px 24px; margin: 0; }
@@ -807,8 +807,8 @@ input[type="search"]::placeholder { color: var(--graphite); opacity: 0.8; }
   .portrait { width: 52px; height: 52px; }
   .portrait-fallback { font-size: 20px; }
   .entry-title h3, .entry.lead .entry-title h3 { font-size: 22px; }
-  .score-mark { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; text-align: left; min-width: 0; }
-  .score-label { display: inline; }
+  .board-mark { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; text-align: left; min-width: 0; }
+  .board-label { display: inline; }
   .results { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
   .evidence-notes li { grid-template-columns: 58px 64px minmax(0, 1fr); }
   .evidence-notes li .ev-num { grid-column: 3; }
@@ -992,6 +992,13 @@ a.board-unit-inner:hover .board-unit-name { text-decoration: underline; text-dec
 .board-neighbours { margin: 6px 0 0; font-size: 13px; color: var(--graphite); overflow-wrap: anywhere; }
 .board-card.is-compact .board-unit .ref-icon { width: 30px; height: 30px; }
 .board-card.is-compact .board-unit-name { font-size: 13.5px; }
+/* observed comps: a card per pattern, titled by its units, boards before results */
+.comp-list { max-width: 980px; }
+.comp-name { margin: 0 0 4px; font: 700 19px var(--serif); overflow-wrap: anywhere; }
+.comp-name a { color: var(--text); text-decoration-color: var(--pencil); text-underline-offset: 3px; }
+.comp-carries { overflow-wrap: anywhere; }
+.comp-window { margin-top: 8px; overflow-wrap: anywhere; }
+.comp-window a { color: var(--ink-blue); }
 
 @media (max-width: 900px) {
   .htp-grid-3 { grid-template-columns: 1fr; }
