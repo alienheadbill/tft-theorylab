@@ -521,6 +521,86 @@ def test_the_production_rate_ceiling_is_applied_to_the_real_client() -> None:
         client.close()
 
 
+MAXIMUM_BUDGETS = lc.CollectionBudgets(max_duration_s=600, max_requests=5000, max_match_fetches=5000)
+
+
+def test_maximum_mode_is_opt_in_with_bounded_default_budgets() -> None:
+    config = lc.CollectConfig(db_path=Path("x.sqlite3"), backup_dir=Path("b"))
+    assert config.collection_mode == "bounded"
+    assert lc.DEFAULT_MAXIMUM_BUDGETS == lc.CollectionBudgets(max_duration_s=45 * 60, max_requests=2400,
+                                                              max_match_fetches=2000)
+    with pytest.raises(ValueError, match="collection_mode"):
+        lc.CollectConfig(db_path=Path("x.sqlite3"), backup_dir=Path("b"), collection_mode="everything")
+
+
+def test_maximum_mode_collects_the_window_then_validates_and_prepares(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    report = h.run(config=h.config(collection_mode="maximum", budgets=MAXIMUM_BUDGETS))
+    assert report.outcome == lc.SUCCESS, report.message
+    ingest = report.ingest
+    assert ingest["mode"] == "maximum" and ingest["stop_reason"] == "complete" and ingest["waves"] >= 1
+    assert ingest["inserted"] == _rows(h.db, "SELECT COUNT(*) FROM matches")[0][0] > 0
+    assert set(ingest["seeds"]) == set(COHORT_SIZES)  # every cohort's ladder, not a sample
+    # Histories stay inside the trusted window; every wave is its own finalized run.
+    histories = [c for c in h.stub.calls if c[0] == "history"]
+    assert histories and {c[2:] for c in histories} == {(START_18_4_MS // 1000, END_18_4_MS // 1000)}
+    runs = _rows(h.db, "SELECT run_id, status FROM ingest_runs")
+    assert runs and all(r[0].startswith(f"local-{AT_MS}-w") and r[1] == "completed" for r in runs)
+    assert report.validation and report.prepared and report.ready_for_snapshot
+    assert "PUUID-" not in json.dumps(report.as_dict()) and "NA1_" not in json.dumps(report.as_dict())
+
+
+def test_maximum_mode_stops_cleanly_at_its_match_fetch_budget(tmp_path: Path) -> None:
+    h = Harness(tmp_path)
+    budgets = lc.CollectionBudgets(max_duration_s=600, max_requests=5000, max_match_fetches=7)
+    report = h.run(config=h.config(collection_mode="maximum", budgets=budgets))
+    assert report.outcome == lc.SUCCESS, report.message
+    assert report.ingest["stop_reason"] == "match_fetch_budget"
+    assert sum(1 for c in h.stub.calls if c[0] == "match") == 7
+
+
+def test_maximum_mode_key_expiring_mid_run_is_a_failed_collection(tmp_path: Path) -> None:
+    h = Harness(tmp_path, StubRiot(_payloads_18_4(30), fail_match_after=5, fail_status=401))
+    report = h.run(config=h.config(collection_mode="maximum", budgets=MAXIMUM_BUDGETS))
+    assert report.outcome == lc.COLLECTION_FAILED and report.database_ok is True
+    assert "expired during the run" in report.message
+    assert _rows(h.db, "SELECT COUNT(*) FROM matches")[0][0] == 5  # stored before the failure, kept
+
+
+def test_local_collect_cli_passes_maximum_mode_and_budgets(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("RIOT_API_KEY", FAKE_KEY)
+    stub = StubRiot(_payloads_18_4(30))
+    calls, bounded = [], []
+    real = lc.collect_maximum
+
+    def spy(*args, **kwargs):
+        calls.append(kwargs)
+        return real(*args, **kwargs)
+
+    defaults = lc.run_local_collect.__kwdefaults__
+    monkeypatch.setattr(lc.run_local_collect, "__kwdefaults__",
+                        {**defaults, "collect": spy, "ingest": lambda *a, **k: bounded.append(1)})
+    monkeypatch.setattr(cli, "_local_riot_client", lambda *a, **k: stub)
+    monkeypatch.setattr(cli, "_fetch_current_metadata", _metadata)
+    monkeypatch.setattr(lc, "now_ms", lambda: AT_MS)
+    result = CliRunner().invoke(cli.app, ["local-collect", "--collection-mode", "maximum",
+                                          "--max-duration-minutes", "30", "--max-requests", "900",
+                                          "--max-match-fetches", "500"])
+    assert result.exit_code == 0, result.output
+    assert bounded == []
+    (kwargs,) = calls
+    assert kwargs["budgets"] == lc.CollectionBudgets(max_duration_s=1800, max_requests=900, max_match_fetches=500)
+    assert kwargs["history_start_time"] == START_18_4_MS // 1000 and kwargs["history_end_time"] == END_18_4_MS // 1000
+    assert "Maximum mode:" in result.output and "stopped at complete" in result.output
+
+
+def test_local_collect_cli_rejects_an_unknown_collection_mode(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli.app, ["local-collect", "--collection-mode", "everything"])
+    assert result.exit_code == 2 and "collection-mode" in result.output
+
+
 def test_seed_rotation_and_provenance_finalize_normally(tmp_path: Path) -> None:
     h = Harness(tmp_path)
     first = h.run()
