@@ -928,19 +928,20 @@ def init_local(root: Path, *, env_example: Path | None = None) -> list[tuple[str
 RIOT_KEY_RE = re.compile(r"^RGAPI-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
-def set_env_key(env_path: Path, api_key: str) -> None:
-    """Replace (or add) the RIOT_API_KEY line of `.env`, keeping every other
-    line. Written atomically and, where supported, readable by the owner only."""
+def set_env_key(env_path: Path, api_key: str, *, name: str = "RIOT_API_KEY") -> None:
+    """Replace (or add) the `name` line of `.env` (RIOT_API_KEY by default),
+    keeping every other line. Written atomically and, where supported,
+    readable by the owner only."""
     lines = env_path.read_text().splitlines() if env_path.exists() else []
     out, replaced = [], False
     for line in lines:
-        if line.strip().startswith("RIOT_API_KEY=") and not replaced:
-            out.append(f"RIOT_API_KEY={api_key}")
+        if line.strip().startswith(f"{name}=") and not replaced:
+            out.append(f"{name}={api_key}")
             replaced = True
-        elif not line.strip().startswith("RIOT_API_KEY="):
+        elif not line.strip().startswith(f"{name}="):
             out.append(line)
     if not replaced:
-        out.append(f"RIOT_API_KEY={api_key}")
+        out.append(f"{name}={api_key}")
     tmp = env_path.with_name(env_path.name + ".tmp")
     fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
     with os.fdopen(fd, "w") as fh:

@@ -1490,6 +1490,81 @@ def local_snapshot_command(
                   markup=False)
 
 
+@app.command("local-set-render-key")
+def local_set_render_key_command() -> None:
+    """Save a Render API key into .env (RENDER_API_KEY) without showing it.
+
+    `tftlab local-publish` uses it to point the website at a new snapshot
+    and deploy it. Create one in the Render dashboard: Account Settings ->
+    API Keys. Only the RENDER_API_KEY line of .env changes.
+    """
+    from .local_collector import set_env_key
+    from .local_publish import RENDER_KEY_ENV, RENDER_KEY_RE
+
+    key = typer.prompt("Paste your Render API key (input is hidden)", hide_input=True).strip()
+    if not RENDER_KEY_RE.fullmatch(key):
+        console.print("[red]That does not look like a Render API key (they start with rnd_). "
+                      ".env was not changed.[/red]")
+        raise typer.Exit(code=1)
+    set_env_key(Path(".env"), key, name=RENDER_KEY_ENV)
+    console.print(f"[green]Saved {RENDER_KEY_ENV} in .env.[/green] (Not shown.) Next: `tftlab local-publish --dry-run`.")
+
+
+@app.command("local-publish")
+def local_publish_command(
+    db: str = typer.Option(None, "--db", help="Local SQLite file (default: TFT_LOCAL_DB_PATH or data/local/theorylabs.sqlite3)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Run the checks and make the snapshot; upload and deploy nothing"),
+    force: bool = typer.Option(False, "--force", help="Publish even with fewer new matches than the minimum"),
+) -> None:
+    """Publish a new public snapshot to the website, unattended.
+
+    Checks first (this checkout is origin/main, the latest collection
+    succeeded, a current trusted patch, enough new matches since what the
+    website serves), then makes the verified snapshot, creates a GitHub
+    Release with it, points Render at it and deploys, and checks the live
+    site serves it. Needs `gh auth login` once, RENDER_API_KEY
+    (`tftlab local-set-render-key`) and TFT_PUBLIC_SITE_URL in .env.
+    Exits 0 when published or when there was nothing worth publishing.
+    """
+    from . import local_collector as lc
+    from . import local_publish as lp
+
+    _load_dotenv()
+    db_path = _local_db_or_exit(db)
+    at_ms = lc.now_ms()
+    config = lp.PublishConfig(db_path=db_path, repo_root=Path.cwd(), site_url=os.environ.get(lp.SITE_URL_ENV, ""),
+                              render_api_key=os.environ.get(lp.RENDER_KEY_ENV) or None, dry_run=dry_run, force=force)
+
+    def show(item) -> None:
+        console.print(f"  {_PUBLISH_STYLE.get(item.status, item.status)} {item.name}: ", end="")
+        console.print(item.detail, markup=False, highlight=False)
+
+    def current_windows(database) -> list[str]:
+        return lc.default_snapshot_windows(database, at_ms=at_ms, local_dir=db_path.parent)
+
+    def make_snapshot(windows: list[str]):
+        def progress(text: str) -> None:
+            console.print(f"      {text}", markup=False, highlight=False)
+        return run_local_snapshot(db_path, balance_windows=windows, progress=progress)[0]
+
+    console.print("[bold]TheoryLabs publish[/bold]" + (" (dry run)" if dry_run else ""))
+    with httpx.Client(follow_redirects=True) as http:
+        report = lp.run_local_publish(
+            config, at_ms=at_ms, current_windows=current_windows, make_snapshot=make_snapshot,
+            run=lp.default_runner(Path.cwd()), http=http, reports_dir=lc.local_dirs(db_path)["reports"], progress=show,
+        )
+    path = lp.write_publish_report(report, lc.local_dirs(db_path)["reports"], at_ms=at_ms)
+    style = {lp.PUBLISHED: "bold green", lp.SKIPPED: "yellow", lp.DRY_RUN: "green"}.get(report.outcome, "bold red")
+    console.print("")
+    console.print(Text(report.message, style=style))
+    console.print(f"  Report saved: {path}", markup=False, highlight=False)
+    raise typer.Exit(code=report.exit_code)
+
+
+_PUBLISH_STYLE = {"ok": "[green]OK[/green]  ", "skip": "[yellow]SKIP[/yellow]", "fail": "[bold red]FAIL[/bold red]",
+                  "info": "[cyan]INFO[/cyan]"}
+
+
 @app.command("collector-ui")
 def collector_ui_command(
     port: int = typer.Option(None, "--port", min=1024, max=65535, help="Local port (default 8765, or the next free one)"),
