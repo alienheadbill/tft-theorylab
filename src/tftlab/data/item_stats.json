@@ -1,6 +1,6 @@
 {
  "_about": "Readable CommunityDragon stat metadata (ItemMeta.stat_effects / tags) and each item's own recipe (ItemMeta.composition, component apiNames exactly as served) for the current set's items -- the exact apiNames Match-V1 boards store, including the DA_* namespace with verified TFT_Item_* aliases (see tftlab.cdragon.item_stats_snapshot), produced by tftlab.cdragon.item_stats_snapshot from the live cdragon/tft/en_us.json. Read offline by tftlab.carry (carry eligibility) -- analytics never calls CommunityDragon. tests/test_cdragon_live.py::test_committed_item_stats_match_live_set compares it with the live feed and prints a fresh snapshot when it drifts; paste that here to refresh.",
- "_fetched": "2026-09-26 via the cdragon-live GitHub Actions workflow (run 36237873315)",
+ "_fetched": "2026-10-23 (UTC) from a local run against live CommunityDragon latest (tftlab.cdragon snapshot generators, as in tests/test_cdragon_live.py)",
  "set_number": 18,
  "items": {
   "DA_18_EmblemBlackthorn": {
@@ -1269,8 +1269,11 @@
    ]
   },
   "DA_WarmogsArmor": {
-   "name": "Warmogs Armor",
-   "stat_effects": [],
+   "name": "Warmog's Armor",
+   "stat_effects": [
+    "BonusPercentHP",
+    "Health"
+   ],
    "tags": [
     "Health"
    ],
@@ -1278,7 +1281,10 @@
    "own_tags": [
     "Health"
    ],
-   "alias_of": [],
+   "alias_of": [
+    "TFT_Item_CorruptedWarmogsArmor",
+    "TFT_Item_WarmogsArmor"
+   ],
    "composition": [
     "DA_Component_GiantsBelt",
     "DA_Component_GiantsBelt"

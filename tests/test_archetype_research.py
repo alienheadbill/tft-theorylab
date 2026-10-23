@@ -1637,9 +1637,11 @@ CANDIDATE = ar.C_S2_CENTROID_CANDIDATE_V1
 CANDIDATE_MODE = "s2-candidate-c-centroid-v1"
 #: Every existing report mode on the test fixture, recorded from main @ 248b854 (before the candidate existed):
 #: report JSON + Markdown + membership. Update only for an INTENDED change to one of those modes.
+#: "full" and "s2-diagnostics" re-recorded for the 18.5 item snapshot: DA_WarmogsArmor's display name
+#: "Warmogs Armor" -> "Warmog's Armor" is the only difference in their output (membership unchanged).
 EXISTING_MODE_HASHES = {
-    "full": "c349c1e54839fb22f692c1e4988d893ca00c5a6cb1cc36f16b420eaa883d03ed",
-    "s2-diagnostics": "829648e64a141839d62ef437791797451f45dd9d2754830549632341addb6f6a",
+    "full": "167a195131516f1900becd0c7e83a164ea486ee6bb87e915ff7d2dac65a47a45",
+    "s2-diagnostics": "72adeb11b3313a1618b23446adaff1bfcbe1ca49944b64a51a221cbd3ccef3a6",
     "s2-stability-b": "d3e9be920d15a05464ebee8b04d193c42d864b121b25cf55947ccaead18b0573",
     "s2-stability-c": "d0f7705b8cb4b7fa16838d478dd1c42b2454f927b6128ff391cddb12f0115bd5",
 }
