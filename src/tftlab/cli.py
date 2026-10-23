@@ -1210,6 +1210,9 @@ def _print_collect_report(report, report_path: Path | None) -> None:
              ", ".join(f"{c} {v['selected']}/{v['requested']}" for c, v in ingest["seeds"].items()))
     if ingest.get("run_status"):
         line("Collection run", f"{ingest.get('run_status')} ({ingest.get('run_id')})")
+    if ingest.get("mode") == "maximum":
+        line("Maximum mode", f"{ingest.get('waves', 0)} wave(s); stopped at "
+             f"{str(ingest.get('stop_reason', '')).replace('_', ' ')}")
     if riot:
         line("Riot requests", f"{riot.get('requests', 0)} ({riot.get('successes', 0)} successful)")
         line("Rate-limit events (429)", f"{riot.get('rate_limited', 0)}; waited {riot.get('waited_s', 0)}s for rate limits, "
@@ -1407,6 +1410,18 @@ def local_collect_command(
     platinum_seeds: int = typer.Option(25, min=0, max=100, help="Platinum seed players"),
     matches_per_seed: int = typer.Option(10, min=1, max=10, help="Recent matches read per seed player"),
     keep_backups: int = typer.Option(7, min=1, max=100, help="Local backups to keep (older ones are deleted after a new one succeeds)"),
+    collection_mode: str = typer.Option(
+        "bounded", "--collection-mode",
+        help="'bounded' (default): the seed counts above x recent matches. 'maximum': every Challenger-Platinum "
+             "ladder, breadth-first, each player's whole current-patch history, until a budget below is reached "
+             "(the seed options are then ignored).",
+    ),
+    max_duration_minutes: float = typer.Option(
+        45, "--max-duration-minutes", min=1, max=200, help="Maximum mode: wall-clock budget (stops cleanly)"),
+    max_requests: int = typer.Option(
+        2400, "--max-requests", min=1, max=12000, help="Maximum mode: Riot request budget (every attempt counts)"),
+    max_match_fetches: int = typer.Option(
+        2000, "--max-match-fetches", min=0, max=12000, help="Maximum mode: match-detail fetch budget"),
 ) -> None:
     """Collect current-patch ranked TFT data into the local SQLite database.
 
@@ -1416,8 +1431,16 @@ def local_collect_command(
     Grandmaster/Master/Diamond/Platinum seeds x 10 recent matches, current
     patch only), validates it, prepares Discovery for the current patch and
     prints a plain-language report. Never uses DATABASE_URL.
+
+    `--collection-mode maximum` collects as much of the current patch as the
+    budgets allow instead (default 45 minutes), with the same rate limits,
+    checks, backup, validation and preparation.
     """
     from . import local_collector as lc
+    from .collection import CollectionBudgets
+
+    if collection_mode not in lc.COLLECTION_MODES:
+        raise typer.BadParameter(f"use one of: {', '.join(lc.COLLECTION_MODES)}", param_hint="--collection-mode")
 
     had_env = Path(".env").exists()
     _load_dotenv()
@@ -1430,8 +1453,12 @@ def local_collect_command(
              "diamond": diamond_seeds, "platinum": platinum_seeds}
     if sum(seeds.values()) < 1:
         raise typer.BadParameter("request at least one seed player")
-    config = lc.CollectConfig(db_path=db_path, backup_dir=lc.local_dirs(db_path)["backups"],
-                              keep_backups=keep_backups, seed_allocation=seeds, matches_per_seed=matches_per_seed)
+    config = lc.CollectConfig(
+        db_path=db_path, backup_dir=lc.local_dirs(db_path)["backups"], keep_backups=keep_backups,
+        seed_allocation=seeds, matches_per_seed=matches_per_seed, collection_mode=collection_mode,
+        budgets=CollectionBudgets(max_duration_s=max_duration_minutes * 60, max_requests=max_requests,
+                                  max_match_fetches=max_match_fetches),
+    )
     console.print("[bold]TheoryLabs local collection[/bold] -- checks before anything is changed:")
     try:
         report, report_path = run_local_collection(db_path, config, progress=_print_check)
