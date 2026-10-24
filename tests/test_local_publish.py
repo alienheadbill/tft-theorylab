@@ -55,6 +55,10 @@ class World:
     discovery_windows: list[str] = field(default_factory=list)
     #: Discovery status (or HTTP code) while the site still serves a snapshot other than the new one.
     discovery_before_publish: str | int | None = None
+    #: The same for the champion picker (`/api/champions`), which reports the prepared champion run.
+    champions: str | int = "current"
+    champions_windows: list[str] = field(default_factory=list)
+    champions_before_publish: str | int | None = None
     render_status: int = 200
     services: list[tuple[str, str]] = field(default_factory=lambda: [("srv-other", "https://other.onrender.com"),
                                                                       (SERVICE, SITE)])
@@ -124,6 +128,14 @@ class World:
                 status = self.discovery.get(window, "current") if isinstance(self.discovery, dict) else self.discovery
                 if self.discovery_before_publish is not None and shown["exported_at"] != NEW_EXPORTED:
                     status = self.discovery_before_publish  # what the old snapshot gets from the deployed code
+                if isinstance(status, int):
+                    return httpx.Response(status, text="<html>Internal Server Error</html>")
+                return httpx.Response(200, json={"prepared": {"status": status}})
+            if request.url.path == "/api/champions":
+                self.champions_windows.append(request.url.params.get("balance_window"))
+                status = self.champions
+                if self.champions_before_publish is not None and shown["exported_at"] != NEW_EXPORTED:
+                    status = self.champions_before_publish
                 if isinstance(status, int):
                     return httpx.Response(status, text="<html>Internal Server Error</html>")
                 return httpx.Response(200, json={"prepared": {"status": status}})
@@ -263,7 +275,7 @@ def test_publish_releases_points_render_at_it_deploys_and_checks_the_site(tmp_pa
     assert world.puts() == ["TFT_SNAPSHOT_URL", "TFT_SNAPSHOT_SHA256"] and len(world.deploys) == 1
     assert report.previous == {"url": OLD_URL, "sha256": OLD_SHA, "tag": OLD_TAG, "exported_at": OLD["exported_at"],
                                "balance_windows": ["18.4"], "matches": 3416}
-    assert [s.name for s in report.steps if s.status == "ok"][-3:] == ["Render deploy", "Website", "Discovery"]
+    assert [s.name for s in report.steps if s.status == "ok"][-4:] == ["Render deploy", "Website", "Discovery", "Champions"]
 
 
 def test_the_render_key_never_reaches_the_report_or_its_file(tmp_path, monkeypatch) -> None:
@@ -387,6 +399,38 @@ def test_stale_live_discovery_republishes_without_new_matches(tmp_path, monkeypa
     assert report.outcome == lp.PUBLISHED, report.message
     assert report.live["discovery"] == "stale" and world.discovery_windows[0] == "18.5"
     assert any(s.name == "New data" and "prepared data is stale" in s.detail for s in report.steps)
+
+
+def test_stale_live_champion_pages_republish_without_new_matches(tmp_path, monkeypatch) -> None:
+    """A code change that moves only the champion analytics version (not
+    Discovery's) leaves the live champion pages computed live: that too is
+    a reason to publish."""
+    local = _thin_new_data(tmp_path, monkeypatch)
+    world = World(serving=LIVE_18_5, snapshots={OLD_URL: LIVE_18_5}, champions_before_publish="stale")
+    report = publish(local, world)
+    assert report.outcome == lp.PUBLISHED, report.message
+    assert report.live["champions"] == "stale" and report.live["discovery"] == "current"
+    assert any(s.name == "New data" and "computes champion pages for 18.5 live" in s.detail for s in report.steps)
+    assert any(s.name == "Champions" and s.status == "ok" for s in report.steps)
+
+
+@pytest.mark.parametrize("before", ["current", "missing", 500])
+def test_only_stale_live_champion_pages_waive_the_new_matches_minimum(before, tmp_path, monkeypatch) -> None:
+    local = _thin_new_data(tmp_path, monkeypatch)
+    world = World(serving=LIVE_18_5, snapshots={OLD_URL: LIVE_18_5}, champions_before_publish=before)
+    report = publish(local, world)
+    assert report.outcome == lp.SKIPPED and "only 100 new matches in 18.5" in report.message
+
+
+@pytest.mark.parametrize("status", ["stale", "missing", 500])
+def test_champion_pages_computed_live_after_going_live_warn_but_never_roll_back(status, tmp_path, monkeypatch) -> None:
+    local = Local(tmp_path, monkeypatch)
+    world = World(champions=status)
+    report = publish(local, world)
+    assert report.outcome == lp.PUBLISHED, report.message
+    assert report.rollback == lp.ROLLBACK_NOT_NEEDED and world.env["TFT_SNAPSHOT_URL"] != OLD_URL
+    assert any("champion pages for 18.5 are computed live" in w for w in report.warnings)
+    assert any(s.name == "Champions" and s.status == "warn" for s in report.steps)
 
 
 @pytest.mark.parametrize("before", ["current", "missing", 500])

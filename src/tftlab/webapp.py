@@ -47,6 +47,10 @@ from .directories import (
 )
 from .observed_comps import COMPS_MIN_BOARDS, ComputedWindow, comps_payload, compute_window
 from .public_snapshot import read_snapshot_provenance
+from .prepared_champions import PREPARED_TOP_N as CHAMPION_PREPARED_TOP_N
+from .prepared_champions import PreparedLookup as ChampionLookup
+from .prepared_champions import lookup_prepared as lookup_prepared_champions
+from .prepared_champions import read_prepared_champion, read_prepared_directory
 from .prepared_discovery import (
     PreparedLookup,
     lookup_prepared,
@@ -1041,13 +1045,18 @@ def create_app() -> FastAPI:
         db, demo = _resolve_database()
         with db:
             resolved_window = balance_window or default_balance_window(db)
-            directory = champion_directory(db, resolved_window)
+            prepared = lookup_prepared_champions(db, resolved_window) if resolved_window else ChampionLookup("missing")
+            directory = read_prepared_directory(db, prepared.run) if prepared.status == "current" else None
+            served = directory is not None
+            if directory is None:
+                directory = champion_directory(db, resolved_window)
         return {
             "demo": demo,
             "backend": db.dialect,
             "balance_window": resolved_window,
             "evidence_type": OBSERVED,
             "champions": directory,
+            "prepared": prepared.describe(served=served),
         }
 
     @app.get("/api/champions/{key}")
@@ -1059,17 +1068,31 @@ def create_app() -> FastAPI:
         """One champion's carry investigation in one balance window. `key`
         is a name or slug ("khazix", "Kha'Zix") or a Riot id. Unknown
         champions are 404; a known champion with no carry games in the window
-        is a normal 200 with `carry: null` (the page shows its empty state)."""
+        is a normal 200 with `carry: null` (the page shows its empty state).
+
+        Served from the window's prepared run (`tftlab.prepared_champions`)
+        when it is current and `top_n` is the page's own; otherwise computed
+        live. `prepared` says which: a live response never reads `current`."""
         db, demo = _resolve_database()
         with db:
             resolved_window = balance_window or default_balance_window(db)
             champion = resolve_champion(db, resolved_window, key)
             if champion is None:
                 raise HTTPException(status_code=404, detail="Champion not found")
-            body = champion_investigation(
-                db, champion, resolved_window, top_n=top_n, window_average=cached_carry_board_average
-            )
-        return {"demo": demo, "backend": db.dialect, **body}
+            prepared = lookup_prepared_champions(db, resolved_window) if resolved_window else ChampionLookup("missing")
+            body, reason = None, None
+            if prepared.status == "current":
+                if top_n != CHAMPION_PREPARED_TOP_N:
+                    reason = "top_n"
+                else:
+                    body = read_prepared_champion(db, prepared.run, champion)
+                    reason = None if body is not None else "champion"
+            served = body is not None
+            if body is None:
+                body = champion_investigation(
+                    db, champion, resolved_window, top_n=top_n, window_average=cached_carry_board_average
+                )
+        return {"demo": demo, "backend": db.dialect, **body, "prepared": prepared.describe(served=served, reason=reason)}
 
     @app.get("/api/discovery")
     def discovery(

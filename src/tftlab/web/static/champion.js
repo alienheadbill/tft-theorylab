@@ -482,6 +482,14 @@ function traitSection(inv, name) {
     </section>`;
 }
 
+// Prepared runs hold exactly what a live computation returns; the note only
+// says which one answered, and a live answer never reads as prepared.
+function computedNote(prepared) {
+  return prepared && prepared.status === 'current'
+    ? `Prepared ahead of time from this window's matches on ${fmtDate(prepared.prepared_at)}, by the same rules as a live computation.`
+    : "Computed live from this window's matches for this visit.";
+}
+
 function trustSection(inv) {
   const w = inv.window;
   return `
@@ -490,6 +498,7 @@ function trustSection(inv) {
       <dl class="trust-list">
         <div><dt>Evidence</dt><dd>${stamp('observed', 'Observed')} Every number comes from indexed ranked matches. Nothing on this page is predicted or theorycrafted.</dd></div>
         <div><dt>Balance window</dt><dd><b>${esc(inv.balance_window)}</b>${w ? ` · ${plural(w.matches, 'match', 'matches')} · latest game ${esc(fmtDate(w.latest_game_datetime))}` : ''}. Other patches are never mixed in.</dd></div>
+        <div><dt>Computed</dt><dd>${esc(computedNote(inv.prepared))}</dd></div>
         <div><dt>Carry board</dt><dd>One player's final board where this champion finished with 2+ completed items, at least one of them a carry item. Boards that missed the 3★ still count, so bad outcomes aren't hidden.</dd></div>
         <div><dt>Boards, not matches</dt><dd>Every match has eight player boards, so a champion can be carried on more boards than there are matches in the window.</dd></div>
         <div><dt>With vs. without</dt><dd>Item, partner and trait rows compare this champion's carry boards that had the thing against its carry boards that didn't. Rows marked ${stamp('low', 'Limited sample')} have fewer than ${SMALL_SPLIT} boards on one side of that comparison.</dd></div>
