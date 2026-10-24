@@ -13,14 +13,14 @@ from tftlab.demo import generate_demo_matches
 from tftlab.storage import Database
 
 WEB = Path(__file__).parent.parent / "src" / "tftlab" / "web"
-PAGES = ("/", "/comps", "/champions", "/champions/khazix", "/experiments", "/about", "/methodology", "/data",
+PAGES = ("/", "/comps", "/champions", "/champions/khazix", "/items", "/traits", "/experiments", "/about", "/methodology", "/data",
          "/privacy", "/terms")
 HTML_FILES = sorted(WEB.glob("*.html"))
 #: Riot General Policies (page last updated May 29, 2025): legal boilerplate, verbatim with the product name.
 RIOT_BOILERPLATE = ("TheoryLabs isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or "
                     "anyone officially involved in producing or managing Riot Games properties. Riot Games, and all "
                     "associated properties are trademarks or registered trademarks of Riot Games, Inc.")
-MAIN_NAV = ["/#discoveries", "/comps", "/champions", "/experiments", "/about", "/methodology"]
+MAIN_NAV = ["/#discoveries", "/comps", "/champions", "/items", "/traits", "/experiments", "/about", "/methodology"]
 FOOTER_NAV = [*MAIN_NAV, "/privacy", "/terms"]
 
 

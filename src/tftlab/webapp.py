@@ -37,6 +37,14 @@ from .champion_investigation import (
 from .demo import generate_demo_matches
 from .experiments import ExperimentNotFound, get_experiment, list_experiments, seed_demo_experiments
 from .game_art import enrich_candidate, experiment_art, field_note_art
+from .directories import (
+    DIRECTORY_MIN_BOARDS,
+    ITEM_KINDS,
+    ComputedDirectories,
+    compute_directories,
+    items_payload,
+    traits_payload,
+)
 from .observed_comps import COMPS_MIN_BOARDS, ComputedWindow, comps_payload, compute_window
 from .public_snapshot import read_snapshot_provenance
 from .prepared_discovery import (
@@ -510,6 +518,32 @@ def cached_window_comps(db: Database, balance_window: str) -> ComputedWindow:
         return computed
 
 
+# ---------------------------------------------------------------- item / trait directory cache
+#
+# The Items and Traits directories count one window's committed carries,
+# their items and the active traits (`tftlab.directories`): two window
+# queries, the same for every filter. Kept exactly like the comps grouping
+# above (key: database target + window; freshness: `source_fingerprint`).
+_DIRECTORY_CACHE: dict[tuple[str, str], tuple[str, ComputedDirectories]] = {}
+_DIRECTORY_CACHE_SIZE = 4
+_DIRECTORY_LOCK = threading.Lock()
+
+
+def cached_directories(db: Database, balance_window: str) -> ComputedDirectories:
+    fingerprint = source_fingerprint(db, balance_window).fingerprint
+    key = (_database_target(), balance_window)
+    with _DIRECTORY_LOCK:
+        hit = _DIRECTORY_CACHE.get(key)
+        if hit is not None and hit[0] == fingerprint:
+            return hit[1]
+        computed = compute_directories(db, balance_window)
+        _DIRECTORY_CACHE.pop(key, None)
+        _DIRECTORY_CACHE[key] = (fingerprint, computed)
+        while len(_DIRECTORY_CACHE) > _DIRECTORY_CACHE_SIZE:
+            _DIRECTORY_CACHE.pop(next(iter(_DIRECTORY_CACHE)))
+        return computed
+
+
 def carry_partners(db: Database, character_id: str, balance_window: str) -> list[tuple[Any, ...]]:
     """Champions that most often finish on the same board as a committed `character_id`.
 
@@ -704,6 +738,69 @@ def create_app() -> FastAPI:
             "source": status,
             **body,
         }
+
+    def _directory_window(db: Database, balance_window: str | None) -> tuple[str, tuple]:
+        windows = available_balance_windows(db)
+        resolved = balance_window or (windows[0][0] if windows else None)
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="No data available")
+        window = next((w for w in windows if w[0] == resolved), None)
+        if window is None:
+            raise HTTPException(status_code=404, detail="Balance window not found")
+        return resolved, window
+
+    def _directory_head(db: Database, source: DataSource, window: tuple, d: ComputedDirectories) -> dict[str, object]:
+        return {
+            "demo": source.synthetic, "backend": db.dialect, "balance_window": window[0],
+            "matches": window[1], "boards": d.window_boards, "latest_game": window[2],
+            # Where the numbers come from and how fresh they are (`/api/source`).
+            "source": source_status(db, source),
+        }
+
+    @app.get("/items", include_in_schema=False)
+    def items_page() -> FileResponse:
+        # Item directory; directory.js calls /api/items.
+        return FileResponse(WEB_DIR / "items.html")
+
+    @app.get("/traits", include_in_schema=False)
+    def traits_page() -> FileResponse:
+        # Trait directory; directory.js calls /api/traits.
+        return FileResponse(WEB_DIR / "traits.html")
+
+    @app.get("/api/items")
+    def items_directory(
+        balance_window: str | None = Query(None),
+        kind: str | None = Query(None, description=f"One item class: {', '.join(ITEM_KINDS)}"),
+        min_boards: int = Query(DIRECTORY_MIN_BOARDS, ge=DIRECTORY_MIN_BOARDS, le=100000),
+        limit: int = Query(200, ge=1, le=500),
+    ) -> dict[str, object]:
+        """Completed items observed on committed carries in one balance window,
+        with the carries that held them, ordered by carry boards
+        (`tftlab.directories`). No placement numbers."""
+        if kind is not None and kind not in ITEM_KINDS:
+            raise HTTPException(status_code=422, detail=f"kind must be one of {', '.join(ITEM_KINDS)}")
+        db, source = _resolve_source()
+        with db:
+            resolved, window = _directory_window(db, balance_window)
+            d = cached_directories(db, resolved)
+            head = _directory_head(db, source, window, d)
+        return {**head, **items_payload(d, kind=kind, min_boards=min_boards, limit=limit)}
+
+    @app.get("/api/traits")
+    def traits_directory(
+        balance_window: str | None = Query(None),
+        min_boards: int = Query(DIRECTORY_MIN_BOARDS, ge=DIRECTORY_MIN_BOARDS, le=100000),
+        limit: int = Query(200, ge=1, le=500),
+    ) -> dict[str, object]:
+        """Traits active on one balance window's boards, with Riot's unit
+        counts, CommunityDragon breakpoints (game data) and the carries most
+        often on those boards, ordered by boards (`tftlab.directories`)."""
+        db, source = _resolve_source()
+        with db:
+            resolved, window = _directory_window(db, balance_window)
+            d = cached_directories(db, resolved)
+            head = _directory_head(db, source, window, d)
+        return {**head, **traits_payload(d, min_boards=min_boards, limit=limit)}
 
     @app.get("/experiments", include_in_schema=False)
     @app.get("/experiments/{key}", include_in_schema=False)
