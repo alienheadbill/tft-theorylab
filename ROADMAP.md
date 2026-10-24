@@ -288,6 +288,8 @@ Riot access currently uses a **development key that must be regenerated regularl
 
 ### Track 9: Reference / game knowledge (FUTURE)
 
+- **Observed directories (in review, competitor review idea 8):** `/items` and `/traits` list what one balance window observed -- items on committed carries with the carries that held them, traits with Riot's unit counts, breakpoints as game data and the carries on those boards -- ordered by boards, no placement numbers. They are evidence pages, not the Reference tab; a site-wide search can build on them later.
+
 - **Goal:** give players one searchable, patch/set-aware place to look up the game knowledge they otherwise leave TheoryLabs to find elsewhere.
 - **Product shape:** a top-level **Reference** tab, separate from Champion Investigation and composition analytics.
 - **Candidate sections:**

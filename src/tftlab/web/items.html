@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Items · TheoryLabs</title>
+  <meta name="description" content="Completed items observed on carries in one balance window, with the carries that held them, ordered by how often they were seen." />
+  <meta name="color-scheme" content="dark" />
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body class="comps-body directory-body" data-directory="items">
+  <a class="skip-link" href="#main-content">Skip to the item directory</a>
+
+  <div id="source-banner" class="source-banner" role="status" aria-live="polite" hidden></div>
+
+  <header class="cover cover-compact">
+    <div class="cover-top">
+      <p class="cover-kicker">item directory</p>
+      <nav class="cover-nav" aria-label="Main">
+        <a href="/#discoveries">discover</a>
+        <a href="/comps">comps</a>
+        <a href="/champions">champions</a>
+        <a href="/items" aria-current="page">items</a>
+        <a href="/traits">traits</a>
+        <a href="/experiments">experiments</a>
+        <a href="/about">about</a>
+        <a href="/methodology">methodology &amp; data</a>
+      </nav>
+    </div>
+    <h1><span class="scribble">Items</span></h1>
+    <p class="cover-tagline">&ldquo;Which carries actually held this item?&rdquo;</p>
+
+    <div class="ledger">
+      <label class="ledger-item ledger-window">
+        <span class="ledger-label">balance window</span>
+        <select id="window-filter"><option value="">loading…</option></select>
+      </label>
+      <div class="ledger-item"><span class="ledger-label">matches in window</span><strong id="window-matches">—</strong></div>
+      <div class="ledger-item"><span class="ledger-label">boards in window</span><strong id="window-boards">—</strong></div>
+      <div class="ledger-item"><span class="ledger-label">latest game</span><strong id="window-latest">—</strong></div>
+      <div class="ledger-item ledger-source">
+        <span class="ledger-label">source</span>
+        <strong class="source-value"><span id="status-dot" class="status-mark" aria-hidden="true"></span><span id="data-mode">loading…</span></strong>
+      </div>
+    </div>
+
+    <p class="cover-premise">
+      <svg class="hand-arrow" viewBox="0 0 34 14" aria-hidden="true" focusable="false"><path d="M2 8 C 9 5, 18 9, 30 7"/><path d="M24 2.5 L 31 7 L 24.5 12"/></svg>
+      Every completed item seen on a committed carry in one balance window, with the carries that held it most. Listed by how many carry boards had it, most first, never by how they placed.
+    </p>
+  </header>
+
+  <main id="main-content">
+    <section class="page" id="items" aria-labelledby="items-title">
+      <header class="page-head">
+        <h2 id="items-title"><span class="hl">Items</span></h2>
+        <p class="page-sub">Completed items on committed carries, each counted once per carry board. Under each, the carries that held it on the most boards, with the share of each carry&rsquo;s own boards. Emblems, artifacts and radiant items can be filtered.</p>
+      </header>
+
+      <form class="controls" id="directory-controls" aria-label="Filter the items">
+        <label class="field">
+          <span class="field-label">item class</span>
+          <select id="kind-filter">
+            <option value="">every class</option>
+            <option value="standard">standard items</option>
+            <option value="emblem">emblems</option>
+            <option value="artifact">artifacts</option>
+            <option value="radiant">radiant items</option>
+            <option value="unknown">unrecognized items</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">min. boards</span>
+          <input type="number" id="min-boards" min="10" max="100000" value="10" inputmode="numeric" />
+        </label>
+      </form>
+
+      <p id="directory-count" class="picker-count" aria-live="polite"></p>
+      <div id="directory-list"><p class="state-note">Loading…</p></div>
+      <p id="directory-rules" class="htp-foot" hidden></p>
+    </section>
+  </main>
+
+  <footer class="colophon site-footer">
+    <nav class="footer-nav" aria-label="Site"><a href="/#discoveries">Discover</a><a href="/comps">Comps</a><a href="/champions">Champions</a><a href="/items">Items</a><a href="/traits">Traits</a><a href="/experiments">Experiments</a><a href="/about">About</a><a href="/methodology">Methodology &amp; data</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+    <p>TheoryLabs &middot; <span id="footer-mode">&mdash;</span> &middot; statistics for one balance window at a time; composition families are not shown because that research is still experimental.</p>
+    <p class="riot-disclaimer">TheoryLabs isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.</p>
+  </footer>
+  <script src="/static/site.js"></script>
+  <script src="/static/art.js"></script>
+  <script src="/static/directory.js"></script>
+</body>
+</html>
