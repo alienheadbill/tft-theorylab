@@ -257,7 +257,8 @@ def choose_windows(db: Database, current: Sequence[str], *, min_current_alone: i
 
 
 def publication_gate(live: dict[str, Any], windows: Sequence[str], counts: dict[str, int], current: Sequence[str], *,
-                     min_new: int, min_first: int, live_discovery: str | None = None) -> tuple[str | None, str]:
+                     min_new: int, min_first: int, live_discovery: str | None = None,
+                     live_champions: str | None = None) -> tuple[str | None, str]:
     """(why not to publish, or None; what was compared).
 
     Each current balance window the live site does not serve yet is a first
@@ -270,8 +271,9 @@ def publication_gate(live: dict[str, Any], windows: Sequence[str], counts: dict[
     site's Discovery for the current window is `stale` (`live_discovery`):
     the deployed code's analytics version no longer matches the snapshot
     (e.g. after a code change), so the site computes Discovery live until a
-    snapshot prepared by that code is published. That waives only the
-    new-matches minimum, never a new window's own floor."""
+    snapshot prepared by that code is published. Stale prepared champion
+    pages (`live_champions`, from `/api/champions`) waive it the same way.
+    That waives only the new-matches minimum, never a new window's own floor."""
     live_counts: dict[str, int] = live.get("window_matches") or {} if live.get("mode") == "snapshot" else {}
     new_windows = [w for w in current if w not in live_counts]
     if new_windows:
@@ -286,9 +288,12 @@ def publication_gate(live: dict[str, Any], windows: Sequence[str], counts: dict[
     comparable = [w for w in windows if w in live_counts]
     new = sum(max(0, counts.get(w, 0) - int(live_counts[w] or 0)) for w in comparable)
     label = ", ".join(comparable)
-    if new < min_new and live_discovery == "stale":
-        return None, (f"the site computes Discovery for {current[0]} live (prepared data is stale: the deployed "
-                      f"analytics version changed), so the snapshot is republished with {new} new matches in {label}")
+    stale = [what for what, status in (("Discovery", live_discovery), ("champion pages", live_champions))
+             if status == "stale"]
+    if new < min_new and stale:
+        return None, (f"the site computes {' and '.join(stale)} for {current[0]} live (prepared data is stale: the "
+                      f"deployed analytics version changed), so the snapshot is republished with {new} new matches "
+                      f"in {label}")
     if new < min_new:
         return (f"only {new} new matches in {label} since the snapshot the site serves (at least {min_new} are "
                 "needed); the site keeps its current snapshot", f"new matches in {label}")
@@ -333,8 +338,18 @@ def live_state(http: httpx.Client, site_url: str) -> dict[str, Any]:
 def discovery_status(http: httpx.Client, site_url: str, window: str) -> str:
     """The live `/api/discovery` prepared status for `window`, or a failure
     class ("HTTP 500", "unreachable (...)", "unreadable response")."""
+    return _prepared_status(http, f"{site_url}/api/discovery", window)
+
+
+def champions_status(http: httpx.Client, site_url: str, window: str) -> str:
+    """The live `/api/champions` (champion picker) prepared status for
+    `window`: champion pages come from the same prepared run."""
+    return _prepared_status(http, f"{site_url}/api/champions", window)
+
+
+def _prepared_status(http: httpx.Client, url: str, window: str) -> str:
     try:
-        response = http.get(f"{site_url}/api/discovery", params={"balance_window": window}, timeout=180)
+        response = http.get(url, params={"balance_window": window}, timeout=180)
     except httpx.HTTPError as exc:
         return f"unreachable ({type(exc).__name__})"
     if response.status_code != 200:
@@ -708,8 +723,11 @@ def run_local_publish(
              f"{report.live['matches']} matches, exported {report.live['exported_at']}")
         live_discovery = discovery_status(http, site, current[0]) if current[0] in report.live["window_matches"] else None
         report.live["discovery"] = live_discovery
+        live_champions = champions_status(http, site, current[0]) if current[0] in report.live["window_matches"] else None
+        report.live["champions"] = live_champions
         reason, compared = publication_gate(report.live, windows, counts, current, min_new=config.min_new_matches,
-                                            min_first=config.min_first_publish_matches, live_discovery=live_discovery)
+                                            min_first=config.min_first_publish_matches, live_discovery=live_discovery,
+                                            live_champions=live_champions)
         if reason and not config.force:
             step("New data", "skip", reason)
             return finish(SKIPPED, f"Not published: {reason}.")
@@ -781,6 +799,14 @@ def run_local_publish(
                 step("Discovery", "fail", f"{latest}: prepared status {prepared}")
                 return fail_after_change(f"Discovery for {latest} is not served from prepared data ({prepared})")
             step("Discovery", "ok", f"{latest} served from prepared data")
+            # Champion pages computed live are slower but still correct, so this
+            # is a warning, never a reason to roll the site back.
+            champions = champions_status(http, site, latest)
+            if champions == "current":
+                step("Champions", "ok", f"{latest} served from prepared data")
+            else:
+                step("Champions", "warn", f"{latest}: prepared status {champions}")
+                report.warnings.append(f"champion pages for {latest} are computed live (prepared status {champions})")
         except Exception as exc:  # anything unforeseen once production may have changed
             report.deploy_id = production.deploy_id
             text = str(exc) if isinstance(exc, PublishError) else f"unexpected error ({type(exc).__name__}: {exc})"

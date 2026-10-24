@@ -178,6 +178,42 @@ CREATE INDEX IF NOT EXISTS idx_discovery_prepared_runs_lookup
     ON discovery_prepared_runs(balance_window, analytics_version, status, published_at);
 """
 
+# Prepared Champion Investigation payloads (see `tftlab.prepared_champions`):
+# the same run design as prepared Discovery. A run holds, for one balance
+# window, the champion picker's directory (`directory_json`) and every
+# champion's complete `/api/champions/<key>` body at the page's own `top_n`
+# (one `champion_prepared_payloads` row each), all inserted in ONE
+# transaction. Derived data only, optional for the read-only web app.
+PREPARED_CHAMPION_TABLES_SQL = """
+CREATE TABLE IF NOT EXISTS champion_prepared_runs (
+    run_id TEXT PRIMARY KEY,
+    balance_window TEXT NOT NULL,
+    analytics_version TEXT NOT NULL,
+    source_fingerprint TEXT NOT NULL,
+    source_matches INTEGER NOT NULL,
+    source_latest_game_datetime BIGINT,
+    champions INTEGER NOT NULL,
+    top_n INTEGER NOT NULL,
+    directory_json TEXT,
+    status TEXT NOT NULL,
+    started_at BIGINT NOT NULL,
+    published_at BIGINT,
+    failure TEXT
+);
+
+CREATE TABLE IF NOT EXISTS champion_prepared_payloads (
+    run_id TEXT NOT NULL,
+    character_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    PRIMARY KEY (run_id, character_id)
+);
+"""
+
+PREPARED_CHAMPION_INDEXES_SQL = """
+CREATE INDEX IF NOT EXISTS idx_champion_prepared_runs_lookup
+    ON champion_prepared_runs(balance_window, analytics_version, status, published_at);
+"""
+
 # One row per applied data migration that must run exactly once per database
 # (keyed by what it depends on). Only initializing connections read/write it.
 SCHEMA_MIGRATIONS_SQL = """
@@ -357,11 +393,13 @@ class Database:
         self._execute_script(INGEST_RUNS_SQL)
         self._execute_script(SCHEMA_MIGRATIONS_SQL)
         self._execute_script(PREPARED_DISCOVERY_TABLES_SQL)
+        self._execute_script(PREPARED_CHAMPION_TABLES_SQL)
         self._run_migrations()
         self._execute_script(INDEXES_SQL)
         self._execute_script(EXPERIMENT_INDEXES_SQL)
         self._execute_script(SAMPLING_INDEXES_SQL)
         self._execute_script(PREPARED_DISCOVERY_INDEXES_SQL)
+        self._execute_script(PREPARED_CHAMPION_INDEXES_SQL)
 
     def _execute_script(self, sql: str) -> None:
         if self.dialect == "sqlite":

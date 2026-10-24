@@ -61,7 +61,7 @@ def test_export_writes_a_verified_sanitized_snapshot(source, tmp_path) -> None:
         "read_schema", "provenance", "public_read_path", "no_collection_tables", "no_puuid_columns", "no_raw_payloads",
         "no_augment_payloads", "opaque_match_ids", "referential_consistency", "trusted_windows_only",
         "windows_match_provenance", "requested_windows_only", "counts_match_provenance", "counts_reconcile_with_source",
-        "no_secrets_or_identifiers", "participant_levels_plausible"}
+        "no_secrets_or_identifiers", "participant_levels_plausible", "prepared_champions_published"}
     tables = _tables(out)
     assert not tables & {"seed_samples", "match_discoveries", "ingest_runs"}
     assert {"matches", "participants", "units", "traits", "experiments", ps.METADATA_TABLE} <= tables

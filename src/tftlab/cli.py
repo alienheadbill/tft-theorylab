@@ -1003,6 +1003,49 @@ def prepare_discovery_command(
         raise typer.Exit(code=1)
 
 
+@app.command("prepare-champions")
+def prepare_champions_command(
+    db: str = typer.Option(
+        None, "--db", help="SQLite path or postgres:// URL; defaults to DATABASE_URL or TFT_DB_PATH"
+    ),
+    balance_window: list[str] = typer.Option(
+        None, "--balance-window", help="Window(s) to prepare; default: every window in the store, latest first"
+    ),
+    force: bool = typer.Option(False, "--force", help="Rebuild even when the latest run is already current"),
+) -> None:
+    """Precompute every Champion Investigation page for each balance window.
+
+    The web application serves the champion picker and champion pages from
+    these prepared runs while they are current for their window's matches
+    and the deployed analytics code, and computes them live otherwise. Every
+    public snapshot export already runs this. Never contacts Riot. A window
+    that fails keeps its previous published run; the command then exits
+    non-zero after trying the remaining windows.
+    """
+    from .prepared_champions import ANALYTICS_VERSION as CHAMPION_VERSION
+    from .prepared_champions import prepare_window as prepare_champion_window
+
+    failures: list[str] = []
+    with Database(_resolve_db_target(db)) as database:
+        windows = list(balance_window or []) or [w for w, _n, _t in available_balance_windows(database)]
+        console.print(f"Prepared champions -- analytics version {CHAMPION_VERSION}; {len(windows)} window(s)")
+        for window in windows:
+            try:
+                result = prepare_champion_window(database, window, force=force)
+            except Exception as exc:  # keep going: one window must not block the others
+                failures.append(window)
+                console.print(f"  {window}: [bold red]FAILED[/bold red] ({type(exc).__name__}); previous run kept")
+                continue
+            verb = "published" if result.status == "published" else "already current, skipped"
+            console.print(
+                f"  {window}: {verb} -- run {result.run_id}, {result.champions} champions, "
+                f"{result.source_matches} matches, {result.seconds:.1f}s"
+            )
+    if failures:
+        console.print(f"[bold red]Preparation failed for {len(failures)} window(s): {', '.join(failures)}[/bold red]")
+        raise typer.Exit(code=1)
+
+
 @app.command("export-public-snapshot")
 def export_public_snapshot_command(
     source: str = typer.Option(

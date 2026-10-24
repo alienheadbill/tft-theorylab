@@ -177,9 +177,10 @@ def code_version() -> dict[str, Any]:
                 out["git_sha"] = sha
         except Exception:
             pass
+    from .prepared_champions import ANALYTICS_VERSION as CHAMPION_VERSION
     from .prepared_discovery import ANALYTICS_VERSION
-    return {**out, "analytics_version": ANALYTICS_VERSION} if out else {"available": False,
-                                                                         "analytics_version": ANALYTICS_VERSION}
+    versions = {"analytics_version": ANALYTICS_VERSION, "champion_analytics_version": CHAMPION_VERSION}
+    return {**out, **versions} if out else {"available": False, **versions}
 
 
 # ---------------------------------------------------------------- source checks
@@ -341,6 +342,7 @@ def export_public_snapshot(source: Database, out_path: Path | str, *, balance_wi
     when the source fails the real-ingestion checks or the result fails
     verification. `secrets` (e.g. the source connection string) are values
     the finished file is scanned for, besides RIOT_API_KEY/DATABASE_URL."""
+    from .prepared_champions import prepare_champions
     from .prepared_discovery import prepare_discovery
 
     out_path = Path(out_path)
@@ -401,6 +403,10 @@ def export_public_snapshot(source: Database, out_path: Path | str, *, balance_wi
                 "latest_game": _iso(latest),
                 "experiments": counts["experiments"],
                 "prepared_discovery": prepared,
+                # Filled in below, once this provenance row exists: a champion
+                # page reads it (how player levels may be read), so its
+                # prepared payloads are built against the finished file.
+                "prepared_champions": [],
                 "source_population_fingerprint": {
                     "algorithm": "sha256 of the sorted source match ids, newline-joined (one-way; no per-match mapping)",
                     "value": facts["fingerprint"]},
@@ -416,7 +422,8 @@ def export_public_snapshot(source: Database, out_path: Path | str, *, balance_wi
                                  "balance window",
                 },
                 "tables": sorted([*EXPORTED_COLUMNS, *EXPERIMENT_COLUMNS, "discovery_prepared_runs",
-                                  "discovery_prepared_candidates", "schema_migrations", METADATA_TABLE]),
+                                  "discovery_prepared_candidates", "champion_prepared_runs",
+                                  "champion_prepared_payloads", "schema_migrations", METADATA_TABLE]),
                 "sanitized_columns": SANITIZED_COLUMNS,
                 PARTICIPANT_LEVEL_KEY: PARTICIPANT_LEVEL_PRESERVED,
                 "excluded_tables": list(EXCLUDED_TABLES),
@@ -428,6 +435,22 @@ def export_public_snapshot(source: Database, out_path: Path | str, *, balance_wi
             db.execute(f"INSERT INTO {METADATA_TABLE} (key, value) VALUES (?, ?)",
                        (PROVENANCE_KEY, json.dumps(provenance, sort_keys=True)))
             db.commit()
+            if prepare:
+                # An optimization only, like Discovery: a window that fails is computed live.
+                progress("preparing Champion Investigation payloads on the snapshot")
+                for window in facts["windows"]:
+                    try:
+                        provenance["prepared_champions"] += [
+                            {"balance_window": r.balance_window, "status": r.status, "champions": r.champions}
+                            for r in prepare_champions(db, balance_windows=[window])]
+                    except Exception as exc:
+                        db.conn.rollback()
+                        provenance["prepared_champions"].append(
+                            {"balance_window": window, "status": "failed", "error": type(exc).__name__})
+                        progress(f"  {window}: champion preparation failed ({type(exc).__name__}); served live instead")
+                db.execute(f"UPDATE {METADATA_TABLE} SET value = ? WHERE key = ?",
+                           (json.dumps(provenance, sort_keys=True), PROVENANCE_KEY))
+                db.commit()
             # One self-contained, compact file: no WAL/-shm sidecars to ship.
             db.conn.execute("PRAGMA journal_mode=DELETE")
             db.conn.execute("VACUUM")
@@ -542,6 +565,11 @@ def verify_public_snapshot(path: Path | str, *, source_match_ids: Iterable[str] 
     try:
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         require("no_collection_tables", not tables & set(EXCLUDED_TABLES), f"present: {sorted(tables & set(EXCLUDED_TABLES))}")
+        if {"champion_prepared_runs", "champion_prepared_payloads"} <= tables:
+            stray = conn.execute("SELECT COUNT(*) FROM champion_prepared_payloads p WHERE NOT EXISTS (SELECT 1 FROM "
+                                 "champion_prepared_runs r WHERE r.run_id = p.run_id AND r.status = 'published')"
+                                 ).fetchone()[0]
+            require("prepared_champions_published", stray == 0, f"{stray} payloads outside a published run")
         columns = {t: {c[1] for c in conn.execute(f"PRAGMA table_info({t})")} for t in tables}
         require("no_puuid_columns", not any("puuid" in c.lower() for cols in columns.values() for c in cols),
                 "a puuid column is present")
