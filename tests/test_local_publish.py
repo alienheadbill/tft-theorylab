@@ -216,6 +216,7 @@ class Local:
         self.report("20261024T080000Z", {"outcome": "success"})
         self.current = list(current)
         self.exports: list[list[str]] = []
+        self.left_out = 0
         stored = windows if windows is not None else [("18.5", 1500, 2), ("18.4", 3416, 1)]
         monkeypatch.setattr(lp, "available_balance_windows", lambda db: list(stored))
 
@@ -236,7 +237,8 @@ class Local:
         gz.write_bytes(b"gz" * 100)
         manifest.write_text("{}")
         prov = {"matches": 1500, "boards": 12000, "latest_game": "2026-10-24T08:59:00.000000Z",
-                "exported_at": NEW_EXPORTED, "code_version": {"analytics_version": "v1-test"}}
+                "exported_at": NEW_EXPORTED, "code_version": {"analytics_version": "v1-test"},
+                "real_ingestion_checks": {"matches_excluded_without_completed_run": self.left_out}}
         return FakeExport(public / "theorylabs-public-snapshot.sqlite3", manifest, gz, prov,
                           {gz.name: {"sha256": "a" * 64, "bytes": gz.stat().st_size}})
 
@@ -399,6 +401,17 @@ def test_stale_live_discovery_republishes_without_new_matches(tmp_path, monkeypa
     assert report.outcome == lp.PUBLISHED, report.message
     assert report.live["discovery"] == "stale" and world.discovery_windows[0] == "18.5"
     assert any(s.name == "New data" and "prepared data is stale" in s.detail for s in report.steps)
+
+
+def test_matches_left_out_for_missing_provenance_are_reported(tmp_path, monkeypatch) -> None:
+    local = Local(tmp_path, monkeypatch)
+    local.left_out = 63
+    report = publish(local, World())
+    assert report.outcome == lp.PUBLISHED, report.message
+    step = next(s for s in report.steps if s.name == "Provenance")
+    assert step.status == "info" and "left out 63 matches with no completed collection run" in step.detail
+    local = Local(tmp_path / "none", monkeypatch)
+    assert not any(s.name == "Provenance" for s in publish(local, World()).steps)
 
 
 def test_stale_live_champion_pages_republish_without_new_matches(tmp_path, monkeypatch) -> None:

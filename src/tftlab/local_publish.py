@@ -759,6 +759,10 @@ def run_local_publish(
         report.matches, report.sha256 = prov["matches"], result.files[gz.name]["sha256"]
         step("Snapshot", "ok", f"{prov['matches']} matches, {prov['boards']} boards, analytics "
              f"{prov['code_version']['analytics_version']}, sha256 {report.sha256[:12]}")
+        left_out = (prov.get("real_ingestion_checks") or {}).get("matches_excluded_without_completed_run") or 0
+        if left_out:
+            step("Provenance", "info", f"left out {left_out} matches with no completed collection run (a run that "
+                 "stopped before recording where its matches came from)")
         if config.dry_run:
             return finish(DRY_RUN, "Dry run: the snapshot was made and verified locally. Nothing was uploaded or "
                                    "deployed.")
