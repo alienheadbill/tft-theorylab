@@ -759,10 +759,14 @@ def run_local_publish(
         report.matches, report.sha256 = prov["matches"], result.files[gz.name]["sha256"]
         step("Snapshot", "ok", f"{prov['matches']} matches, {prov['boards']} boards, analytics "
              f"{prov['code_version']['analytics_version']}, sha256 {report.sha256[:12]}")
-        left_out = (prov.get("real_ingestion_checks") or {}).get("matches_excluded_without_completed_run") or 0
+        source_checks = prov.get("real_ingestion_checks") or {}
+        left_out = source_checks.get("matches_excluded_without_completed_run") or 0
         if left_out:
             step("Provenance", "info", f"left out {left_out} matches with no completed collection run (a run that "
                  "stopped before recording where its matches came from)")
+        bot_games = source_checks.get("games_with_bots_excluded") or 0
+        if bot_games:
+            step("Bot games", "info", f"left out {bot_games} games with bots (Riot lists fewer real players than boards)")
         if config.dry_run:
             return finish(DRY_RUN, "Dry run: the snapshot was made and verified locally. Nothing was uploaded or "
                                    "deployed.")

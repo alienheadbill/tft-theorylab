@@ -293,6 +293,75 @@ def test_nothing_left_out_says_zero(source, tmp_path) -> None:
     checks = _export(src, tmp_path / "all.sqlite3").provenance["real_ingestion_checks"]
     assert checks["matches_excluded_without_completed_run"] == 0
     assert checks["excluded_without_completed_run_per_window"] == {}
+    assert checks["games_with_bots_excluded"] == 0 and checks["games_with_bots_excluded_per_window"] == {}
+
+
+def _rewrite_payload(path: Path, match_id: str, change) -> None:
+    with Database(path) as db:
+        payload = json.loads(db.query_one("SELECT payload_json FROM matches WHERE match_id = ?", (match_id,))[0])
+        change(payload)
+        db.execute("UPDATE matches SET payload_json = ? WHERE match_id = ?", (json.dumps(payload), match_id))
+        db.commit()
+
+
+def _with_bots(payload: dict) -> None:
+    """What Riot returned for these lobbies: one real player in the metadata,
+    the seven other boards all repeating one placeholder PUUID."""
+    boards = payload["info"]["participants"]
+    payload["metadata"]["participants"] = [boards[0]["puuid"]]
+    for board in boards[1:]:
+        board["puuid"] = "BOT" * 26
+
+
+def test_a_game_with_bots_is_left_out_and_counted(tmp_path) -> None:
+    src = tmp_path / "big.sqlite3"
+    build_live_ingest_like_source(src, 100)
+    bot_game = _match_ids(src)[50]
+    _rewrite_payload(src, bot_game, _with_bots)
+    result = _export(src, tmp_path / "out.sqlite3")
+    checks = result.provenance["real_ingestion_checks"]
+    assert result.provenance["matches"] == checks["matches_exported"] == 99 and result.provenance["boards"] == 99 * 8
+    assert checks["games_with_bots_excluded"] == 1 and checks["games_with_bots_excluded_per_window"] == {"18.3": 1}
+    assert checks["matches_excluded_without_completed_run"] == 0
+    conn = sqlite3.connect(result.path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM participants").fetchone()[0] == 99 * 8
+    finally:
+        conn.close()
+
+
+def test_stopped_run_matches_and_bot_games_share_one_limit(tmp_path) -> None:
+    src = tmp_path / "big.sqlite3"
+    build_live_ingest_like_source(src, 100)
+    ids = _match_ids(src)
+    _unlink(src, ids[:2])
+    _rewrite_payload(src, ids[50], _with_bots)
+    with pytest.raises(ps.SnapshotExportError, match=r"2 matches without a completed live-ingest run and 1 games with bots"):
+        _export(src, tmp_path / "out.sqlite3")
+    assert not (tmp_path / "out.sqlite3").exists()
+
+
+def _drop_a_player(payload: dict) -> None:
+    payload["metadata"]["participants"] = payload["metadata"]["participants"][:7]
+
+
+def _two_placeholder_ids(payload: dict) -> None:
+    _with_bots(payload)
+    payload["info"]["participants"][1]["puuid"] = "OTHER" * 16
+
+
+def _real_player_not_on_a_board(payload: dict) -> None:
+    _with_bots(payload)
+    payload["metadata"]["participants"] = ["SOMEONE" * 11]
+
+
+@pytest.mark.parametrize("change", [_drop_a_player, _two_placeholder_ids, _real_player_not_on_a_board])
+def test_any_other_participant_mismatch_still_blocks_the_export(change, tmp_path) -> None:
+    src = tmp_path / "big.sqlite3"
+    build_live_ingest_like_source(src, 100)
+    _rewrite_payload(src, _match_ids(src)[50], change)
+    with pytest.raises(ps.SnapshotExportError, match="payload participant list does not match the stored boards: 1"):
+        _export(src, tmp_path / "out.sqlite3")
 
 
 @pytest.mark.parametrize(("sql", "reason"), [
