@@ -112,6 +112,14 @@ EXCLUSION_STATEMENT = (
     "seed/sampling ledger, match discovery provenance and ingestion-run records were excluded. Match ids are "
     "opaque snapshot-local ids; no mapping to Riot match ids is included.")
 _CHUNK = 400
+#: Matches with no link to a COMPLETED ingest run (a run that stopped before
+#: writing its discovery ledger, e.g. when the Riot development key expired
+#: mid-run) are left out of a snapshot rather than blocking it -- but only
+#: while they are at most this share of the selected windows' matches. More
+#: than that is not a stopped run any more; it may be data from somewhere
+#: else, and the export refuses. Games with bots (`_is_game_with_bots`) count
+#: towards the same limit.
+MAX_UNLINKED_SHARE = 0.02
 
 
 class SnapshotExportError(RuntimeError):
@@ -186,6 +194,25 @@ def code_version() -> dict[str, Any]:
 # ---------------------------------------------------------------- source checks
 
 
+def _is_game_with_bots(participants: Any, info: dict[str, Any], stored_boards: int) -> bool:
+    """A full lobby with bots, as Riot reports it under the ranked queue: the
+    metadata lists only the real players, and the extra boards in `info` all
+    repeat one placeholder PUUID. Not a real 8-player game, so it is left out
+    of snapshots. Any other participant mismatch is a failed check."""
+    boards = info.get("participants")
+    if not (isinstance(participants, list) and isinstance(boards, list) and len(boards) == stored_boards):
+        return False
+    if not (participants and len(participants) < stored_boards and all(isinstance(p, str) and p for p in participants)):
+        return False
+    ids = [b.get("puuid") if isinstance(b, dict) else None for b in boards]
+    if not all(isinstance(p, str) and p for p in ids):
+        return False
+    extras = [p for p in ids if p not in participants]
+    # Two or more: a placeholder is only recognizable because it repeats.
+    return (set(participants) <= set(ids) and len(set(extras)) == 1 and len(extras) >= 2
+            and len(extras) == stored_boards - len(participants))
+
+
 def _check_source(db: Database, balance_windows: Sequence[str] | None) -> dict[str, Any]:
     """Select the exported population and run the real-ingestion checks.
     Returns the source facts the export needs; raises SnapshotExportError."""
@@ -212,24 +239,34 @@ def _check_source(db: Database, balance_windows: Sequence[str] | None) -> dict[s
         raise SnapshotExportError("the source has no completed live-ingest run")
 
     marks = ",".join("?" * len(windows))
-    population = db.query_all(
+    selected = db.query_all(
         f"SELECT match_id, game_datetime, balance_window FROM matches WHERE balance_window IN ({marks}) "
         "ORDER BY game_datetime, match_id", windows)
-    ids = [r[0] for r in population]
-    linked = db.query_one(
-        f"""SELECT COUNT(DISTINCT d.match_id) FROM match_discoveries d
+    linked_ids = {r[0] for r in db.query_all(
+        f"""SELECT DISTINCT d.match_id FROM match_discoveries d
             JOIN ingest_runs r ON r.run_id = d.run_id AND r.status = 'completed'
             JOIN matches m ON m.match_id = d.match_id
-            WHERE m.balance_window IN ({marks})""", windows)[0]
-    if linked != len(ids):
+            WHERE m.balance_window IN ({marks})""", windows)}
+    # Every exported match needs completed-ingest provenance. A match without
+    # it is left out (and counted), never exported; too many of them refuse.
+    unlinked = [r for r in selected if r[0] not in linked_ids]
+    limit = MAX_UNLINKED_SHARE * len(selected)
+    if len(unlinked) > limit:
         raise SnapshotExportError(
-            f"{len(ids) - linked} of {len(ids)} exported matches are not linked to a completed live-ingest run in the "
-            "discovery ledger (only to a failed or unfinished run, or to none); every exported match needs "
+            f"{len(unlinked)} of {len(selected)} matches in {windows} are not linked to a completed live-ingest run in "
+            "the discovery ledger (only to a failed or unfinished run, or to none): more than "
+            f"{MAX_UNLINKED_SHARE:.0%}, so they are not just a stopped collection run; every exported match needs "
             "completed-ingest provenance")
+    population = [r for r in selected if r[0] in linked_ids]
+    if not population:
+        raise SnapshotExportError(f"no match in {windows} is linked to a completed live-ingest run")
+    ids = [r[0] for r in population]
+    excluded = {w: sum(1 for r in unlinked if r[2] == w) for w in windows}
 
     # 2. Every exported match is a ranked Riot Match-V1 record.
     failures: dict[str, int] = {}
     puuids: set[str] = set()
+    bot_games: set[str] = set()
 
     def fail(reason: str) -> None:
         failures[reason] = failures.get(reason, 0) + 1
@@ -258,8 +295,10 @@ def _check_source(db: Database, balance_windows: Sequence[str] | None) -> dict[s
             if not meta.get("data_version"):
                 fail("payload has no Match-V1 data_version")
             participants = meta.get("participants")
-            if not (isinstance(participants, list) and participants and len(participants) == boards.get(match_id, -1)
-                    and all(isinstance(p, str) and p for p in participants)):
+            if _is_game_with_bots(participants, info, boards.get(match_id, -1)):
+                bot_games.add(match_id)
+            elif not (isinstance(participants, list) and participants and len(participants) == boards.get(match_id, -1)
+                      and all(isinstance(p, str) and p for p in participants)):
                 fail("payload participant list does not match the stored boards")
             else:
                 puuids.update(participants)
@@ -269,6 +308,17 @@ def _check_source(db: Database, balance_windows: Sequence[str] | None) -> dict[s
         detail = "; ".join(f"{reason}: {n}" for reason, n in sorted(failures.items()))
         raise SnapshotExportError(f"{sum(failures.values())} real-ingestion check failure(s) across "
                                   f"{len(ids)} matches -- {detail}")
+    if len(unlinked) + len(bot_games) > limit:
+        raise SnapshotExportError(
+            f"{len(unlinked)} matches without a completed live-ingest run and {len(bot_games)} games with bots are more "
+            f"than {MAX_UNLINKED_SHARE:.0%} of the {len(selected)} matches in {windows}, so they are not a few stray "
+            "games; refusing to export")
+    bots_per_window = {w: sum(1 for r in population if r[2] == w and r[0] in bot_games) for w in windows}
+    population = [r for r in population if r[0] not in bot_games]
+    if not population:
+        raise SnapshotExportError(f"no match in {windows} is left to export")
+    ids = [r[0] for r in population]
+    linked = len(ids)
 
     if _table_exists(db, "seed_samples"):
         puuids.update(r[0] for r in db.query_all("SELECT DISTINCT puuid FROM seed_samples"))
@@ -280,8 +330,11 @@ def _check_source(db: Database, balance_windows: Sequence[str] | None) -> dict[s
         row["earliest_game_datetime"] = when if row["earliest_game_datetime"] is None else min(row["earliest_game_datetime"], when)
         row["latest_game_datetime"] = when if row["latest_game_datetime"] is None else max(row["latest_game_datetime"], when)
     return {
-        "windows": windows, "population": population, "match_ids": ids, "puuids": puuids, "boards": boards,
+        "windows": windows, "population": population, "match_ids": ids, "puuids": puuids,
+        "boards": {m: boards[m] for m in ids if m in boards},  # exported matches only
         "completed_ingest_runs": completed, "matches_linked_to_completed_runs": linked, "per_window": per_window,
+        "excluded_unlinked": len(unlinked), "excluded_unlinked_per_window": {w: n for w, n in excluded.items() if n},
+        "excluded_bot_games": len(bot_games), "excluded_bot_games_per_window": {w: n for w, n in bots_per_window.items() if n},
         "fingerprint": hashlib.sha256("\n".join(sorted(ids)).encode()).hexdigest(),
     }
 
@@ -350,6 +403,11 @@ def export_public_snapshot(source: Database, out_path: Path | str, *, balance_wi
     progress("checking the source (real-ingestion provenance, per-match Match-V1 checks)")
     facts = _check_source(source, balance_windows)
     progress(f"source checks passed: {len(facts['match_ids'])} matches in {facts['windows']}")
+    if facts["excluded_unlinked"]:
+        progress(f"left out {facts['excluded_unlinked']} matches with no completed collection run (a run that stopped "
+                 "before recording where its matches came from)")
+    if facts["excluded_bot_games"]:
+        progress(f"left out {facts['excluded_bot_games']} games with bots (Riot lists fewer real players than boards)")
     mapping = {match_id: f"S{i:07d}" for i, match_id in enumerate(facts["match_ids"], start=1)}
 
     build = out_path.with_name(out_path.name + ".building")
@@ -417,6 +475,14 @@ def export_public_snapshot(source: Database, out_path: Path | str, *, balance_wi
                     "matches_linked_to_completed_runs": facts["matches_linked_to_completed_runs"],
                     "discovery_ledger_coverage": round(facts["matches_linked_to_completed_runs"] / len(facts["match_ids"]), 4),
                     "every_match_linked_to_a_completed_run": True,
+                    # Source matches left out for having no completed-run link
+                    # (at most `MAX_UNLINKED_SHARE` of the selected windows).
+                    "matches_excluded_without_completed_run": facts["excluded_unlinked"],
+                    "excluded_without_completed_run_per_window": facts["excluded_unlinked_per_window"],
+                    # Lobbies Riot reports with bots filling the extra boards.
+                    "games_with_bots_excluded": facts["excluded_bot_games"],
+                    "games_with_bots_excluded_per_window": facts["excluded_bot_games_per_window"],
+                    "max_excluded_share": MAX_UNLINKED_SHARE,
                     "per_match": "queue 1100; regional Riot match id; raw payload metadata.match_id, data_version and "
                                  "participant list consistent with the stored boards; numeric client patch; trusted "
                                  "balance window",

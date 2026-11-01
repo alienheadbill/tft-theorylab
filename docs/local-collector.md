@@ -218,7 +218,7 @@ The raw database is private: it contains Riot's raw match data and the list of s
 
 This uses TheoryLabs' verified exporter. It:
 
-- checks that the data really came from Riot collection (demo data is refused), and that every exported match is linked to a completed collection run (a match stored only by a failed or unfinished run blocks the export until a later completed run finds it again);
+- checks that the data really came from Riot collection (demo data is refused), and that every exported match is linked to a completed collection run (a match stored only by a failed or unfinished run, for example one stopped by an expired key, is left out and counted; if such matches and games with bots together pass 2% of the matches, the export is refused);
 - removes raw payloads, player identifiers and the collection ledger;
 - replaces match ids with opaque ones;
 - precomputes Discovery;
@@ -251,7 +251,7 @@ Run it by hand for now. Running it unattended (on a schedule) is for after these
 - **Enough data for a new patch:** every current balance window the website doesn't serve yet needs at least **200 matches of its own**. Usually that's the patch itself (`18.5`); after a registered mid-patch cutover it's each new balance window (`18.2b`). Neither the previous patch included alongside nor an older balance window of the same patch (`18.2a`) counts towards it.
 - **Enough new data:** otherwise there must be at least **200 new matches**, compared patch by patch with what the website reports (`/api/balance-windows`). One exception: when the website reports the current patch's Discovery as **stale** (`/api/discovery`), its deployed code has a different analytics version from the snapshot (for example right after a merged change), so it computes Discovery live and slowly. Then the snapshot is republished regardless of the new-matches count, prepared by the deployed code. The same applies when the website reports its prepared champion pages as **stale** (`/api/champions`). It never waives a new patch's own 200-match minimum. `--force` skips this check and the new-patch one, and nothing else.
 - **A known way back:** a read-only Render check finds exactly one web service at `TFT_PUBLIC_SITE_URL` and reads its current `TFT_SNAPSHOT_URL` and `TFT_SNAPSHOT_SHA256`. Both must be present and well-formed, and the website must report the snapshot it serves now (`/api/source`). This is the snapshot it would roll back to. Without one, it refuses to start.
-- **A verified snapshot:** the exporter checks every match, including that **every exported match** is linked to a completed collection run (see "Making a public website snapshot"). If a collection is running, it skips with "Collection is still running; publication was skipped." and changes nothing.
+- **A verified snapshot:** the exporter checks every match, including that **every exported match** is linked to a completed collection run (see "Making a public website snapshot"). Matches from a run that stopped mid-way and games with bots are left out and shown in the report, as long as together they are at most 2% of the matches. If a collection is running, it skips with "Collection is still running; publication was skipped." and changes nothing.
 
 **What it publishes.** The current patch. While the current patch has fewer than 1,000 matches, the previous patch is included as well.
 

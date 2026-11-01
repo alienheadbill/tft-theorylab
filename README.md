@@ -358,7 +358,7 @@ A champion page aggregates one champion's carry boards several times over (carry
 - **Freshness:** the same three keys as Discovery: `balance_window`, `analytics_version` (`c1-` plus a line-ending-normalized digest of Discovery's sources, every `analytics/` module, `champion_investigation.py`, `how_to_play.py`, `game_art.py`, the art manifest, the snapshot's level rules and this module) and `source_fingerprint`. A change to any of them makes the run stale.
 - **Missing or stale:** the page is computed live, and the additive `prepared` field says so (`{"status": "current" | "stale" | "missing", ...}`, with `"reason": "top_n"` or `"champion"` when a current run could not answer this request). A live response never reads `current`. The Evidence tab says whether the page was "Prepared ahead of time" or "Computed live".
 - **Publishing:** one transaction per run, a `failed` audit row (exception type only) on failure, and a fingerprint check before and after computing. Each window keeps its 3 newest runs. It is prepared inside every public snapshot export, after the snapshot's provenance row exists, so the payloads are built against the finished file. On the 18.5 snapshot this takes about 29 s per window and adds about 0.7 MB compressed. Verification rejects payloads outside a published run. An older snapshot without the tables is served live.
-- **Measured locally** (18.5 snapshot copy, 65 carried champions, `scripts/benchmarks/champion_read_benchmark.py`): the median request dropped from 0.364 s to 0.016 s, and the first one from 2.4 s to 0.02 s. All 65 prepared responses were identical to the live ones. Production timing is not verified until a snapshot exported by this code is live.
+- **Measured locally** (18.5 snapshot copy, 65 carried champions, `scripts/benchmarks/champion_read_benchmark.py`): the median request dropped from 0.364 s to 0.016 s, and the first one from 2.4 s to 0.02 s. All 65 prepared responses were identical to the live ones. **Production (first checked 2026-10-24, snapshot `public-snapshot-18.5-20261024`):** prepared champion responses took 0.22-0.29 s and the picker 0.23 s from outside Render; the one live request tried (`top_n=3`) took 20.6 s.
 
 ## Production safety
 
@@ -725,8 +725,9 @@ The next web milestone is a dedicated comp page with a hex board, champion/item 
 - `real_ingestion_checks`.
 
 An export is refused, and nothing is written, unless the source passes every real-ingestion check:
-- every exported match is linked through the `match_discoveries` ledger to at least one completed live-ingest run in `ingest_runs` (one exported match linked only to a failed or unfinished run, or to none, fails the export; the manifest records `matches_exported` and `matches_linked_to_completed_runs`);
+- every exported match is linked through the `match_discoveries` ledger to at least one completed live-ingest run in `ingest_runs` (a match linked only to a failed or unfinished run, or to none, is left out and counted, because a run stopped mid-way, for example by an expired Riot key, never writes its ledger; together with games with bots, see below, these may be at most 2% of the selected windows' matches, and more than that fails the export; the manifest records `matches_exported` and `matches_linked_to_completed_runs`);
 - every exported match is ranked queue 1100, with a regional Riot match id (for example `NA1_…`);
+- a game with bots is left out and counted (`games_with_bots_excluded`): Riot reports it under queue 1100, but its metadata lists fewer real players than boards and the other boards all repeat one placeholder PUUID. Any other mismatch between the participant list and the stored boards fails the export;
 - its stored raw payload has a matching `metadata.match_id`, a `data_version`, and a participant list consistent with the stored boards;
 - its patch is a numeric client patch, and its balance window is trusted (numeric).
 
