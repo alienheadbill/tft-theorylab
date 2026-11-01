@@ -6,6 +6,7 @@ shapes. No npm packages or browser; skipped when Node is not installed."""
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -41,7 +42,7 @@ def test_champion_page_load_behaviour(tmp_path: Path, monkeypatch: pytest.Monkey
     assert bodies["khazix"]["carry"] is not None
     for name, body in bodies.items():
         (fixtures / f"{name}.json").write_text(json.dumps(body))
-    proc = subprocess.run([node, "--test", str(JS_TESTS)], capture_output=True, text=True, timeout=120,
-                          env={"CHAMPION_FIXTURES": str(fixtures), "PATH": "/usr/bin:/bin"})
+    proc = subprocess.run([node, "--test", "--test-reporter=tap", str(JS_TESTS)], capture_output=True, text=True,
+                          timeout=120, env={**os.environ, "CHAMPION_FIXTURES": str(fixtures)})
     assert proc.returncode == 0, proc.stdout[-6000:] + proc.stderr[-2000:]
     assert "# fail 0" in proc.stdout
